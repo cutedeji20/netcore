@@ -1,0 +1,7 @@
+.git
+docs
+tests
+*.md
+.env
+*.age
+secrets/

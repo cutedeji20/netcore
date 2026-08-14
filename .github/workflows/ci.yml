@@ -1,0 +1,159 @@
+# CI — BUILD.md §70.
+#
+# Every gate in §70 runs on every pull request. A feature is not done until
+# this pipeline is green (§127).
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: tests
+        run: go test ./...
+
+      # §127: the race detector is a required gate, not an optional extra.
+      # Every money and usage path has a concurrency test (§78).
+      - name: tests (race detector)
+        run: go test -race ./...
+
+      - name: coverage floors
+        run: |
+          go test -race -coverprofile=coverage.out ./...
+          bash scripts/check-coverage.sh
+
+  database:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: netcore
+          POSTGRES_PASSWORD: netcore
+          POSTGRES_DB: netcore
+        options: >-
+          --health-cmd "pg_isready -U netcore"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+        ports: ["5432:5432"]
+    env:
+      PGPASSWORD: netcore
+      DSN: postgres://netcore:netcore@localhost:5432/netcore?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apply migrations
+        run: |
+          for f in db/migrations/*.up.sql; do
+            echo ">> $f"
+            psql "$DSN" -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+
+      # §8 — every database-enforced invariant, proven by execution.
+      # This is where the quota idempotency, accounting dedup key, ledger
+      # balance, audit immutability and radius grant tests live.
+      - name: invariant suite
+        run: psql "$DSN" -v ON_ERROR_STOP=1 -f tests/invariants.sql
+
+      # §70 + §103 — a migration that cannot be rolled back must not merge.
+      - name: migrations are reversible
+        run: |
+          for f in $(ls -r db/migrations/*.down.sql); do
+            echo "<< $f"
+            psql "$DSN" -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+          remaining=$(psql "$DSN" -tAc "select count(*) from pg_tables where schemaname='public'")
+          if [ "$remaining" != "0" ]; then
+            echo "::error::down migrations left $remaining tables behind"
+            exit 1
+          fi
+          for f in db/migrations/*.up.sql; do
+            psql "$DSN" -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+          psql "$DSN" -v ON_ERROR_STOP=1 -f tests/invariants.sql
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks needs history
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: gosec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          gosec -exclude-generated ./...
+
+      # §1.17 / §42: the nck_ key prefix exists so scanners can catch a
+      # committed API key.
+      - name: secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build image
+        run: docker build -t netcore-api:ci .
+
+      # §72: fail on HIGH/CRITICAL, and verify the image runs as non-root.
+      - name: trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: netcore-api:ci
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: image runs as non-root
+        run: |
+          user=$(docker image inspect netcore-api:ci --format '{{.Config.User}}')
+          if [ -z "$user" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
+            echo "::error::container runs as root (§72)"
+            exit 1
+          fi
+          echo "image user: $user"

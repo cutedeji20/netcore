@@ -1,0 +1,33 @@
+# Include this policy block from the `authorize` section of the virtual server
+# bound to RouterOS HotSpot authentication. It is deliberately not a complete
+# replacement for the stock `default` virtual server: production accounting,
+# CoA source restrictions, client declarations, and certificate policy are
+# deployment-specific and must remain enabled beside this authorization block.
+#
+# Example:
+# server netcore-hotspot {
+#     authorize { netcore_portal_handoff }
+#     authenticate { Auth-Type Accept { accept } }
+#     preacct { acct_unique }
+#     accounting { netcore_accounting }
+# }
+
+# authorize {
+#     netcore_portal_handoff
+# }
+#
+# authenticate {
+#     Auth-Type Accept {
+#         accept
+#     }
+# }
+#
+# preacct {
+#     # Generate Acct-Unique-Session-Id before SQL so packet retransmits and
+#     # cross-NAS session ids have a stable accounting key.
+#     acct_unique
+# }
+#
+# accounting {
+#     netcore_accounting
+# }

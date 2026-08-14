@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta http-equiv="cache-control" content="no-store" />
+    <title>Connecting to NetCore Wi-Fi</title>
+  </head>
+  <body>
+    <p>Opening the secure NetCore Wi-Fi portal…</p>
+    <noscript>This Wi-Fi portal needs JavaScript enabled to continue.</noscript>
+    <script>
+      (function () {
+        "use strict";
+        // RouterOS expands these values locally. The tenant is deliberately
+        // absent: it is provisioning data on the portal host, never browser
+        // input. Reconstructing the login URL from the NAS IP avoids passing
+        // an arbitrary browser-controlled return URL to the API.
+        // `server-address` includes the HotSpot HTTP port (for example,
+        // 10.5.50.1:80). URL parsing separates the address passed to the API
+        // from the full RouterOS login origin returned after handoff.
+        var hotspotServer = new URL("http://$(server-address)");
+        var query = new URLSearchParams({
+          client_mac: "$(mac)",
+          nas_address: hotspotServer.hostname,
+          hotspot_login_url: hotspotServer.origin + "/login"
+        });
+        window.location.replace("__PORTAL_ORIGIN__/portal.html?" + query.toString());
+      }());
+    </script>
+  </body>
+</html>

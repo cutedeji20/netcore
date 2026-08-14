@@ -1,0 +1,25 @@
+# NetCore accounting ingestion for the RouterOS HotSpot virtual server.
+#
+# Keep `acct_unique` in the virtual server's preacct section before this block.
+# It creates Acct-Unique-Session-Id for NASes that do not send one.  The SQL
+# function is the only accounting database surface; it validates the active
+# NAS and the Class value previously issued in an Access-Accept, then performs
+# packet deduplication and quota application in one transaction.
+netcore_accounting {
+	# Every numeric expansion uses the integer form.  Event-Timestamp is packet
+	# time; a NAS that omits it gets FreeRADIUS's receive time instead.  Counters
+	# default to zero only where RADIUS permits the attribute to be absent.
+	update control {
+		Tmp-String-1 := "%{netcore_sql:SELECT CASE WHEN radius_accounting_ingest('%{NAS-IP-Address}', '%{Acct-Status-Type}', '%{Acct-Session-Id}', '%{Acct-Unique-Session-Id}', '%{Class}', COALESCE(NULLIF(NULLIF('%{Event-Timestamp#}', ''), '0')::bigint, %l), COALESCE(NULLIF('%{Acct-Session-Time#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Input-Octets#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Input-Gigawords#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Output-Octets#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Output-Gigawords#}', '')::bigint, 0), '%{Framed-IP-Address}', '%{Calling-Station-Id}', '%{Acct-Terminate-Cause}') THEN 'ok' ELSE 'reject' END}"
+	}
+
+	# An unknown/disabled NAS, malformed accounting packet, or Class that was
+	# not minted by NetCore must not be acknowledged as a successful ingest.
+	# A database failure deliberately propagates as module failure; production
+	# activation requires the durable detail spool described in the README.
+	if (&control:Tmp-String-1 != "ok") {
+		reject
+	}
+
+	ok
+}

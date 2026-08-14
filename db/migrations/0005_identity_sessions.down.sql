@@ -1,0 +1,21 @@
+BEGIN;
+
+DROP TABLE IF EXISTS auth_sessions;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_tenant_id_id_key;
+
+DROP POLICY IF EXISTS tenant_isolation ON audit_logs;
+ALTER TABLE audit_logs DISABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation ON role_permissions;
+ALTER TABLE role_permissions DISABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation ON user_roles;
+ALTER TABLE user_roles DISABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation ON roles;
+ALTER TABLE roles DISABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation ON users;
+ALTER TABLE users DISABLE ROW LEVEL SECURITY;
+
+COMMIT;

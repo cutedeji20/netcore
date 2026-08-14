@@ -1,0 +1,78 @@
+# Render every __PLACEHOLDER__ from deployment configuration or the secret
+# store before importing this script. The rendered script contains the RADIUS
+# shared secret and must be handled as a secret; it must never be committed.
+#
+# The PAP setting is intentional. The portal's short-lived handoff is placed
+# in RouterOS's login query and therefore reaches RADIUS as User-Name. It is
+# not a customer password. Do not switch this branch to http-chap without a
+# separate CHAP implementation.
+
+:local radiusAddress "__RADIUS_ADDRESS__"
+:local radiusSecret "__RADIUS_SHARED_SECRET__"
+:local coaSourceAddress "__COA_SOURCE_ADDRESS__"
+:local portalHost "__PORTAL_HOST__"
+:local portalAddress "__PORTAL_ADDRESS__"
+:local hotspotProfile "__HOTSPOT_PROFILE__"
+:local hotspotUserProfile "__HOTSPOT_USER_PROFILE__"
+:local hotspotHtmlDir "__HOTSPOT_HTML_DIR__"
+
+:if (($radiusAddress = "") || ($radiusSecret = "") || ($coaSourceAddress = "") || ($portalHost = "") || ($portalAddress = "") || ($hotspotHtmlDir = "")) do={
+    :error "NetCore HotSpot placeholders were not rendered"
+}
+
+# RouterOS uses the RADIUS Acct-Interim-Interval only when this is `received`.
+# That lets the database choose 60 seconds near a quota boundary and 300
+# seconds otherwise.
+/ip hotspot profile set [find where name=$hotspotProfile] \
+    login-by=http-pap,mac-cookie \
+    use-radius=yes \
+    radius-accounting=yes \
+    radius-interim-update=received \
+    html-directory-override=$hotspotHtmlDir
+
+# One short MAC cookie improves reconnects but bounds any stale local login to
+# a minute. This property belongs to the HotSpot *user* profile, not the
+# server profile. Session-Timeout and traffic limits remove the cookie too.
+/ip hotspot user profile set [find where name=$hotspotUserProfile] \
+    add-mac-cookie=yes \
+    mac-cookie-timeout=1m
+
+# Replace any previous HotSpot service entry for this RADIUS server. Verify
+# the target address before importing on a router with multiple RADIUS uses.
+/radius remove [find where service=hotspot and address=$radiusAddress]
+/radius add service=hotspot address=$radiusAddress secret=$radiusSecret timeout=2s
+
+# RouterOS listens for Disconnect-Message / Change-of-Authorization requests on
+# UDP 3799 only from the explicitly rendered NetCore control-plane address.
+# The dedicated drop rule is added before the accept, then the accept is placed
+# at the top of input: this remains restrictive even on a router whose default
+# input policy has a broad management-LAN allow rule.
+/radius incoming set accept=yes port=3799
+/ip firewall filter remove [find where comment="netcore-coa-allow"]
+/ip firewall filter remove [find where comment="netcore-coa-drop"]
+/ip firewall filter add chain=input action=drop protocol=udp dst-port=3799 comment="netcore-coa-drop" place-before=0
+/ip firewall filter add chain=input action=accept protocol=udp src-address=$coaSourceAddress dst-port=3799 comment="netcore-coa-allow" place-before=0
+
+# The portal host is the only internet destination intentionally allowed before
+# access. It must serve both the portal assets and portal API on this hostname.
+/ip hotspot walled-garden add action=allow dst-host=$portalHost comment="netcore-portal"
+
+# The REDIRECT quota action receives Filter-Id=netcore-quota-exhausted. Its
+# dynamic HotSpot jump reaches this chain: only the local portal stays
+# reachable while every other destination is blocked. HTTPS cannot be safely
+# intercepted, so the portal presents the renewal path instead of attempting
+# to forge a browser redirect.
+/ip firewall filter remove [find where comment="netcore-quota-portal"]
+/ip firewall filter remove [find where comment="netcore-quota-block"]
+/ip firewall filter add chain=netcore-quota-exhausted action=accept dst-address=$portalAddress comment="netcore-quota-portal"
+/ip firewall filter add chain=netcore-quota-exhausted action=reject reject-with=icmp-admin-prohibited comment="netcore-quota-block"
+
+# Upload the rendered `login.html.tmpl`, `flogin.html.tmpl`, and `error.html.tmpl`
+# to `$hotspotHtmlDir` on the router. Keep every file local to RouterOS; no
+# third-party scripts, analytics, fonts, or images are permitted pre-auth.
+#
+# `maintenance.html.tmpl` is an intentionally local-only holding page. For a
+# planned portal outage, an operator uploads it as `$hotspotHtmlDir/login.html`
+# before the work and restores the normal login template afterwards. RouterOS
+# cannot reliably detect a browser's failed cross-origin navigation and return
+# a local page, so this deliberate switch is the honest outage control.

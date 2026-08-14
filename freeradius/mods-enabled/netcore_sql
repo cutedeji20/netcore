@@ -1,0 +1,35 @@
+# NetCore's RADIUS connection. Render the environment from the deployment
+# secret store; do not put a DSN or a database password in this repository.
+#
+# This is a named SQL instance so its only supported use is the narrow
+# `%{netcore_sql:...}` call in policy.d/netcore_portal. It does not load the
+# stock radcheck/radreply schema and it never reads dynamic RADIUS clients.
+sql netcore_sql {
+	dialect = "postgresql"
+	driver = "rlm_sql_postgresql"
+
+	server = "$ENV{RADIUS_DB_HOST}"
+	port = "$ENV{RADIUS_DB_PORT}"
+	login = "$ENV{RADIUS_DB_USER}"
+	password = "$ENV{RADIUS_DB_PASSWORD}"
+	radius_db = "$ENV{RADIUS_DB_NAME}"
+
+	# The NAS shared secrets are materialised into clients.conf by the secret
+	# deployment step. `nas.secret_ref` is intentionally not a usable secret.
+	read_clients = no
+	read_groups = no
+	read_profiles = no
+	auto_escape = yes
+
+	pool {
+		start = 0
+		min = 1
+		max = 8
+		spare = 2
+		uses = 0
+		retry_delay = 30
+		lifetime = 0
+		idle_timeout = 60
+		max_retries = 5
+	}
+}

@@ -1,0 +1,16 @@
+# Opt-in only. Copy to docker-compose.radius.yml after generating clients.conf
+# from the secret store and after reviewing the assembled virtual server. This
+# file intentionally contains no usable database or RADIUS secret.
+services:
+  freeradius:
+    environment:
+      RADIUS_DB_HOST: postgres
+      RADIUS_DB_PORT: "5432"
+      RADIUS_DB_NAME: netcore
+      RADIUS_DB_USER: netcore_radius
+      RADIUS_DB_PASSWORD: __INJECT_FROM_SECRET_STORE__
+    volumes:
+      - ./freeradius/mods-enabled/netcore_sql:/etc/raddb/mods-enabled/netcore_sql:ro
+      - ./freeradius/policy.d/netcore_portal:/etc/raddb/policy.d/netcore_portal:ro
+      - ./freeradius/policy.d/netcore_accounting:/etc/raddb/policy.d/netcore_accounting:ro
+      - ./freeradius/clients.conf:/etc/raddb/clients.conf:ro

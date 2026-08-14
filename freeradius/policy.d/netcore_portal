@@ -1,0 +1,62 @@
+# Portal handoff authorization for RouterOS HotSpot.
+#
+# `radius_portal_handoff_authorize` is intentionally the only policy query.
+# It consumes a nonce once and returns a complete reply policy atomically. Do
+# not split it into a consume query plus later quota / plan queries: a replay
+# race would otherwise reappear between those calls.
+netcore_portal_handoff {
+	# A portal nonce is exactly a 32-byte base64url value. Other HotSpot login
+	# paths are rejected by this server rather than accidentally using the
+	# portal's sentinel password as an account password.
+	if (&User-Name !~ /^[A-Za-z0-9_-]{43}$/) {
+		reject
+	}
+
+	if (&User-Password != "portal-handoff") {
+		reject
+	}
+
+	# `auto_escape` is enabled on the SQL module. The shape check above limits
+	# the one browser-originated identifier; the NAS and MAC are still validated
+	# a second time by PostgreSQL before the handoff is consumed.
+	update control {
+		Tmp-String-0 := "%{netcore_sql:SELECT concat_ws('|', subscription_id::text, rate_limit, session_timeout_seconds::text, idle_timeout_seconds::text, interim_interval::text, COALESCE(total_limit::text, '-'), COALESCE(total_limit_gigawords::text, '-'), filter_id) FROM radius_portal_handoff_authorize('%{User-Name}', '%{NAS-IP-Address}', '%{Calling-Station-Id}')}"
+	}
+
+	# One row has eight fixed, safe fields. No row means the nonce is expired,
+	# replayed, from another NAS/device, or no longer entitled: Access-Reject.
+	if (&control:Tmp-String-0 !~ /^([0-9a-fA-F-]{36})\|([0-9]+\/[0-9]+)\|([1-9][0-9]*)\|([1-9][0-9]*)\|([1-9][0-9]*)\|([0-9]+|-)\|([0-9]+|-)\|([a-z0-9-]+)$/) {
+		reject
+	}
+
+	update reply {
+		# Class is opaque to the NAS and lets later accounting correlate safely.
+		Class := "netcore:%{1}"
+		Mikrotik-Rate-Limit := "%{2}"
+		Session-Timeout := "%{3}"
+		Idle-Timeout := "%{4}"
+		Acct-Interim-Interval := "%{5}"
+	}
+
+	# Filter-Id creates a dynamic RouterOS firewall jump, so normal access must
+	# not receive a made-up/default chain name. The REDIRECT route is enabled
+	# only after the matching netcore-quota-exhausted chain is provisioned.
+	if ("%{8}" != "-") {
+		update reply {
+			Filter-Id := "%{8}"
+		}
+	}
+
+	# Unmetered plans have a '-' pair. Metered plans receive both low and high
+	# octet words so RouterOS cannot silently wrap at 4 GiB.
+	if ("%{6}" != "-") {
+		update reply {
+			Mikrotik-Total-Limit := "%{6}"
+			Mikrotik-Total-Limit-Gigawords := "%{7}"
+		}
+	}
+
+	update control {
+		Auth-Type := Accept
+	}
+}

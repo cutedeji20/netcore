@@ -1,0 +1,18 @@
+# Railway UI-preview image. The root Dockerfile builds the API and worker;
+# this one builds the separately embedded static UI server in cmd/ui.
+FROM golang:1.25-alpine AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ui ./cmd/ui
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/netcore-ui ./cmd/ui
+
+FROM alpine:3.21
+COPY --from=build /out/netcore-ui /netcore-ui
+USER 65532:65532
+EXPOSE 8080
+
+# Railway supplies PORT. A shell form is intentional so the runtime value is
+# expanded before the UI server receives its explicit all-interface address.
+ENTRYPOINT ["/bin/sh", "-c", "exec /netcore-ui -addr 0.0.0.0:${PORT:-8080}"]

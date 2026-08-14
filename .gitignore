@@ -1,0 +1,10 @@
+/bin/
+*.env
+!.env.example
+.envrc
+*.age
+*.key
+secrets/
+coverage.out
+/docs/
+

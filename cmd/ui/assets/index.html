@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111827" />
+    <meta name="description" content="NetCore ISP operations workspace preview" />
+    <title>NetCore · Operations workspace</title>
+    <link rel="stylesheet" href="/app.css" />
+    <script src="/app.js" defer></script>
+    <script src="/live-customers.js" defer></script>
+    <script src="/live-subscriptions.js" defer></script>
+    <script src="/live-plans.js" defer></script>
+    <script src="/live-sessions.js" defer></script>
+    <script src="/live-billing.js" defer></script>
+    <script src="/live-network.js" defer></script>
+    <script src="/live-vouchers.js" defer></script>
+    <script src="/live-team.js" defer></script>
+    <script src="/live-security.js" defer></script>
+    <script src="/live-automations.js" defer></script>
+    <script src="/live-workspace.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div><strong>NetCore</strong><small>ISP operations</small></div>
+        </div>
+        <button class="workspace-switcher" type="button" data-toast="Workspace switching will appear here.">
+          <span class="avatar avatar-indigo">LH</span>
+          <span><strong>Lagos Hub</strong><small>Production workspace</small></span><b>⌄</b>
+        </button>
+        <nav class="navigation" aria-label="Primary navigation">
+          <p>WORKSPACE</p><a class="active" href="#overview" data-page="overview">⌂ <span>Overview</span></a>
+          <p>OPERATIONS</p>
+          <a href="#customers" data-page="customers">◉ <span>Customers</span></a>
+          <a href="#subscriptions" data-page="subscriptions">↗ <span>Subscriptions</span></a>
+          <a href="#plans" data-page="plans">◇ <span>Plans &amp; pricing</span></a>
+          <a href="#network" data-page="network">⌁ <span>Network &amp; AAA</span></a>
+          <a href="#sessions" data-page="sessions">◌ <span>Sessions &amp; usage</span></a>
+          <p>REVENUE</p>
+          <a href="#billing" data-page="billing">₦ <span>Invoices &amp; payments</span></a>
+          <a href="#vouchers" data-page="vouchers">▣ <span>Vouchers</span></a>
+          <p>CONTROL</p>
+          <a href="#team" data-page="team">♙ <span>Team &amp; roles</span></a>
+          <a href="#security" data-page="security">⟡ <span>Security center</span></a>
+          <a href="#automations" data-page="automations">⇄ <span>Automations</span></a>
+          <a href="#settings" data-page="settings">⚙ <span>Settings</span></a>
+        </nav>
+        <div class="sidebar-footer">
+          <a class="help" href="#settings" data-page="settings"><b>?</b><span><strong>Need a hand?</strong><small>Open setup checklist</small></span></a>
+          <div class="profile"><span class="avatar avatar-amber">AO</span><span><strong>Amara Okafor</strong><small>Operations lead</small></span><button type="button" data-toast="Profile menu will appear here.">•••</button></div>
+        </div>
+      </aside>
+      <section class="main-column">
+        <header class="topbar">
+          <button class="icon-button mobile-menu" id="menu-toggle" type="button" aria-label="Open navigation">☰</button>
+          <button class="search-button" type="button" id="command-button"><span>⌕</span><span>Search customers, invoices, routers…</span><kbd>⌘ K</kbd></button>
+          <div class="top-actions"><button class="icon-button" type="button" data-toast="You have 3 items needing attention." aria-label="View notifications">♧<i></i></button><button class="new-button" type="button" data-toast="Choose a page to create an item.">＋ New</button></div>
+        </header>
+        <main class="content" id="page-content" tabindex="-1"></main>
+      </section>
+    </div>
+    <div class="modal-backdrop" id="command-modal" hidden>
+      <section class="command-modal" role="dialog" aria-modal="true" aria-labelledby="command-title">
+        <div><span>⌕</span><input id="command-input" autocomplete="off" placeholder="Jump to a page…" /><kbd>Esc</kbd></div>
+        <p id="command-title">Quick navigation</p><div id="command-options"></div>
+      </section>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

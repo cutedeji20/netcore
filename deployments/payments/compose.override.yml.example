@@ -1,0 +1,27 @@
+# Opt-in only. The source path is a deployment-generated, SOPS-decrypted JSON
+# file on a tmpfs or secret volume. Never create it inside this repository.
+# The file is read-only to both containers and contains logical keys such as
+# "payments.paystack.secret_key"; it is not an .env file.
+services:
+  api:
+    environment:
+      NETCORE_PAYMENT_GATEWAY: paystack
+      NETCORE_SECRETS_BACKEND: sops
+      NETCORE_SECRETS_REF: /run/secrets/netcore.json
+      NETCORE_PAYSTACK_SECRET_REF: payments.paystack.secret_key
+    volumes:
+      - type: bind
+        source: __DEPLOYMENT_SECRET_TMPFS__/netcore.json
+        target: /run/secrets/netcore.json
+        read_only: true
+  worker:
+    environment:
+      NETCORE_PAYMENT_GATEWAY: paystack
+      NETCORE_SECRETS_BACKEND: sops
+      NETCORE_SECRETS_REF: /run/secrets/netcore.json
+      NETCORE_PAYSTACK_SECRET_REF: payments.paystack.secret_key
+    volumes:
+      - type: bind
+        source: __DEPLOYMENT_SECRET_TMPFS__/netcore.json
+        target: /run/secrets/netcore.json
+        read_only: true

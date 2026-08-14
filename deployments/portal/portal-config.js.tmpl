@@ -1,0 +1,8 @@
+// Render this file during the portal deployment and serve it before portal.js.
+// Keep the API behind the same portal hostname so the browser session remains
+// same-site and no permissive cross-origin cookie policy is needed.
+window.NETCORE_PORTAL_CONFIG = Object.freeze({
+  mode: "live",
+  tenant: "__TENANT_SLUG__",
+  apiBase: ""
+});

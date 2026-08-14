@@ -1,0 +1,10 @@
+# §47 metrics scrape config.
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: netcore-api
+    static_configs: [{targets: ["api:8080"]}]
+    metrics_path: /metrics
+  - job_name: netcore-worker
+    static_configs: [{targets: ["worker:8081"]}]
+    metrics_path: /metrics

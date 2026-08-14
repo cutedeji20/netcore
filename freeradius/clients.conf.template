@@ -1,0 +1,11 @@
+# Render this file from the secret store once per registered NAS, then mount it
+# as /etc/raddb/clients.conf (or include it from the active clients.conf).
+# Never derive `secret` from `nas.secret_ref`; that column is only a pointer.
+# Do not commit the rendered result.
+
+client __ROUTER_NAME__ {
+	ipaddr = __ROUTER_RADIUS_SOURCE_IP__
+	secret = __RADIUS_SHARED_SECRET__
+	shortname = __ROUTER_NAME__
+	nastype = other
+}
