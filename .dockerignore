@@ -4,4 +4,4 @@ tests
 *.md
 .env
 *.age
-secrets/
+/secrets/

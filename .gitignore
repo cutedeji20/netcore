@@ -4,7 +4,6 @@
 .envrc
 *.age
 *.key
-secrets/
+/secrets/
 coverage.out
 /docs/
-

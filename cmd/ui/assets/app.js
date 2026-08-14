@@ -67,6 +67,7 @@ function showToast(message) { toast.textContent = message; toast.classList.add("
 function fillCommandOptions(filter = "") { const query = filter.trim().toLowerCase(); const choices = Object.entries(pages).filter(([, page]) => page.title.toLowerCase().includes(query) || page.kicker.toLowerCase().includes(query)); commandOptions.innerHTML = choices.map(([id,page]) => `<button class="command-option" type="button" data-page="${id}"><span>${icons[id]}</span><strong>${page.title}</strong><small>${page.kicker}</small></button>`).join("") || `<p class="description">No page matches that search.</p>`; }
 function openCommand() { fillCommandOptions(); modal.hidden = false; commandInput.value = ""; setTimeout(() => commandInput.focus(), 0); }
 function closeCommand() { modal.hidden = true; document.querySelector("#command-button").focus(); }
+function resetCommandOnLoad() { modal.hidden = true; commandInput.value = ""; commandOptions.replaceChildren(); }
 
 document.addEventListener("click", (event) => {
   const pageTarget = event.target.closest("[data-page]");
@@ -80,4 +81,6 @@ commandInput.addEventListener("input", () => fillCommandOptions(commandInput.val
 modal.addEventListener("click", (event) => { if (event.target === modal) closeCommand(); });
 document.addEventListener("keydown", (event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); modal.hidden ? openCommand() : closeCommand(); } if (event.key === "Escape" && !modal.hidden) closeCommand(); });
 window.addEventListener("hashchange", () => render(location.hash.slice(1)));
+window.addEventListener("pageshow", resetCommandOnLoad);
+resetCommandOnLoad();
 render(location.hash.slice(1) || "overview");

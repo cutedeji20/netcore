@@ -27,6 +27,32 @@ func TestPreviewServesDashboard(t *testing.T) {
 	}
 }
 
+func TestPreviewRevalidatesShellAssets(t *testing.T) {
+	handler, err := newHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/", "/app.css", "/app.js"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if got := response.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Fatalf("%s Cache-Control = %q, want no-cache", path, got)
+		}
+	}
+}
+
+func TestPreviewCommandPaletteClosesOnPageShow(t *testing.T) {
+	handler, err := newHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	if !strings.Contains(response.Body.String(), "resetCommandOnLoad") || !strings.Contains(response.Body.String(), "window.addEventListener(\"pageshow\", resetCommandOnLoad)") {
+		t.Fatal("command palette does not reset on page show")
+	}
+}
+
 func TestPreviewServesAutomationAdapter(t *testing.T) {
 	handler, err := newHandler()
 	if err != nil {

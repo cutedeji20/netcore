@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 )
 
 //go:embed assets
@@ -36,6 +37,12 @@ func newHandler() (http.Handler, error) {
 	}
 	files := http.FileServer(http.FS(content))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The UI uses stable asset names. Revalidate the HTML, styles and scripts
+		// on every visit so a browser cannot combine a fresh deployment with an
+		// older command-palette script from its cache.
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" || strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		if r.URL.Path == "/portal.html" {
 			// A captive-portal handoff may briefly appear in the subsequent
 			// RouterOS login URL. The portal page itself must not be cached or
