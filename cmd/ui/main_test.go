@@ -53,6 +53,18 @@ func TestPreviewCommandPaletteClosesOnPageShow(t *testing.T) {
 	}
 }
 
+func TestPreviewHiddenCommandPaletteIsNotRendered(t *testing.T) {
+	handler, err := newHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.css", nil))
+	if !strings.Contains(response.Body.String(), ".modal-backdrop[hidden]{display:none}") {
+		t.Fatal("hidden command palette CSS rule was not served")
+	}
+}
+
 func TestPreviewServesAutomationAdapter(t *testing.T) {
 	handler, err := newHandler()
 	if err != nil {
