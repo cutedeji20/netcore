@@ -7,7 +7,11 @@ services:
       RADIUS_DB_HOST: postgres
       RADIUS_DB_PORT: "5432"
       RADIUS_DB_NAME: netcore
-      RADIUS_DB_USER: netcore_radius
+      # The production package uses the netcore_radius_login principal and
+      # reads its password from a mounted file at process start. This legacy
+      # development-only example must not be used for production. Never commit
+      # a real value here.
+      RADIUS_DB_USER: netcore_radius_login
       RADIUS_DB_PASSWORD: __INJECT_FROM_SECRET_STORE__
     volumes:
       - ./freeradius/mods-enabled/netcore_sql:/etc/raddb/mods-enabled/netcore_sql:ro

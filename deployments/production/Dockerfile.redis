@@ -1,0 +1,7 @@
+FROM redis:7.4.2-alpine
+
+USER root
+COPY deployments/production/redis-entrypoint.sh /usr/local/bin/netcore-redis
+RUN chmod 0555 /usr/local/bin/netcore-redis
+
+ENTRYPOINT ["/usr/local/bin/netcore-redis"]

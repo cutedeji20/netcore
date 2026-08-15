@@ -24,6 +24,13 @@ var (
 	ErrUnauthenticated    = errors.New("auth: unauthenticated")
 )
 
+// MFAVerifier is deliberately smaller than the persistence-facing MFAStore.
+// Password verification must complete before the code is consumed, and a
+// session must never exist before this verifier accepts the second factor.
+type MFAVerifier interface {
+	VerifyTOTP(ctx context.Context, tenantID, userID, code string) error
+}
+
 // User is the minimum credential record needed by the login service.
 type User struct {
 	ID           string
@@ -61,6 +68,7 @@ type LoginInput struct {
 	TenantSlug string
 	Identifier string
 	Password   string
+	MFACode    string
 	IP         string
 	UserAgent  string
 }
@@ -84,6 +92,21 @@ type Service struct {
 	dummyHash  string
 	sessionTTL time.Duration
 	now        func() time.Time
+	mfa        MFAVerifier
+}
+
+// RequireMFA enables mandatory TOTP verification for every successful
+// password login. It is intended to be called during process construction,
+// before the service is exposed through HTTP.
+func (s *Service) RequireMFA(verifier MFAVerifier) error {
+	if s == nil {
+		return errors.New("auth: service is required")
+	}
+	if verifier == nil {
+		return errors.New("auth: MFA verifier is required")
+	}
+	s.mfa = verifier
+	return nil
 }
 
 // NewService creates a Service. It creates a dummy Argon2id hash once so a
@@ -138,6 +161,16 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (session Session, pr
 	matched, verifyErr := s.hasher.Verify(in.Password, hash)
 	if verifyErr != nil || !tenantFound || !userFound || !matched || user.Status != "ACTIVE" || user.TenantID != tenantID || user.ID == "" {
 		return Session{}, Principal{}, ErrInvalidCredentials
+	}
+	if s.mfa != nil {
+		if err := s.mfa.VerifyTOTP(ctx, user.TenantID, user.ID, strings.TrimSpace(in.MFACode)); err != nil {
+			// The public login response must not disclose whether an account has
+			// an enrolled device or whether a code was replayed.
+			if errors.Is(err, ErrInvalidMFA) {
+				return Session{}, Principal{}, ErrInvalidCredentials
+			}
+			return Session{}, Principal{}, fmt.Errorf("auth: verify MFA: %w", err)
+		}
 	}
 
 	if needsRehash, err := s.hasher.NeedsRehash(hash); err == nil && needsRehash {

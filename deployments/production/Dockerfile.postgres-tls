@@ -1,0 +1,7 @@
+FROM alpine:3.21
+
+RUN apk add --no-cache openssl
+COPY deployments/production/postgres-tls-entrypoint.sh /usr/local/bin/netcore-postgres-tls
+RUN chmod 0555 /usr/local/bin/netcore-postgres-tls
+
+ENTRYPOINT ["/usr/local/bin/netcore-postgres-tls"]

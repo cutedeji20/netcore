@@ -1,0 +1,30 @@
+{$NETCORE_DOMAIN} {
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+	}
+
+	@api path /api/* /auth/* /webhooks/*
+	handle @api {
+		reverse_proxy api:8080 {
+			# Replace, rather than append, client-provided forwarding headers. The
+			# API trusts this exact Caddy container address only.
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	handle {
+		reverse_proxy ui:8080
+	}
+}

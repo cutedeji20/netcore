@@ -115,7 +115,20 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	authHTTP, err := auth.NewHTTP(authService, redisClient, cfg.Env != config.EnvDevelopment, cfg.Security.AllowedOrigins)
+	if cfg.Auth.RequireMFA {
+		secretStore, err := secrets.NewSOPSFileStore(cfg.Secrets.Ref)
+		if err != nil {
+			return fmt.Errorf("MFA SecretStore: %w", err)
+		}
+		mfaService, err := auth.NewMFAService(authStore, secretStore)
+		if err != nil {
+			return err
+		}
+		if err := authService.RequireMFA(mfaService); err != nil {
+			return err
+		}
+	}
+	authHTTP, err := auth.NewHTTP(authService, redisClient, cfg.Env != config.EnvDevelopment, cfg.Security.AllowedOrigins, cfg.Security.TrustedProxies)
 	if err != nil {
 		return err
 	}

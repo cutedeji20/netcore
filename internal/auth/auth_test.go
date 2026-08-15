@@ -21,6 +21,21 @@ type memoryStore struct {
 	rehashed    string
 }
 
+type testMFAVerifier struct {
+	err   error
+	calls int
+	code  string
+}
+
+func (v *testMFAVerifier) VerifyTOTP(_ context.Context, tenantID, userID, code string) error {
+	if tenantID != testTenantID || userID != "33333333-3333-4333-8333-333333333333" {
+		return ErrInvalidMFA
+	}
+	v.calls++
+	v.code = code
+	return v.err
+}
+
 func (s *memoryStore) ResolveTenant(_ context.Context, slug string) (string, bool, error) {
 	return s.tenantID, slug == "example", nil
 }
@@ -125,6 +140,49 @@ func TestLoginInvalidCredentialsAreIndistinguishable(t *testing.T) {
 	})
 	if !errors.Is(wrongPassword, ErrInvalidCredentials) || !errors.Is(unknownUser, ErrInvalidCredentials) {
 		t.Fatalf("wrong=%v unknown=%v; both must be ErrInvalidCredentials", wrongPassword, unknownUser)
+	}
+}
+
+func TestLoginRequiresMFABeforeCreatingSession(t *testing.T) {
+	service, store := newTestService(t)
+	verifier := &testMFAVerifier{err: ErrInvalidMFA}
+	if err := service.RequireMFA(verifier); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := service.Login(context.Background(), LoginInput{
+		TenantSlug: "example", Identifier: "admin@example.com", Password: "correct password", MFACode: "123456",
+	})
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("invalid MFA error = %v, want invalid credentials", err)
+	}
+	if verifier.calls != 1 || verifier.code != "123456" {
+		t.Fatalf("MFA verifier calls=%d code=%q", verifier.calls, verifier.code)
+	}
+	if len(store.tokenHash) != 0 {
+		t.Fatal("session was created before MFA succeeded")
+	}
+
+	verifier.err = nil
+	if _, _, err := service.Login(context.Background(), LoginInput{
+		TenantSlug: "example", Identifier: "admin@example.com", Password: "correct password", MFACode: "654321",
+	}); err != nil {
+		t.Fatalf("MFA-backed login: %v", err)
+	}
+	if verifier.calls != 2 || verifier.code != "654321" || len(store.tokenHash) != 32 {
+		t.Fatalf("successful MFA login calls=%d code=%q token_hash=%d", verifier.calls, verifier.code, len(store.tokenHash))
+	}
+}
+
+func TestLoginTreatsMFAStoreFailureAsUnavailable(t *testing.T) {
+	service, _ := newTestService(t)
+	if err := service.RequireMFA(&testMFAVerifier{err: ErrMFAUnavailable}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := service.Login(context.Background(), LoginInput{
+		TenantSlug: "example", Identifier: "admin@example.com", Password: "correct password", MFACode: "123456",
+	})
+	if !errors.Is(err, ErrMFAUnavailable) {
+		t.Fatalf("MFA dependency failure = %v, want ErrMFAUnavailable", err)
 	}
 }
 

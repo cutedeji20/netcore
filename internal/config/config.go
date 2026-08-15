@@ -11,7 +11,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -51,8 +53,9 @@ type Database struct {
 }
 
 type Redis struct {
-	Addr    string
-	Timeout time.Duration
+	Addr     string
+	Password string
+	Timeout  time.Duration
 	// RequiredForReadiness is deliberately NOT configurable to true.
 	//
 	// §48: gating readiness on Redis turns a cache outage into a total
@@ -78,6 +81,10 @@ type Auth struct {
 	PasswordMemoryKiB   uint32
 	PasswordIterations  uint32
 	PasswordParallelism uint8
+	// RequireMFA prevents a password-only browser session from being created.
+	// Production control planes must leave this enabled; development can opt in
+	// while an administrator is being bootstrapped.
+	RequireMFA bool
 }
 
 type Quota struct {
@@ -130,6 +137,14 @@ func Load(getenv func(string) string) (*Config, error) {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
+	databaseDSN, err := valueFromEnvOrFile(getenv, "NETCORE_DB_DSN")
+	if err != nil {
+		return nil, err
+	}
+	redisPassword, err := valueFromEnvOrFile(getenv, "NETCORE_REDIS_PASSWORD")
+	if err != nil {
+		return nil, err
+	}
 
 	c := &Config{
 		Env:         Env(strDefault(getenv("NETCORE_ENV"), string(EnvDevelopment))),
@@ -137,13 +152,14 @@ func Load(getenv func(string) string) (*Config, error) {
 		HTTPAddr:    strDefault(getenv("NETCORE_HTTP_ADDR"), ":8080"),
 
 		Database: Database{
-			DSN:              getenv("NETCORE_DB_DSN"),
+			DSN:              databaseDSN,
 			MaxConns:         intDefault(getenv("NETCORE_DB_MAX_CONNS"), 25),
 			StatementTimeout: durDefault(getenv("NETCORE_DB_STATEMENT_TIMEOUT"), 10*time.Second),
 			ConnectTimeout:   durDefault(getenv("NETCORE_DB_CONNECT_TIMEOUT"), 5*time.Second),
 		},
 		Redis: Redis{
 			Addr:                 getenv("NETCORE_REDIS_ADDR"),
+			Password:             redisPassword,
 			Timeout:              durDefault(getenv("NETCORE_REDIS_TIMEOUT"), 250*time.Millisecond),
 			RequiredForReadiness: false, // §48. Not configurable. See the field comment.
 		},
@@ -159,6 +175,7 @@ func Load(getenv func(string) string) (*Config, error) {
 			PasswordMemoryKiB:   uint32(uintDefault(getenv("NETCORE_AUTH_PASSWORD_MEMORY_KIB"), 64*1024)),
 			PasswordIterations:  uint32(uintDefault(getenv("NETCORE_AUTH_PASSWORD_ITERATIONS"), 3)),
 			PasswordParallelism: uint8(uintDefault(getenv("NETCORE_AUTH_PASSWORD_PARALLELISM"), 2)),
+			RequireMFA:          boolDefault(getenv("NETCORE_AUTH_REQUIRE_MFA"), false),
 		},
 		Quota: Quota{
 			InterimIntervalBase: durDefault(getenv("NETCORE_QUOTA_INTERIM_BASE"), 300*time.Second),
@@ -192,6 +209,29 @@ func Load(getenv func(string) string) (*Config, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// valueFromEnvOrFile accepts a normal value for local development and a
+// newline-terminated mounted secret for production. Supplying both is an
+// operator error: silently choosing one could make a rotation appear to work
+// while an old credential remains in use.
+func valueFromEnvOrFile(getenv func(string) string, key string) (string, error) {
+	value := getenv(key)
+	path := strings.TrimSpace(getenv(key + "_FILE"))
+	if value != "" && path != "" {
+		return "", fmt.Errorf("%s and %s_FILE cannot both be set", key, key)
+	}
+	if path == "" {
+		return value, nil
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("%s_FILE must be an absolute path", key)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s_FILE: %w", key, err)
+	}
+	return strings.TrimSpace(string(contents)), nil
 }
 
 // Validate enforces both presence and safety. §105.
@@ -288,6 +328,9 @@ func (c *Config) Validate() error {
 	// exists — presence checks alone would let all of these through.
 	// ------------------------------------------------------------------
 	if c.Env.IsProduction() {
+		if !c.Auth.RequireMFA {
+			p = append(p, "NETCORE_AUTH_REQUIRE_MFA must be true in production (privileged operator access)")
+		}
 		if c.Security.TLSSkipVerify {
 			p = append(p, "NETCORE_TLS_SKIP_VERIFY must be false in production (§1.18)")
 		}
@@ -305,8 +348,19 @@ func (c *Config) Validate() error {
 				p = append(p, fmt.Sprintf("origin %q must use https in production", o))
 			}
 		}
+		if len(c.Security.TrustedProxies) == 0 {
+			p = append(p, "NETCORE_TRUSTED_PROXIES is required in production (§45: proxy source validation)")
+		}
+		for _, proxy := range c.Security.TrustedProxies {
+			if !validTrustedProxy(proxy) {
+				p = append(p, fmt.Sprintf("NETCORE_TRUSTED_PROXIES contains invalid proxy %q", proxy))
+			}
+		}
 		if c.Redis.Addr == "" {
 			p = append(p, "NETCORE_REDIS_ADDR is required in production (§15 rate limiting)")
+		}
+		if strings.TrimSpace(c.Redis.Password) == "" {
+			p = append(p, "NETCORE_REDIS_PASSWORD or NETCORE_REDIS_PASSWORD_FILE is required in production (§15 rate limiting)")
 		}
 		if c.Secrets.Ref == "" {
 			p = append(p, "NETCORE_SECRETS_REF is required in production (§68)")
@@ -330,6 +384,15 @@ func (c *Config) Validate() error {
 		return &ValidationError{Problems: p}
 	}
 	return nil
+}
+
+func validTrustedProxy(value string) bool {
+	value = strings.TrimSpace(value)
+	if address, err := netip.ParseAddr(value); err == nil {
+		return !address.IsUnspecified()
+	}
+	prefix, err := netip.ParsePrefix(value)
+	return err == nil && !prefix.Addr().IsUnspecified()
 }
 
 // ErrMissing is returned by MustLoad's caller path when configuration cannot

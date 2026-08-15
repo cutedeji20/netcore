@@ -3,7 +3,7 @@
 
   var loadedSubscriptions = null;
   var requestInFlight = false;
-  var apiBase = window.NETCORE_API_URL || "http://127.0.0.1:8080";
+  var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
 
   function currentPage() {
     return window.location.hash.slice(1) || "overview";
@@ -132,7 +132,7 @@
         displaySubscriptions();
       })
       .catch(function () {
-        // The unauthenticated or offline preview remains useful by design.
+        // The authorised page remains empty when its API request fails.
       })
       .finally(function () {
         requestInFlight = false;

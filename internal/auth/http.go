@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"sort"
 	"strings"
@@ -34,20 +36,26 @@ type HTTP struct {
 	limiter        LoginLimiter
 	secureCookies  bool
 	allowedOrigins []string
+	trustedProxies []netip.Prefix
 }
 
-func NewHTTP(service *Service, limiter LoginLimiter, secureCookies bool, allowedOrigins []string) (*HTTP, error) {
+func NewHTTP(service *Service, limiter LoginLimiter, secureCookies bool, allowedOrigins, trustedProxies []string) (*HTTP, error) {
 	if service == nil {
 		return nil, errors.New("auth: service is required")
 	}
 	if limiter == nil {
 		return nil, errors.New("auth: login limiter is required")
 	}
+	proxies, err := parseTrustedProxies(trustedProxies)
+	if err != nil {
+		return nil, err
+	}
 	return &HTTP{
 		service:        service,
 		limiter:        limiter,
 		secureCookies:  secureCookies,
 		allowedOrigins: slices.Clone(allowedOrigins),
+		trustedProxies: proxies,
 	}, nil
 }
 
@@ -73,6 +81,7 @@ func (h *HTTP) login(w http.ResponseWriter, r *http.Request) {
 		Tenant     string `json:"tenant"`
 		Identifier string `json:"identifier"`
 		Password   string `json:"password"`
+		MFACode    string `json:"mfa_code"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
@@ -80,7 +89,7 @@ func (h *HTTP) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identifier := NormalizeLoginIdentifier(input.Identifier)
-	if err := h.limitLogin(r.Context(), input.Tenant, identifier, clientIP(r)); err != nil {
+	if err := h.limitLogin(r.Context(), input.Tenant, identifier, h.clientIP(r)); err != nil {
 		if errors.Is(err, errRateLimited) {
 			security.WriteError(w, r, http.StatusTooManyRequests, "TOO_MANY_REQUESTS", "Too many attempts. Please try again later.")
 			return
@@ -94,7 +103,8 @@ func (h *HTTP) login(w http.ResponseWriter, r *http.Request) {
 		TenantSlug: input.Tenant,
 		Identifier: identifier,
 		Password:   input.Password,
-		IP:         clientIP(r),
+		MFACode:    input.MFACode,
+		IP:         h.clientIP(r),
 		UserAgent:  r.UserAgent(),
 	})
 	if errors.Is(err, ErrInvalidCredentials) {
@@ -216,15 +226,61 @@ func hashedRateLimitKey(namespace string, parts ...string) string {
 	return namespace + ":" + hex.EncodeToString(sum[:])
 }
 
-func clientIP(r *http.Request) string {
+func parseTrustedProxies(values []string) ([]netip.Prefix, error) {
+	prefixes := make([]netip.Prefix, 0, len(values))
+	for _, raw := range values {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if address, err := netip.ParseAddr(raw); err == nil {
+			prefixes = append(prefixes, netip.PrefixFrom(address, address.BitLen()))
+			continue
+		}
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil || prefix.Addr().IsUnspecified() {
+			return nil, fmt.Errorf("auth: invalid trusted proxy %q", raw)
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	return prefixes, nil
+}
+
+// clientIP honours X-Forwarded-For only when the direct peer is an explicitly
+// configured proxy. The right-most untrusted hop is the client; an arbitrary
+// browser cannot spoof this header when it reaches the API directly.
+func (h *HTTP) clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return ""
 	}
-	if net.ParseIP(host) == nil {
+	remote, err := netip.ParseAddr(host)
+	if err != nil {
 		return ""
 	}
-	return host
+	if !h.isTrustedProxy(remote) {
+		return remote.String()
+	}
+	forwarded := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	for index := len(forwarded) - 1; index >= 0; index-- {
+		candidate, err := netip.ParseAddr(strings.TrimSpace(forwarded[index]))
+		if err != nil {
+			continue
+		}
+		if !h.isTrustedProxy(candidate) {
+			return candidate.String()
+		}
+	}
+	return remote.String()
+}
+
+func (h *HTTP) isTrustedProxy(address netip.Addr) bool {
+	for _, prefix := range h.trustedProxies {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *HTTP) setSessionCookie(w http.ResponseWriter, session Session) {

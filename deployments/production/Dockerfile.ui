@@ -1,0 +1,16 @@
+# Production admin UI. The embedded server defaults to its locked state; it is
+# deliberately not the Railway preview image's public deployment contract.
+FROM golang:1.25-alpine AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ui ./cmd/ui
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/netcore-ui ./cmd/ui
+
+FROM alpine:3.21
+COPY --from=build /out/netcore-ui /netcore-ui
+USER 65532:65532
+EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1
+ENTRYPOINT ["/netcore-ui", "-addr", "0.0.0.0:8080"]

@@ -1,0 +1,13 @@
+# Durable accounting packet journal. This runs before any database work in the
+# live UDP server. A separate detail listener reads this exact directory and
+# invokes netcore_accounting; do not point another detail reader at it.
+detail netcore_accounting_spool {
+	# There is exactly one writer replica because it owns the UDP ports. Minute
+	# rotation bounds the normal replay lag without producing one file per packet.
+	filename = "/var/lib/netcore-radius/spool/detail-%Y%m%d%H%M"
+	header = "%t"
+	permissions = 0600
+	locking = yes
+	escape_filenames = yes
+	log_packet_header = no
+}

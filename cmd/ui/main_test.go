@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestPreviewServesDashboard(t *testing.T) {
+func TestDashboardServesLockedConfigurationByDefault(t *testing.T) {
 	handler, err := newHandler()
 	if err != nil {
 		t.Fatal(err)
@@ -19,11 +19,49 @@ func TestPreviewServesDashboard(t *testing.T) {
 		t.Fatalf("status = %d", response.Code)
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, "NetCore") {
+	if !strings.Contains(body, "NetCore") || !strings.Contains(body, "/admin-config.js") {
 		t.Fatal("dashboard markup was not served")
 	}
-	if !strings.Contains(body, "/live-customers.js") || !strings.Contains(body, "/live-subscriptions.js") || !strings.Contains(body, "/live-plans.js") || !strings.Contains(body, "/live-sessions.js") || !strings.Contains(body, "/live-billing.js") || !strings.Contains(body, "/live-network.js") || !strings.Contains(body, "/live-vouchers.js") || !strings.Contains(body, "/live-team.js") || !strings.Contains(body, "/live-security.js") || !strings.Contains(body, "/live-automations.js") || !strings.Contains(body, "/live-workspace.js") {
-		t.Fatal("live data adapters were not referenced")
+	if strings.Contains(body, "/live-customers.js") || strings.Contains(body, "/live-subscriptions.js") {
+		t.Fatal("live data adapters must not load before an authorised session")
+	}
+}
+
+func TestDashboardServesNoStoreLockedConfig(t *testing.T) {
+	handler, err := newHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/admin-config.js", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
+	}
+	if !strings.Contains(response.Body.String(), `"mode":"locked"`) || strings.Contains(response.Body.String(), "127.0.0.1") {
+		t.Fatalf("unsafe default admin configuration: %s", response.Body.String())
+	}
+}
+
+func TestLoadAdminConfigAllowsOnlyValidLiveTenant(t *testing.T) {
+	config, err := loadAdminConfig(func(key string) string {
+		if key == "NETCORE_UI_MODE" {
+			return "live"
+		}
+		return "lagos-hub"
+	})
+	if err != nil || config.Mode != "live" || config.Tenant != "lagos-hub" {
+		t.Fatalf("loadAdminConfig() = %#v, %v", config, err)
+	}
+	if _, err := loadAdminConfig(func(key string) string {
+		if key == "NETCORE_UI_MODE" {
+			return "live"
+		}
+		return "Not a slug"
+	}); err == nil {
+		t.Fatal("invalid production tenant configuration was accepted")
 	}
 }
 
@@ -38,6 +76,21 @@ func TestPreviewRevalidatesShellAssets(t *testing.T) {
 		if got := response.Header().Get("Cache-Control"); got != "no-cache" {
 			t.Fatalf("%s Cache-Control = %q, want no-cache", path, got)
 		}
+	}
+}
+
+func TestDashboardAssetsHaveBrowserSecurityHeaders(t *testing.T) {
+	handler, err := newHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q", response.Header().Get("X-Content-Type-Options"))
+	}
+	if !strings.Contains(response.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+		t.Fatalf("CSP = %q", response.Header().Get("Content-Security-Policy"))
 	}
 }
 

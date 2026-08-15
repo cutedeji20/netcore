@@ -1,0 +1,21 @@
+# Reads the durable accounting journal written by netcore-hotspot. The detail
+# listener retries module failures (notably PostgreSQL unavailability) while
+# netcore_accounting returns reject for a malformed or no-longer-registered
+# packet, allowing that non-retryable record to be discarded safely.
+server netcore-accounting-replay {
+	listen {
+		type = detail
+		filename = "/var/lib/netcore-radius/spool/detail-*"
+		load_factor = 10
+		poll_interval = 1
+		retry_interval = 30
+	}
+
+	preacct {
+		acct_unique
+	}
+
+	accounting {
+		netcore_accounting
+	}
+}

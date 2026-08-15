@@ -2,17 +2,17 @@
 # secret store; do not put a DSN or a database password in this repository.
 #
 # This is a named SQL instance so its only supported use is the narrow
-# `%{netcore_sql:...}` call in policy.d/netcore_portal. It does not load the
-# stock radcheck/radreply schema and it never reads dynamic RADIUS clients.
+# `%{netcore_sql:...}` calls in the portal and replay policies. It does not
+# load the stock radcheck/radreply schema and it never reads dynamic RADIUS
+# clients.
 sql netcore_sql {
 	dialect = "postgresql"
 	driver = "rlm_sql_postgresql"
 
-	server = "$ENV{RADIUS_DB_HOST}"
-	port = "$ENV{RADIUS_DB_PORT}"
-	login = "$ENV{RADIUS_DB_USER}"
-	password = "$ENV{RADIUS_DB_PASSWORD}"
-	radius_db = "$ENV{RADIUS_DB_NAME}"
+	# Use the full libpq connection setting so PostgreSQL TLS is mandatory.
+	# Keep the password in the short-lived process environment populated from a
+	# mounted file by the production entrypoint; it never appears in Compose.
+	radius_db = "host=$ENV{RADIUS_DB_HOST} port=$ENV{RADIUS_DB_PORT} dbname=$ENV{RADIUS_DB_NAME} user=$ENV{RADIUS_DB_USER} password=$ENV{RADIUS_DB_PASSWORD} sslmode=verify-full sslrootcert=/run/netcore/postgres-tls/ca.crt"
 
 	# The NAS shared secrets are materialised into clients.conf by the secret
 	# deployment step. `nas.secret_ref` is intentionally not a usable secret.

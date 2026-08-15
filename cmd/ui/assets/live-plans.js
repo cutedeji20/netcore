@@ -3,7 +3,7 @@
 
   var loadedPlans = null;
   var requestInFlight = false;
-  var apiBase = window.NETCORE_API_URL || "http://127.0.0.1:8080";
+  var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
   var currencyExponents = {
     JPY: 0, KRW: 0, VND: 0, CLP: 0, ISK: 0, XAF: 0, XOF: 0,
     BHD: 3, KWD: 3, OMR: 3, TND: 3, JOD: 3
@@ -143,7 +143,7 @@
         displayPlans();
       })
       .catch(function () {
-        // The unauthenticated or offline preview remains useful by design.
+        // The authorised page remains empty when its API request fails.
       })
       .finally(function () {
         requestInFlight = false;

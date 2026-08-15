@@ -246,8 +246,11 @@ make migrate && make rollback && make migrate   # reversible
 
 **8. Known issues.** Runtime adapters, the first identity/RBAC slice, and
 OTP/MFA foundations are now implemented. Delivery/SecretStore adapters,
-password recovery, MFA enrollment/enforcement, role administration and the
-business/AAA integrations remain future work. `govulncheck`, `gosec` and
+password recovery, role administration and the business/AAA integrations
+remain future work. Production login now requires an active replay-safe TOTP
+factor before a browser session is created; the first administrator is created
+only through the local one-time bootstrap ceremony documented in
+`deployments/production/README.md`. `govulncheck`, `gosec` and
 `golangci-lint` remain CI gates and have not been run locally.
 
 **9. Next phase.** Phase 2 — Identity & RBAC (§113): users, Argon2id, sessions,
@@ -258,25 +261,30 @@ followed by password recovery/change and MFA enrollment/enforcement.
 
 ---
 
-## UI preview
+## Control dashboard
 
-The visual review surface is a representative-data dashboard covering
-customers, subscriptions, plans, network/AAA, sessions, billing, vouchers,
-team access, security, automations, and settings. After a signed-in API session
-is available, the customer, subscription, plan, live-session, billing,
-network inventory, voucher batch, team roster, Security Center activity,
-automation, and workspace settings tables load
-their corresponding
-tenant-scoped APIs; all other views, and failed or unauthenticated API requests,
-remain safely in preview mode.
+The dashboard is fail-closed. A new UI server starts in **locked** mode and
+does not render representative, customer, billing, network, or operational
+data. It can only become live when both of the following are true:
+
+1. `NETCORE_UI_MODE=live` and a valid `NETCORE_TENANT_SLUG` are configured at
+   process start; and
+2. the browser can establish a same-origin, authenticated API session through
+   `/api/v1/me`.
+
+The UI never accepts a browser-supplied API address. The production edge must
+serve the UI and reverse-proxy `/api` and `/auth` to the private API service at
+the same HTTPS origin. Adapter scripts load only after that session check;
+failed and unauthorised requests leave the view empty rather than falling back
+to sample records. Server-side permission checks remain authoritative for every
+API call.
 
 ```powershell
 go run ./cmd/ui
 ```
 
-Open <http://127.0.0.1:3000> to browse the interface. The next UI delivery
-steps connect the remaining operational screens to their corresponding
-tenant-scoped APIs.
+Open <http://127.0.0.1:3000> to verify the locked state. Do not set the live
+environment values on Railway while it hosts only the static UI preview.
 
 ## License
 

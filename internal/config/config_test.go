@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,11 +15,14 @@ func env(m map[string]string) func(string) string {
 
 func baseProd() map[string]string {
 	return map[string]string{
-		"NETCORE_ENV":             "production",
-		"NETCORE_DB_DSN":          "postgres://u:p@db:5432/netcore?sslmode=require",
-		"NETCORE_REDIS_ADDR":      "redis:6379",
-		"NETCORE_ALLOWED_ORIGINS": "https://portal.example.com",
-		"NETCORE_SECRETS_REF":     "netcore/prod",
+		"NETCORE_ENV":              "production",
+		"NETCORE_DB_DSN":           "postgres://u:p@db:5432/netcore?sslmode=require",
+		"NETCORE_REDIS_ADDR":       "redis:6379",
+		"NETCORE_REDIS_PASSWORD":   "test-redis-password",
+		"NETCORE_ALLOWED_ORIGINS":  "https://portal.example.com",
+		"NETCORE_TRUSTED_PROXIES":  "172.30.0.2",
+		"NETCORE_SECRETS_REF":      "netcore/prod",
+		"NETCORE_AUTH_REQUIRE_MFA": "true",
 	}
 }
 
@@ -87,9 +92,24 @@ func TestValidate_ProductionSafetyInvariants(t *testing.T) {
 			wantSub: "NETCORE_REDIS_ADDR is required",
 		},
 		{
+			name:    "redis password is required for rate limiting",
+			mutate:  func(m map[string]string) { delete(m, "NETCORE_REDIS_PASSWORD") },
+			wantSub: "NETCORE_REDIS_PASSWORD",
+		},
+		{
+			name:    "trusted proxy is required behind the production edge",
+			mutate:  func(m map[string]string) { delete(m, "NETCORE_TRUSTED_PROXIES") },
+			wantSub: "NETCORE_TRUSTED_PROXIES is required",
+		},
+		{
 			name:    "secret reference is required",
 			mutate:  func(m map[string]string) { delete(m, "NETCORE_SECRETS_REF") },
 			wantSub: "NETCORE_SECRETS_REF is required",
+		},
+		{
+			name:    "MFA is required for privileged production access",
+			mutate:  func(m map[string]string) { m["NETCORE_AUTH_REQUIRE_MFA"] = "false" },
+			wantSub: "NETCORE_AUTH_REQUIRE_MFA must be true",
 		},
 		{
 			// §82.3: Session-Timeout is the outage exposure window.
@@ -125,6 +145,38 @@ func TestValidate_ValidProductionConfigLoads(t *testing.T) {
 	// §48: Redis must never gate readiness, regardless of environment.
 	if c.Redis.RequiredForReadiness {
 		t.Error("Redis must not be a readiness gate (§48)")
+	}
+}
+
+func TestLoad_SensitiveValuesMayComeFromMountedFiles(t *testing.T) {
+	dir := t.TempDir()
+	dsnFile := filepath.Join(dir, "db_dsn")
+	redisFile := filepath.Join(dir, "redis_password")
+	if err := os.WriteFile(dsnFile, []byte("postgres://u:p@db:5432/netcore?sslmode=require\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(redisFile, []byte("test-redis-password\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := baseProd()
+	delete(m, "NETCORE_DB_DSN")
+	delete(m, "NETCORE_REDIS_PASSWORD")
+	m["NETCORE_DB_DSN_FILE"] = dsnFile
+	m["NETCORE_REDIS_PASSWORD_FILE"] = redisFile
+	c, err := Load(env(m))
+	if err != nil {
+		t.Fatalf("mounted secret config rejected: %v", err)
+	}
+	if c.Database.DSN != "postgres://u:p@db:5432/netcore?sslmode=require" || c.Redis.Password != "test-redis-password" {
+		t.Fatalf("mounted values were not loaded safely: %#v", c)
+	}
+}
+
+func TestLoad_SensitiveValueAndFileAreMutuallyExclusive(t *testing.T) {
+	m := baseProd()
+	m["NETCORE_DB_DSN_FILE"] = "/run/secrets/db_dsn"
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "cannot both be set") {
+		t.Fatalf("ambiguous secret source must fail, err=%v", err)
 	}
 }
 

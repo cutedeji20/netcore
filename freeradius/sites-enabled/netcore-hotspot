@@ -1,33 +1,45 @@
-# Include this policy block from the `authorize` section of the virtual server
-# bound to RouterOS HotSpot authentication. It is deliberately not a complete
-# replacement for the stock `default` virtual server: production accounting,
-# CoA source restrictions, client declarations, and certificate policy are
-# deployment-specific and must remain enabled beside this authorization block.
-#
-# Example:
-# server netcore-hotspot {
-#     authorize { netcore_portal_handoff }
-#     authenticate { Auth-Type Accept { accept } }
-#     preacct { acct_unique }
-#     accounting { netcore_accounting }
-# }
+# NetCore's production RouterOS HotSpot listener. Static clients.conf is a
+# read-only, deployment-rendered file containing only registered NAS devices.
+# Accounting is acknowledged only after the detail writer stores the packet on
+# the dedicated durable spool. PostgreSQL ingestion happens in the separate
+# detail listener, so a database outage cannot turn into lost usage.
+server netcore-hotspot {
+	listen {
+		type = auth
+		ipaddr = 0.0.0.0
+		port = 1812
+	}
 
-# authorize {
-#     netcore_portal_handoff
-# }
-#
-# authenticate {
-#     Auth-Type Accept {
-#         accept
-#     }
-# }
-#
-# preacct {
-#     # Generate Acct-Unique-Session-Id before SQL so packet retransmits and
-#     # cross-NAS session ids have a stable accounting key.
-#     acct_unique
-# }
-#
-# accounting {
-#     netcore_accounting
-# }
+	listen {
+		type = acct
+		ipaddr = 0.0.0.0
+		port = 1813
+	}
+
+	authorize {
+		netcore_portal_handoff
+	}
+
+	authenticate {
+		Auth-Type Accept {
+			accept
+		}
+	}
+
+	preacct {
+		# Generate Acct-Unique-Session-Id before writing the durable packet. The
+		# replay listener preserves it as the accounting deduplication key.
+		acct_unique
+	}
+
+	accounting {
+		netcore_accounting_spool
+		if (fail) {
+			# Do not acknowledge when the durable spool cannot accept a packet.
+			# The NAS must retry; silently losing usage is worse than a visible
+			# accounting backlog.
+			fail
+		}
+		ok
+	}
+}

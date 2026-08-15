@@ -1,9 +1,11 @@
 # FreeRADIUS configuration
 
-This directory is version-controlled production configuration. The base
-Compose service does **not** yet enable these files: it mounts this directory
-under `/etc/raddb/local` only. That is intentional until a real RADIUS client
-file, a database login, a durable accounting spool, and a test NAS are deployed.
+This directory is version-controlled production configuration. The Kamatera
+package builds it into two separate FreeRADIUS configurations: a UDP writer
+that journals accounting packets to disk first, and a detail listener that
+replays that journal into PostgreSQL. The `radius` Compose profile remains
+disabled by default until a rendered NAS client file and staging acceptance run
+are complete.
 
 ## Portal authorization
 
@@ -27,9 +29,13 @@ complete one-call authorization function is its only entitlement surface.
 
 1. Apply database migrations `0028_radius_portal_access_policy` and
    `0030_radius_accounting_ingest`.
-2. Provision a least-privilege **LOGIN** principal that is a member of
-   `netcore_radius`; inject its password as `RADIUS_DB_PASSWORD`. The schema
-   role itself stays `NOLOGIN`.
+2. Use the `netcore_radius_login` **LOGIN** principal created by the production
+   PostgreSQL init script. It is a member of the `netcore_radius` capability
+   role; the password is read from the mounted
+   `radius/db_password` file at process start, never from Compose. It must be
+   the same non-empty base64url value as the PostgreSQL-only
+   `postgres/postgres_radius_password` file, but it is mounted separately so
+   it can remain readable only by the FreeRADIUS UID.
 3. Render `clients.conf.template` once for every registered NAS from the secret
    store. Never write the rendered RADIUS shared secret to Git or derive it
    from `nas.secret_ref`.
@@ -39,10 +45,10 @@ complete one-call authorization function is its only entitlement surface.
    `netcore_portal_handoff` to the HotSpot virtual server's `authorize`
    section and its `Auth-Type Accept { accept }` block to `authenticate`; add
    `acct_unique` to `preacct` and `netcore_accounting` to `accounting`.
-5. Add a durable `detail` writer and its separate replay listener before
-   acknowledging accounting during a PostgreSQL outage. The exact file path,
-   disk quota, replay process, and alerting belong to the target deployment
-   rather than this portable template.
+5. Use the Kamatera `radius` and `radius-replay` services. The detail writer
+   acknowledges only after writing to `/var/lib/netcore-radius/spool`; the
+   replay listener retries database failures, and the writer stops when its
+   capacity guard reaches the configured ceiling.
 6. Keep CoA source restrictions and router firewall controls enabled beside
    these policies. The example Compose override is opt-in only.
 7. Validate the assembled configuration with `radiusd -XC` in the target
@@ -84,8 +90,8 @@ counter total that cannot fit the signed database representation is refused.
 `Accounting-On` and `Accounting-Off` are stored separately and close sessions
 that existed at the event time.
 
-This is an ingestion policy, not a complete durability claim. Do not consider
-quota enforcement production-ready until the target image has a disk-backed
-detail spool plus replay listener, bounded disk retention, and alerts for spool
-write/replay failure. Without it, a PostgreSQL failure must remain visible and
-unacknowledged so the NAS retries; it must never become a silent dropped packet.
+The ingestion policy plus the Kamatera spool/replay package form the durability
+path; production readiness still requires the documented staging evidence,
+host disk monitoring, router firewall restrictions, and alerts for spool
+capacity or replay failure. Until those are evidenced, a PostgreSQL failure is
+not a live-router acceptance condition.

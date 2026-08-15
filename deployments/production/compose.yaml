@@ -1,0 +1,342 @@
+name: netcore-production
+
+services:
+  caddy:
+    image: caddy:2.8.4-alpine
+    environment:
+      NETCORE_DOMAIN: ${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      ui:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks:
+      netcore:
+        ipv4_address: 172.30.0.2
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ../..
+      dockerfile: deployments/production/Dockerfile.ui
+    environment:
+      # Locked is the safe default. Live mode is allowed only after the local,
+      # one-time MFA administrator ceremony documented in README.md succeeds.
+      NETCORE_UI_MODE: ${NETCORE_UI_MODE:-locked}
+      NETCORE_TENANT_SLUG: ${NETCORE_TENANT_SLUG:-}
+    networks: [netcore]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      NETCORE_ENV: production
+      NETCORE_HTTP_ADDR: ":8080"
+      NETCORE_DB_DSN_FILE: /run/netcore/runtime/db_dsn
+      NETCORE_REDIS_ADDR: redis:6379
+      NETCORE_REDIS_PASSWORD_FILE: /run/netcore/runtime/redis_password
+      NETCORE_ALLOWED_ORIGINS: https://${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}
+      NETCORE_TRUSTED_PROXIES: 172.30.0.2
+      NETCORE_SECRETS_BACKEND: sops
+      NETCORE_SECRETS_REF: /run/netcore/runtime/netcore.json
+      NETCORE_AUTH_REQUIRE_MFA: "true"
+      NETCORE_PAYMENT_GATEWAY: disabled
+    volumes:
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/app:/run/netcore/runtime:ro
+      - postgres_tls:/run/netcore/postgres-tls:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [netcore]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "/api", "-healthcheck"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    entrypoint: ["/worker"]
+    environment:
+      NETCORE_ENV: production
+      NETCORE_SERVICE_NAME: netcore-worker
+      NETCORE_DB_DSN_FILE: /run/netcore/runtime/db_dsn
+      NETCORE_REDIS_ADDR: redis:6379
+      NETCORE_REDIS_PASSWORD_FILE: /run/netcore/runtime/redis_password
+      NETCORE_ALLOWED_ORIGINS: https://${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}
+      NETCORE_TRUSTED_PROXIES: 172.30.0.2
+      NETCORE_SECRETS_BACKEND: sops
+      NETCORE_SECRETS_REF: /run/netcore/runtime/netcore.json
+      NETCORE_AUTH_REQUIRE_MFA: "true"
+      NETCORE_PAYMENT_GATEWAY: disabled
+    volumes:
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/app:/run/netcore/runtime:ro
+      - postgres_tls:/run/netcore/postgres-tls:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [netcore]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  # Creates the bind-mounted spool directory with the exact non-root owner.
+  # It never changes files below that directory, so stale or foreign-owned
+  # accounting records remain visible rather than being silently rewritten.
+  radius-spool-init:
+    build:
+      context: ../..
+      dockerfile: deployments/production/Dockerfile.freeradius
+    profiles: ["radius"]
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        mkdir -p /var/lib/netcore-radius/spool
+        chown 101:101 /var/lib/netcore-radius/spool
+        chmod 0700 /var/lib/netcore-radius/spool
+    volumes:
+      - ${NETCORE_RADIUS_SPOOL_DIR:?set NETCORE_RADIUS_SPOOL_DIR in deployments/production/.env}:/var/lib/netcore-radius/spool
+    user: "0:0"
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 32
+    restart: "no"
+
+  # The writer acknowledges accounting only after a durable detail-file write.
+  # It is intentionally opt-in: start it only after the acceptance procedure
+  # has rendered clients.conf and verified a non-production NAS.
+  radius:
+    build:
+      context: ../..
+      dockerfile: deployments/production/Dockerfile.freeradius
+    profiles: ["radius"]
+    environment:
+      NETCORE_RADIUS_MODE: writer
+      RADIUS_DB_HOST: postgres
+      RADIUS_DB_PORT: "5432"
+      RADIUS_DB_NAME: netcore
+      RADIUS_DB_USER: netcore_radius_login
+      NETCORE_RADIUS_SPOOL_MAX_BYTES: ${NETCORE_RADIUS_SPOOL_MAX_BYTES:-5368709120}
+      NETCORE_RADIUS_SPOOL_MIN_FREE_BYTES: ${NETCORE_RADIUS_SPOOL_MIN_FREE_BYTES:-1073741824}
+      NETCORE_RADIUS_SPOOL_CHECK_INTERVAL_SECONDS: "10"
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    volumes:
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/db_password:/run/netcore/runtime/radius_db_password:ro
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/clients.conf:/run/netcore/runtime/clients.conf:ro
+      - ${NETCORE_RADIUS_SPOOL_DIR:?set NETCORE_RADIUS_SPOOL_DIR in deployments/production/.env}:/var/lib/netcore-radius/spool
+      - postgres_tls:/run/netcore/postgres-tls:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+      - /var/log/radius:rw,noexec,nosuid,size=32m,mode=1777
+      - /var/run/radiusd:rw,noexec,nosuid,size=16m,mode=1777
+    depends_on:
+      postgres:
+        condition: service_healthy
+      radius-spool-init:
+        condition: service_completed_successfully
+    networks: [netcore]
+    user: "101:101"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    restart: unless-stopped
+
+  # The detail listener is separate from the UDP writer so it can drain the
+  # spool while the writer is stopped by the capacity guard.
+  radius-replay:
+    build:
+      context: ../..
+      dockerfile: deployments/production/Dockerfile.freeradius
+    profiles: ["radius"]
+    environment:
+      NETCORE_RADIUS_MODE: replay
+      RADIUS_DB_HOST: postgres
+      RADIUS_DB_PORT: "5432"
+      RADIUS_DB_NAME: netcore
+      RADIUS_DB_USER: netcore_radius_login
+    volumes:
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/db_password:/run/netcore/runtime/radius_db_password:ro
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/clients.conf:/run/netcore/runtime/clients.conf:ro
+      - ${NETCORE_RADIUS_SPOOL_DIR:?set NETCORE_RADIUS_SPOOL_DIR in deployments/production/.env}:/var/lib/netcore-radius/spool
+      - postgres_tls:/run/netcore/postgres-tls:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+      - /var/log/radius:rw,noexec,nosuid,size=32m,mode=1777
+      - /var/run/radiusd:rw,noexec,nosuid,size=16m,mode=1777
+    depends_on:
+      postgres:
+        condition: service_healthy
+      radius-spool-init:
+        condition: service_completed_successfully
+    networks: [netcore]
+    user: "101:101"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    restart: unless-stopped
+
+  # Local-only, maintenance-profile bootstrap. This reaches PostgreSQL using
+  # the protected migration-owner service file, never the normal API login.
+  # It creates exactly one tenant and one fully permissioned MFA administrator.
+  bootstrap:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    profiles: ["maintenance"]
+    entrypoint: ["/bootstrap"]
+    environment:
+      NETCORE_ENV: production
+      NETCORE_SERVICE_NAME: netcore-bootstrap
+      NETCORE_DB_DSN: service=netcore-migration servicefile=/run/netcore/migration/migration_pg_service.conf
+      NETCORE_REDIS_ADDR: redis:6379
+      NETCORE_REDIS_PASSWORD_FILE: /run/netcore/runtime/redis_password
+      NETCORE_ALLOWED_ORIGINS: https://${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}
+      NETCORE_TRUSTED_PROXIES: 172.30.0.2
+      NETCORE_SECRETS_BACKEND: sops
+      NETCORE_SECRETS_REF: /run/netcore/runtime/netcore.json
+      NETCORE_AUTH_REQUIRE_MFA: "true"
+      NETCORE_PAYMENT_GATEWAY: disabled
+    volumes:
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/app:/run/netcore/runtime:ro
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/migration:/run/netcore/migration:ro
+      - postgres_tls:/run/netcore/postgres-tls:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [netcore]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+
+  postgres-tls:
+    build:
+      context: ../..
+      dockerfile: deployments/production/Dockerfile.postgres-tls
+    volumes:
+      - postgres_tls:/tls
+    networks: [netcore]
+    restart: "no"
+
+  postgres:
+    image: postgres:16.9-alpine
+    environment:
+      POSTGRES_USER: netcore_owner
+      POSTGRES_DB: netcore
+      POSTGRES_PASSWORD_FILE: /run/netcore/runtime/postgres_owner_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=trust --encoding=UTF8 --locale=C"
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/netcore/postgres-tls/server.crt
+      - -c
+      - ssl_key_file=/run/netcore/postgres-tls/server.key
+      - -c
+      - ssl_ca_file=/run/netcore/postgres-tls/ca.crt
+      - -c
+      - password_encryption=scram-sha-256
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_tls:/run/netcore/postgres-tls:ro
+      - ./postgres-init/010-create-login-roles.sh:/docker-entrypoint-initdb.d/010-create-login-roles.sh:ro
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/postgres:/run/netcore/runtime:ro
+    depends_on:
+      postgres-tls:
+        condition: service_completed_successfully
+    networks: [netcore]
+    shm_size: 256mb
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netcore_owner -d netcore"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    build:
+      context: ../..
+      dockerfile: deployments/production/Dockerfile.redis
+    volumes:
+      - redis_data:/data
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/app/redis_password:/run/netcore/runtime/redis_password:ro
+    tmpfs:
+      - /run/redis:rw,noexec,nosuid,size=16m,mode=1770
+    networks: [netcore]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$(cat /run/netcore/runtime/redis_password) redis-cli ping | grep -qx PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  migrate:
+    image: postgres:16.9-alpine
+    profiles: ["maintenance"]
+    entrypoint: ["/bin/sh", "/migrations/migrate.sh"]
+    volumes:
+      - ../../db/migrations:/migrations/sql:ro
+      - ./migrations/migrate.sh:/migrations/migrate.sh:ro
+      - ./migrations/bootstrap_roles.sql:/migrations/bootstrap_roles.sql:ro
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/migration:/run/netcore/runtime:ro
+      - postgres_tls:/run/netcore/postgres-tls:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [netcore]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+
+networks:
+  netcore:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+  postgres_tls:
+  redis_data:

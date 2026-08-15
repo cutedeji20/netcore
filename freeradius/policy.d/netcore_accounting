@@ -13,13 +13,15 @@ netcore_accounting {
 		Tmp-String-1 := "%{netcore_sql:SELECT CASE WHEN radius_accounting_ingest('%{NAS-IP-Address}', '%{Acct-Status-Type}', '%{Acct-Session-Id}', '%{Acct-Unique-Session-Id}', '%{Class}', COALESCE(NULLIF(NULLIF('%{Event-Timestamp#}', ''), '0')::bigint, %l), COALESCE(NULLIF('%{Acct-Session-Time#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Input-Octets#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Input-Gigawords#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Output-Octets#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Output-Gigawords#}', '')::bigint, 0), '%{Framed-IP-Address}', '%{Calling-Station-Id}', '%{Acct-Terminate-Cause}') THEN 'ok' ELSE 'reject' END}"
 	}
 
-	# An unknown/disabled NAS, malformed accounting packet, or Class that was
-	# not minted by NetCore must not be acknowledged as a successful ingest.
-	# A database failure deliberately propagates as module failure; production
-	# activation requires the durable detail spool described in the README.
-	if (&control:Tmp-String-1 != "ok") {
+	# A completed ingest reports `ok`. A valid but rejected packet (such as an
+	# unknown/disabled NAS or malformed Class) reports `reject` and is discarded
+	# by the detail listener. An empty expansion is a PostgreSQL/module failure:
+	# return fail so the detail listener keeps the packet and retries later.
+	if (&control:Tmp-String-1 == "ok") {
+		ok
+	} elsif (&control:Tmp-String-1 == "reject") {
 		reject
+	} else {
+		fail
 	}
-
-	ok
 }

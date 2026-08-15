@@ -21,6 +21,17 @@ const modal = document.querySelector("#command-modal");
 const commandInput = document.querySelector("#command-input");
 const commandOptions = document.querySelector("#command-options");
 const toast = document.querySelector("#toast");
+const appShell = document.querySelector("#admin-shell");
+const accessScreen = document.querySelector("#admin-access");
+const logoutButton = document.querySelector("#logout-button");
+const adminConfig = window.NETCORE_ADMIN_CONFIG || {};
+const liveAdapterPaths = [
+  "/live-customers.js", "/live-subscriptions.js", "/live-plans.js", "/live-sessions.js",
+  "/live-billing.js", "/live-network.js", "/live-vouchers.js", "/live-team.js",
+  "/live-security.js", "/live-automations.js", "/live-workspace.js"
+];
+const hasLiveConfig = adminConfig.mode === "live" && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(String(adminConfig.tenant || ""));
+let adminState = { authorised: false, adaptersLoaded: false, identity: null };
 let toastTimer;
 
 const tag = (item) => {
@@ -53,7 +64,28 @@ function standardPage(id) {
   return `${heading(page)}${status}${metrics(page.side)}<section class="split-grid">${table(page)}<aside class="panel"><div class="panel-header"><div><h2>${id === "settings" ? "Environment" : "At a glance"}</h2><p>Representative preview data</p></div></div><ul class="detail-list">${page.side.map(([label, value]) => `<li><span>${label}</span><strong>${value}</strong></li>`).join("")}</ul></aside></section>`;
 }
 
+function accessHeading(title, description) {
+  return `<div class="page-heading"><div><p class="kicker">Secure control dashboard</p><h1>${title}</h1><p class="description">${description}</p></div></div>`;
+}
+
+function dashboard() {
+  return `${accessHeading("Operations overview", "Only verified, authorised data is displayed in this workspace.")}
+    <div class="status"><i></i><strong>Authorised session established</strong><span>Dashboard summaries are awaiting their live data source.</span><span class="updated">Secure session</span></div>
+    ${metrics([["Active customers", "—"], ["Online sessions", "—"], ["Collected today", "—"], ["Needs attention", "—"]])}
+    <section class="dashboard-grid"><article class="panel"><div class="panel-header"><div><h2>Collection trend</h2><p>Verified payment data will appear here when the reporting endpoint is enabled.</p></div></div><p class="description">No representative values are shown in the production control dashboard.</p></article><article class="panel"><div class="panel-header"><div><h2>Activity</h2><p>Recent authorised activity will appear here.</p></div></div><p class="description">No verified activity is available yet.</p></article></section>
+    <section class="bottom-grid"><article class="panel"><div class="panel-header"><div><h2>Network health</h2><p>Live network health endpoint required.</p></div></div><p class="description">Awaiting verified service status.</p></article><article class="panel"><div class="panel-header"><div><h2>Today’s work</h2><p>Live operational queue required.</p></div></div><p class="description">No verified queue is available yet.</p></article><article class="panel"><div class="panel-header"><div><h2>Production controls</h2><p>Server-side permissions remain authoritative.</p></div></div><p class="description">Actions are enabled only as their audited API workflows are delivered.</p></article></section>`;
+}
+
+function standardPage(id) {
+  const page = pages[id];
+  const neutralPage = { ...page, rows: [], side: page.side.map(([label]) => [label, "—"]) };
+  const emptyTable = `<tr><td colspan="${page.cols.length}" class="empty-cell">Loading authorised live data. If this remains empty, your role may not have permission or this endpoint is not yet enabled.</td></tr>`;
+  const liveTable = `<section class="panel table"><div class="toolbar"><input aria-label="Search ${page.title}" placeholder="Search ${page.title.toLowerCase()}" disabled /><button class="button" type="button" disabled>Live records</button></div><table class="data-table"><thead><tr>${page.cols.map((column) => `<th>${column}</th>`).join("")}</tr></thead><tbody>${emptyTable}</tbody></table></section>`;
+  return `${accessHeading(page.title, page.description)}<div class="status"><i></i><strong>Authorised data only</strong><span>This view stays empty until its server-side data source responds.</span><span class="updated">Secure session</span></div>${metrics(neutralPage.side)}<section class="split-grid">${liveTable}<aside class="panel"><div class="panel-header"><div><h2>${id === "settings" ? "Environment" : "At a glance"}</h2><p>Verified values only</p></div></div><ul class="detail-list">${neutralPage.side.map(([label, value]) => `<li><span>${label}</span><strong>${value}</strong></li>`).join("")}</ul></aside></section>`;
+}
+
 function render(id) {
+  if (!adminState.authorised) return;
   const pageId = pages[id] ? id : "overview";
   content.innerHTML = pageId === "overview" ? dashboard() : standardPage(pageId);
   document.title = `${pages[pageId].title} · NetCore`;
@@ -63,9 +95,9 @@ function render(id) {
   window.dispatchEvent(new CustomEvent("netcore:page-rendered", { detail: pageId }));
 }
 function navigate(id) { const target = pages[id] ? id : "overview"; if (location.hash.slice(1) !== target) location.hash = target; else render(target); }
-function showToast(message) { toast.textContent = message; toast.classList.add("visible"); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove("visible"), 2800); }
+function showToast(message) { if (!adminState.authorised) return; toast.textContent = message; toast.classList.add("visible"); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove("visible"), 2800); }
 function fillCommandOptions(filter = "") { const query = filter.trim().toLowerCase(); const choices = Object.entries(pages).filter(([, page]) => page.title.toLowerCase().includes(query) || page.kicker.toLowerCase().includes(query)); commandOptions.innerHTML = choices.map(([id,page]) => `<button class="command-option" type="button" data-page="${id}"><span>${icons[id]}</span><strong>${page.title}</strong><small>${page.kicker}</small></button>`).join("") || `<p class="description">No page matches that search.</p>`; }
-function openCommand() { fillCommandOptions(); modal.hidden = false; commandInput.value = ""; setTimeout(() => commandInput.focus(), 0); }
+function openCommand() { if (!adminState.authorised) return; fillCommandOptions(); modal.hidden = false; commandInput.value = ""; setTimeout(() => commandInput.focus(), 0); }
 function closeCommand() { modal.hidden = true; document.querySelector("#command-button").focus(); }
 function resetCommandOnLoad() { modal.hidden = true; commandInput.value = ""; commandOptions.replaceChildren(); }
 
@@ -82,5 +114,139 @@ modal.addEventListener("click", (event) => { if (event.target === modal) closeCo
 document.addEventListener("keydown", (event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); modal.hidden ? openCommand() : closeCommand(); } if (event.key === "Escape" && !modal.hidden) closeCommand(); });
 window.addEventListener("hashchange", () => render(location.hash.slice(1)));
 window.addEventListener("pageshow", resetCommandOnLoad);
+
+function showAccess(markup) {
+  resetCommandOnLoad();
+  appShell.hidden = true;
+  accessScreen.hidden = false;
+  accessScreen.innerHTML = markup;
+  accessScreen.focus({ preventScroll: true });
+}
+
+function showLocked(reason) {
+  showAccess(`<section class="access-card"><div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div><p class="kicker">NetCore control dashboard</p><h1>Dashboard access is locked</h1><p class="description">${reason}</p><p class="access-note">This public deployment does not render operational or customer data until it is connected to the private, same-origin production API.</p></section>`);
+}
+
+function showLogin(message = "") {
+  showAccess(`<section class="access-card"><div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div><p class="kicker">NetCore control dashboard</p><h1>Sign in to continue</h1><p class="description">Use your authorised operator account and authenticator code. All access is checked again by the API for every request.</p><form id="admin-login-form" class="login-form"><label>Email address<input name="identifier" type="email" autocomplete="username" required /></label><label>Password<input name="password" type="password" autocomplete="current-password" required /></label><label>Authenticator code<input name="mfa_code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label><p class="login-error" role="alert">${message}</p><button class="button primary" type="submit">Sign in securely</button></form></section>`);
+  const form = document.querySelector("#admin-login-form");
+  form.addEventListener("submit", submitLogin);
+}
+
+async function submitLogin(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = form.querySelector("button[type=submit]");
+  const identifier = form.elements.identifier.value.trim();
+  let password = form.elements.password.value;
+	const mfaCode = form.elements.mfa_code.value.trim();
+  submit.disabled = true;
+  try {
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ tenant: adminConfig.tenant, identifier, password, mfa_code: mfaCode })
+    });
+    password = "";
+    if (!response.ok) {
+      showLogin(response.status === 401 ? "The sign-in details were not accepted." : "Sign-in is temporarily unavailable. Please try again later.");
+      return;
+    }
+    await establishSession();
+  } catch (_) {
+    showLogin("Sign-in is temporarily unavailable. Please try again later.");
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+function updateIdentity(identity) {
+  const name = identity && identity.email ? identity.email : "Authorised operator";
+  document.querySelectorAll("[data-identity-name]").forEach((element) => { element.textContent = name; });
+  document.querySelectorAll("[data-workspace-name]").forEach((element) => { element.textContent = adminConfig.tenant; });
+}
+
+function loadAdapter(path) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = path;
+    script.async = false;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error(`Could not load ${path}`));
+    document.head.appendChild(script);
+  });
+}
+
+async function loadLiveAdapters() {
+  if (adminState.adaptersLoaded) return;
+  // The production dashboard only talks to its own origin. Caddy proxies
+  // /api and /auth to the private API service; no cross-origin admin session
+  // or browser-provided API target is allowed.
+  window.NETCORE_API_URL = window.location.origin;
+  await Promise.all(liveAdapterPaths.map(loadAdapter));
+  adminState.adaptersLoaded = true;
+}
+
+async function establishSession() {
+  let response;
+  try {
+    response = await fetch("/api/v1/me", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json" } });
+  } catch (_) {
+    showLocked("The secure API is not reachable from this dashboard origin.");
+    return;
+  }
+  if (response.status === 401) {
+    showLogin();
+    return;
+  }
+  if (!response.ok) {
+    showLocked("The secure API did not accept this dashboard connection.");
+    return;
+  }
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (_) {
+    showLocked("The secure API returned an invalid session response.");
+    return;
+  }
+  if (!payload || !payload.user || !Array.isArray(payload.user.permissions)) {
+    showLocked("The secure API did not return an authorised operator session.");
+    return;
+  }
+  try {
+    await loadLiveAdapters();
+  } catch (_) {
+    showLocked("The dashboard assets could not be loaded safely. Try again after the deployment is complete.");
+    return;
+  }
+  adminState = { authorised: true, adaptersLoaded: true, identity: payload.user };
+  updateIdentity(payload.user);
+  accessScreen.hidden = true;
+  appShell.hidden = false;
+  resetCommandOnLoad();
+  render(location.hash.slice(1) || "overview");
+}
+
+async function logout() {
+  try {
+    const response = await fetch("/auth/logout", { method: "POST", credentials: "same-origin", cache: "no-store" });
+    if (!response.ok) throw new Error("logout rejected");
+    // Reloading discards every in-memory adapter cache before another operator
+    // can sign in on this shared device.
+    window.location.replace("/");
+  } catch (_) {
+    adminState = { authorised: false, adaptersLoaded: false, identity: null };
+    showLocked("The session could not be closed safely. Check your connection and close this browser window.");
+  }
+}
+
+logoutButton.addEventListener("click", logout);
 resetCommandOnLoad();
-render(location.hash.slice(1) || "overview");
+if (!hasLiveConfig) {
+  showLocked("This environment has not been configured for secure production access.");
+} else {
+  establishSession();
+}

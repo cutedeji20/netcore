@@ -176,6 +176,7 @@ func New(cfg config.Redis) *Redis {
 		addr: cfg.Addr,
 		client: redis.NewClient(&redis.Options{
 			Addr:         cfg.Addr,
+			Password:     cfg.Password,
 			DialTimeout:  cfg.Timeout,
 			ReadTimeout:  cfg.Timeout,
 			WriteTimeout: cfg.Timeout,

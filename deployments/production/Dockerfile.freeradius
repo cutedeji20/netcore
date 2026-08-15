@@ -1,0 +1,38 @@
+# Pinned FreeRADIUS 3.2 release. 3.2.10 contains an upstream detail-listener
+# reader fix; do not substitute a floating image tag without re-running the
+# configuration and outage acceptance tests.
+FROM freeradius/freeradius-server:3.2.10-alpine
+
+USER root
+# The compact upstream Alpine image intentionally omits optional runtime
+# libraries. rlm_sql_postgresql requires libpq for the encrypted PostgreSQL
+# connection used by NetCore's narrow RADIUS login.
+RUN apk add --no-cache libpq \
+	&& mkdir -p /opt/netcore-radius/writer /opt/netcore-radius/replay \
+	&& cp -a /etc/raddb/. /opt/netcore-radius/writer/ \
+	&& cp -a /etc/raddb/. /opt/netcore-radius/replay/ \
+	&& rm -f /opt/netcore-radius/writer/sites-enabled/* /opt/netcore-radius/replay/sites-enabled/* \
+	&& rm -f /opt/netcore-radius/writer/mods-enabled/sql /opt/netcore-radius/replay/mods-enabled/sql \
+	&& rm -f /opt/netcore-radius/writer/clients.conf /opt/netcore-radius/replay/clients.conf \
+	&& ln -s /run/netcore/runtime/clients.conf /opt/netcore-radius/writer/clients.conf \
+	&& ln -s /run/netcore/runtime/clients.conf /opt/netcore-radius/replay/clients.conf \
+	&& mkdir -p /var/lib/netcore-radius/spool
+
+COPY freeradius/mods-enabled/netcore_sql /opt/netcore-radius/writer/mods-enabled/netcore_sql
+COPY freeradius/mods-enabled/netcore_sql /opt/netcore-radius/replay/mods-enabled/netcore_sql
+COPY freeradius/mods-enabled/netcore_accounting_spool /opt/netcore-radius/writer/mods-enabled/netcore_accounting_spool
+COPY freeradius/policy.d/netcore_portal /opt/netcore-radius/writer/policy.d/netcore_portal
+COPY freeradius/policy.d/netcore_accounting /opt/netcore-radius/writer/policy.d/netcore_accounting
+COPY freeradius/policy.d/netcore_accounting /opt/netcore-radius/replay/policy.d/netcore_accounting
+COPY freeradius/sites-enabled/netcore-hotspot /opt/netcore-radius/writer/sites-enabled/netcore-hotspot
+COPY freeradius/sites-enabled/netcore-accounting-replay /opt/netcore-radius/replay/sites-enabled/netcore-accounting-replay
+COPY deployments/production/radius-entrypoint.sh /usr/local/bin/netcore-radius-entrypoint
+COPY deployments/production/radius-spool-guard.sh /usr/local/bin/netcore-radius-spool-guard
+
+RUN chmod 0555 /usr/local/bin/netcore-radius-entrypoint /usr/local/bin/netcore-radius-spool-guard \
+	&& chown -R 101:101 /opt/netcore-radius /var/lib/netcore-radius
+
+# The upstream image maintains this stable freerad UID/GID. Host-mounted
+# runtime secrets and the spool directory must be readable/writable by 101.
+USER 101:101
+ENTRYPOINT ["/usr/local/bin/netcore-radius-entrypoint"]

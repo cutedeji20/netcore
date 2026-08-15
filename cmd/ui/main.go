@@ -1,16 +1,18 @@
-// Command ui serves the NetCore product preview.
+// Command ui serves the NetCore control dashboard.
 //
-// It intentionally uses representative data and no database connection so
-// teams can review the full interface before each business API is connected.
+// It is deliberately locked until a same-origin production API is available;
+// it never uses the sample-data fallback as an access-control mechanism.
 package main
 
 import (
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -31,12 +33,24 @@ func main() {
 }
 
 func newHandler() (http.Handler, error) {
+	adminConfig, err := loadAdminConfig(os.Getenv)
+	if err != nil {
+		return nil, err
+	}
 	content, err := fs.Sub(assets, "assets")
 	if err != nil {
 		return nil, fmt.Errorf("load UI assets: %w", err)
 	}
 	files := http.FileServer(http.FS(content))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:")
+		if r.URL.Path == "/admin-config.js" {
+			serveAdminConfig(w, adminConfig)
+			return
+		}
 		// The UI uses stable asset names. Revalidate the HTML, styles and scripts
 		// on every visit so a browser cannot combine a fresh deployment with an
 		// older command-palette script from its cache.
@@ -53,4 +67,50 @@ func newHandler() (http.Handler, error) {
 		}
 		files.ServeHTTP(w, r)
 	}), nil
+}
+
+// adminConfig is deliberately public configuration. It contains no credential
+// or API address because the dashboard is only allowed to use its own origin.
+// The reverse proxy provides that origin and routes /api and /auth privately.
+type adminConfig struct {
+	Mode   string `json:"mode"`
+	Tenant string `json:"tenant"`
+}
+
+func loadAdminConfig(getenv func(string) string) (adminConfig, error) {
+	mode := strings.ToLower(strings.TrimSpace(getenv("NETCORE_UI_MODE")))
+	if mode == "" || mode == "locked" {
+		return adminConfig{Mode: "locked"}, nil
+	}
+	if mode != "live" {
+		return adminConfig{}, fmt.Errorf("NETCORE_UI_MODE must be locked or live")
+	}
+	tenant := strings.ToLower(strings.TrimSpace(getenv("NETCORE_TENANT_SLUG")))
+	if !validTenantSlug(tenant) {
+		return adminConfig{}, fmt.Errorf("NETCORE_TENANT_SLUG must be a lowercase tenant slug when NETCORE_UI_MODE=live")
+	}
+	return adminConfig{Mode: "live", Tenant: tenant}, nil
+}
+
+func validTenantSlug(value string) bool {
+	if len(value) == 0 || len(value) > 63 || value[0] == '-' || value[len(value)-1] == '-' {
+		return false
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func serveAdminConfig(w http.ResponseWriter, config adminConfig) {
+	payload, err := json.Marshal(config)
+	if err != nil {
+		http.Error(w, "admin configuration unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	_, _ = fmt.Fprintf(w, "window.NETCORE_ADMIN_CONFIG = Object.freeze(%s);\n", payload)
 }

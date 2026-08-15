@@ -25,7 +25,7 @@ func newTestHTTP(t *testing.T) (*HTTP, *memoryStore, *testLimiter) {
 	t.Helper()
 	service, store := newTestService(t)
 	limiter := &testLimiter{allowed: true}
-	h, err := NewHTTP(service, limiter, false, []string{"https://portal.example.test"})
+	h, err := NewHTTP(service, limiter, false, []string{"https://portal.example.test"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +50,65 @@ func TestLoginSuccessSetsHTTPOnlySessionCookie(t *testing.T) {
 	}
 	if len(limiter.keys) != 2 || strings.Contains(limiter.keys[0], "admin@example.com") {
 		t.Fatalf("rate limit keys leaked raw account data: %v", limiter.keys)
+	}
+}
+
+func TestLoginForwardsMFACodeBeforeSettingSessionCookie(t *testing.T) {
+	service, _ := newTestService(t)
+	verifier := &testMFAVerifier{}
+	if err := service.RequireMFA(verifier); err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewHTTP(service, &testLimiter{allowed: true}, false, []string{"https://portal.example.test"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	request := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"tenant":"example","identifier":"admin@example.com","password":"correct password","mfa_code":"123456"}`))
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || verifier.calls != 1 || verifier.code != "123456" {
+		t.Fatalf("status=%d verifier_calls=%d code=%q body=%s", response.Code, verifier.calls, verifier.code, response.Body.String())
+	}
+}
+
+func TestLoginInvalidMFAIsIndistinguishableAtHTTPBoundary(t *testing.T) {
+	service, _ := newTestService(t)
+	if err := service.RequireMFA(&testMFAVerifier{err: ErrInvalidMFA}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewHTTP(service, &testLimiter{allowed: true}, false, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	request := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"tenant":"example","identifier":"admin@example.com","password":"correct password","mfa_code":"000000"}`))
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), "INVALID_CREDENTIALS") {
+		t.Fatalf("invalid MFA response status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestClientIPTrustsForwardedAddressOnlyFromConfiguredProxy(t *testing.T) {
+	service, _ := newTestService(t)
+	h, err := NewHTTP(service, &testLimiter{allowed: true}, false, nil, []string{"172.30.0.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxied := httptest.NewRequest(http.MethodGet, "/", nil)
+	proxied.RemoteAddr = "172.30.0.2:8080"
+	proxied.Header.Set("X-Forwarded-For", "198.51.100.42")
+	if got := h.clientIP(proxied); got != "198.51.100.42" {
+		t.Fatalf("trusted proxy client IP = %q", got)
+	}
+	direct := httptest.NewRequest(http.MethodGet, "/", nil)
+	direct.RemoteAddr = "203.0.113.8:8080"
+	direct.Header.Set("X-Forwarded-For", "198.51.100.42")
+	if got := h.clientIP(direct); got != "203.0.113.8" {
+		t.Fatalf("direct client spoofed X-Forwarded-For: %q", got)
 	}
 }
 

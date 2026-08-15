@@ -8,7 +8,8 @@ COPY go.mod ./
 COPY . .
 # CGO off + trimpath so the binary is static and reproducible.
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/bootstrap ./cmd/bootstrap
 
 FROM scratch
 # tzdata is required: §21A.7 computes quota reset boundaries in the tenant's
@@ -18,6 +19,7 @@ COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build /out/api /api
 COPY --from=build /out/worker /worker
+COPY --from=build /out/bootstrap /bootstrap
 
 # §72: non-root. scratch has no /etc/passwd, so use a numeric UID.
 USER 65532:65532
