@@ -20,13 +20,18 @@ SQL
 
 for migration in /migrations/sql/*.up.sql; do
   version=$(basename "$migration" | sed 's/_.*//')
-  applied=$(psql -X -At --set=ON_ERROR_STOP=1 --set="version=$version" -c "SELECT EXISTS (SELECT 1 FROM netcore_schema_migrations WHERE version = :'version')")
+  applied=$(psql -X -At --set=ON_ERROR_STOP=1 --set="version=$version" <<'SQL'
+SELECT EXISTS (SELECT 1 FROM netcore_schema_migrations WHERE version = :'version');
+SQL
+)
   if [ "$applied" = "t" ]; then
     continue
   fi
   echo "applying $migration"
   psql -X --set=ON_ERROR_STOP=1 -f "$migration"
-  psql -X --set=ON_ERROR_STOP=1 --set="version=$version" -c "INSERT INTO netcore_schema_migrations (version) VALUES (:'version')"
+  psql -X --set=ON_ERROR_STOP=1 --set="version=$version" <<'SQL'
+INSERT INTO netcore_schema_migrations (version) VALUES (:'version');
+SQL
 done
 
 # Login roles are created only on a fresh PostgreSQL volume. Grant their

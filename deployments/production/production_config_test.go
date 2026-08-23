@@ -57,6 +57,18 @@ func TestRedisWritesItsConfigurationBeforeDroppingDirectoryAccess(t *testing.T) 
 	}
 }
 
+func TestMigrationRunnerUsesPsqlInputForVersionVariables(t *testing.T) {
+	migrationRunner, err := os.ReadFile("migrations/migrate.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrationText := string(migrationRunner)
+
+	requireContains(t, migrationText, "SELECT EXISTS (SELECT 1 FROM netcore_schema_migrations WHERE version = :'version');")
+	requireContains(t, migrationText, "INSERT INTO netcore_schema_migrations (version) VALUES (:'version');")
+	requireNotContains(t, migrationText, "--set=\"version=$version\" -c")
+}
+
 func TestProductionPostgresUsesSeparateBootstrapSuperuser(t *testing.T) {
 	compose, err := os.ReadFile("compose.yaml")
 	if err != nil {
