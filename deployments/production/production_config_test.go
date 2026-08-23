@@ -40,6 +40,23 @@ func TestProductionRedisHasDedicatedStartupSecret(t *testing.T) {
 	requireContains(t, string(redisDockerfile), "USER root")
 }
 
+func TestRedisWritesItsConfigurationBeforeDroppingDirectoryAccess(t *testing.T) {
+	entrypoint, err := os.ReadFile("redis-entrypoint.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entrypointText := string(entrypoint)
+
+	writeConfig := strings.Index(entrypointText, "cat > /run/redis/netcore.conf")
+	chownRuntime := strings.Index(entrypointText, "chown redis:redis")
+	if writeConfig == -1 || chownRuntime == -1 {
+		t.Fatal("redis entrypoint is missing its configuration write or ownership handoff")
+	}
+	if writeConfig > chownRuntime {
+		t.Fatal("redis must write its configuration before handing the runtime directory to the redis account")
+	}
+}
+
 func TestProductionPostgresUsesSeparateBootstrapSuperuser(t *testing.T) {
 	compose, err := os.ReadFile("compose.yaml")
 	if err != nil {

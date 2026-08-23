@@ -17,12 +17,15 @@ esac
 
 umask 077
 mkdir -p /run/redis
-chown redis:redis /data /run/redis
 cat > /run/redis/netcore.conf <<EOF
 appendonly yes
 save 60 1
 requirepass $password
 EOF
-chown redis:redis /run/redis/netcore.conf
+
+# The container starts with only CHOWN/SETUID/SETGID. Write the root-owned
+# configuration before handing its parent directory to the unprivileged Redis
+# account, otherwise this process cannot traverse it to finish setup.
+chown redis:redis /data /run/redis/netcore.conf /run/redis
 
 exec su -s /bin/sh redis -c 'exec redis-server /run/redis/netcore.conf'
