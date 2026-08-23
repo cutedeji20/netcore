@@ -69,6 +69,19 @@ func TestMigrationRunnerUsesPsqlInputForVersionVariables(t *testing.T) {
 	requireNotContains(t, migrationText, "--set=\"version=$version\" -c")
 }
 
+func TestMigrationRoleGrantsDoNotRequireSuperuser(t *testing.T) {
+	roleGrants, err := os.ReadFile("migrations/bootstrap_roles.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roleGrantsText := string(roleGrants)
+
+	requireContains(t, roleGrantsText, "GRANT netcore_app_rw TO netcore_api;")
+	requireContains(t, roleGrantsText, "GRANT netcore_radius TO netcore_radius_login;")
+	requireNotContains(t, roleGrantsText, "ALTER ROLE netcore_api NOSUPERUSER")
+	requireNotContains(t, roleGrantsText, "ALTER ROLE netcore_radius_login NOSUPERUSER")
+}
+
 func TestProductionPostgresUsesSeparateBootstrapSuperuser(t *testing.T) {
 	compose, err := os.ReadFile("compose.yaml")
 	if err != nil {
