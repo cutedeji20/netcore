@@ -338,6 +338,9 @@ networks:
     ipam:
       config:
         - subnet: 172.30.0.0/24
+          # Keep .2 reserved for Caddy. Service containers receive addresses
+          # only from this non-overlapping dynamic range.
+          ip_range: 172.30.0.128/25
 
 volumes:
   caddy_data:

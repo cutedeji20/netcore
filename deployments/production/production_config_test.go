@@ -82,6 +82,18 @@ func TestMigrationRoleGrantsDoNotRequireSuperuser(t *testing.T) {
 	requireNotContains(t, roleGrantsText, "ALTER ROLE netcore_radius_login NOSUPERUSER")
 }
 
+func TestCaddyTrustedProxyAddressIsOutsideTheDynamicPool(t *testing.T) {
+	compose, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	composeText := string(compose)
+
+	requireContains(t, composeText, "NETCORE_TRUSTED_PROXIES: 172.30.0.2")
+	requireContains(t, composeText, "ipv4_address: 172.30.0.2")
+	requireContains(t, composeText, "ip_range: 172.30.0.128/25")
+}
+
 func TestProductionPostgresUsesSeparateBootstrapSuperuser(t *testing.T) {
 	compose, err := os.ReadFile("compose.yaml")
 	if err != nil {
