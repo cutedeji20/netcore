@@ -255,9 +255,11 @@ services:
   postgres:
     image: postgres:16.9-alpine
     environment:
-      POSTGRES_USER: netcore_owner
+      # This is the only PostgreSQL superuser. It is used during first-volume
+      # initialization and is never mounted into application containers.
+      POSTGRES_USER: netcore_bootstrap
       POSTGRES_DB: netcore
-      POSTGRES_PASSWORD_FILE: /run/netcore/runtime/postgres_owner_password
+      POSTGRES_PASSWORD_FILE: /run/netcore/runtime/postgres_bootstrap_password
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=trust --encoding=UTF8 --locale=C"
     command:
       - postgres
@@ -295,12 +297,15 @@ services:
       dockerfile: deployments/production/Dockerfile.redis
     volumes:
       - redis_data:/data
-      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/app/redis_password:/run/netcore/runtime/redis_password:ro
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/redis/redis_password:/run/netcore/runtime/redis_password:ro
     tmpfs:
       - /run/redis:rw,noexec,nosuid,size=16m,mode=1770
     networks: [netcore]
     read_only: true
     cap_drop: ["ALL"]
+    # The entrypoint starts as root only to prepare the named volume and then
+    # drops to the bundled redis account before launching Redis.
+    cap_add: ["CHOWN", "SETGID", "SETUID"]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
       test: ["CMD-SHELL", "REDISCLI_AUTH=$$(cat /run/netcore/runtime/redis_password) redis-cli ping | grep -qx PONG"]

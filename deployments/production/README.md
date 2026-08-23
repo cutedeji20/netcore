@@ -39,11 +39,13 @@ each mounted directory:
 ${NETCORE_RUNTIME_DIR}/
   app/
     db_dsn
-    redis_password
     netcore.json
     bootstrap_admin_password     # temporary; only for first bootstrap
     bootstrap_totp_code          # temporary; only for first bootstrap
+  redis/
+    redis_password
   postgres/
+    postgres_bootstrap_password
     postgres_owner_password
     postgres_api_password
     postgres_radius_password
@@ -56,7 +58,7 @@ ${NETCORE_RUNTIME_DIR}/
 
 `app/db_dsn` must use the `netcore_api` login and certificate verification,
 for example with `sslmode=verify-full` and
-`sslrootcert=/run/netcore/postgres-tls/ca.crt`. `app/redis_password` must be a
+`sslrootcert=/run/netcore/postgres-tls/ca.crt`. `redis/redis_password` must be a
 non-empty base64url value. `migration_pg_service.conf` is a libpq service file
 for the `netcore_owner` account and also names that CA path; it is a secret
 because it contains the owner password. `netcore.json` is the SOPS-decrypted
@@ -75,10 +77,10 @@ not put the secret in Compose, `.env`, a shell command, a ticket, or a database
 row. The two `bootstrap_*` files are short-lived local inputs, not permanent
 runtime secrets.
 
-The PostgreSQL init script creates non-superuser `netcore_api` and
-`netcore_radius_login` login roles from their separate password files, then
-demotes the initial cluster owner from superuser to the protected migration
-owner. The migration job later grants the login roles only the existing
+The PostgreSQL init script uses the bootstrap-only `netcore_bootstrap` superuser
+to create the protected, non-superuser `netcore_owner` migration owner plus the
+low-privilege `netcore_api` and `netcore_radius_login` login roles from their
+separate password files. The migration job later grants the login roles only the existing
 `netcore_app_rw` and `netcore_radius` capability roles. The migration owner
 has `BYPASSRLS` solely because it owns the narrow `SECURITY DEFINER` database
 functions; its connection service file must never be mounted into application

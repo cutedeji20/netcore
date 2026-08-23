@@ -2,7 +2,7 @@
 set -eu
 
 runtime_dir=/run/netcore/runtime
-for secret in postgres_api_password postgres_radius_password; do
+for secret in postgres_owner_password postgres_api_password postgres_radius_password; do
   if [ ! -r "$runtime_dir/$secret" ]; then
     echo "netcore postgres init: missing readable $secret" >&2
     exit 1
@@ -23,8 +23,16 @@ esac
 # psql reads the values from the mounted files itself. They therefore never
 # become Docker environment variables or command-line arguments.
 psql --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'
+\set owner_password `cat /run/netcore/runtime/postgres_owner_password`
 \set api_password `cat /run/netcore/runtime/postgres_api_password`
 \set radius_password `cat /run/netcore/runtime/postgres_radius_password`
+
+SELECT format('CREATE ROLE netcore_owner LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOREPLICATION BYPASSRLS PASSWORD %L', :'owner_password')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'netcore_owner')
+\gexec
+
+ALTER DATABASE netcore OWNER TO netcore_owner;
+ALTER SCHEMA public OWNER TO netcore_owner;
 
 SELECT format('CREATE ROLE netcore_api LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'api_password')
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'netcore_api')
@@ -35,9 +43,4 @@ SELECT format('CREATE ROLE netcore_radius_login LOGIN NOSUPERUSER NOCREATEDB NOC
 \gexec
 
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-
--- The initial PostgreSQL user is a superuser only long enough to initialise
--- the cluster. It becomes the protected migration/function-owner role before
--- any schema migration creates SECURITY DEFINER functions.
-ALTER ROLE netcore_owner NOSUPERUSER NOCREATEDB CREATEROLE NOREPLICATION BYPASSRLS;
 SQL
