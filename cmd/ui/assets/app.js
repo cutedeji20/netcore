@@ -28,7 +28,7 @@ const adminConfig = window.NETCORE_ADMIN_CONFIG || {};
 const liveAdapterPaths = [
   "/live-customers.js", "/live-subscriptions.js", "/live-plans.js", "/live-sessions.js",
   "/live-billing.js", "/live-network.js", "/live-vouchers.js", "/live-team.js",
-  "/live-security.js", "/live-automations.js", "/live-workspace.js"
+  "/live-security.js", "/live-automations.js", "/live-workspace.js", "/live-payment-readiness.js"
 ];
 const hasLiveConfig = adminConfig.mode === "live" && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(String(adminConfig.tenant || ""));
 let adminState = { authorised: false, adaptersLoaded: false, identity: null };
@@ -217,8 +217,10 @@ async function establishSession() {
     return;
   }
   try {
+	window.NETCORE_PRINCIPAL = payload.user;
     await loadLiveAdapters();
   } catch (_) {
+	window.NETCORE_PRINCIPAL = null;
     showLocked("The dashboard assets could not be loaded safely. Try again after the deployment is complete.");
     return;
   }
@@ -238,6 +240,7 @@ async function logout() {
     // can sign in on this shared device.
     window.location.replace("/");
   } catch (_) {
+	window.NETCORE_PRINCIPAL = null;
     adminState = { authorised: false, adaptersLoaded: false, identity: null };
     showLocked("The session could not be closed safely. Check your connection and close this browser window.");
   }

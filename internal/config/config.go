@@ -11,7 +11,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -42,6 +44,8 @@ type Config struct {
 	Quota    Quota
 	Limits   Limits
 	Secrets  Secrets
+	Email    Email
+	Portal   Portal
 	Payments Payments
 }
 
@@ -112,12 +116,28 @@ type Secrets struct {
 	Ref string
 }
 
+// Email selects a transactional notifier without placing a provider key in
+// process configuration. The logical key reference resolves only from the
+// configured deployment secret store.
+type Email struct {
+	Provider        string
+	ResendAPIKeyRef string
+	From            string
+}
+
+// Portal binds public customer routes to one tenant selected by deployment
+// configuration. A request must never provide its own tenant selector.
+type Portal struct {
+	TenantSlug string
+}
+
 // Payments selects a provider without putting a provider credential in
 // process configuration. SecretRef is a logical key inside the configured
 // SecretStore document; it is never a secret value.
 type Payments struct {
 	Gateway             string
 	PaystackSecretRef   string
+	PaystackCallbackURL string
 	WebhookPollInterval time.Duration
 	WebhookMaxAttempts  int
 }
@@ -197,9 +217,18 @@ func Load(getenv func(string) string) (*Config, error) {
 			Backend: strDefault(getenv("NETCORE_SECRETS_BACKEND"), "sops"),
 			Ref:     getenv("NETCORE_SECRETS_REF"),
 		},
+		Email: Email{
+			Provider:        strDefault(getenv("NETCORE_EMAIL_PROVIDER"), "disabled"),
+			ResendAPIKeyRef: getenv("NETCORE_RESEND_API_KEY_REF"),
+			From:            getenv("NETCORE_EMAIL_FROM"),
+		},
+		Portal: Portal{
+			TenantSlug: getenv("NETCORE_PORTAL_TENANT_SLUG"),
+		},
 		Payments: Payments{
 			Gateway:             strDefault(getenv("NETCORE_PAYMENT_GATEWAY"), "disabled"),
 			PaystackSecretRef:   getenv("NETCORE_PAYSTACK_SECRET_REF"),
+			PaystackCallbackURL: getenv("NETCORE_PAYSTACK_CALLBACK_URL"),
 			WebhookPollInterval: durDefault(getenv("NETCORE_WEBHOOK_POLL_INTERVAL"), time.Second),
 			WebhookMaxAttempts:  intDefault(getenv("NETCORE_WEBHOOK_MAX_ATTEMPTS"), 8),
 		},
@@ -316,11 +345,37 @@ func (c *Config) Validate() error {
 		if !validSecretReference(c.Payments.PaystackSecretRef) {
 			p = append(p, "NETCORE_PAYSTACK_SECRET_REF must be a logical secret reference when NETCORE_PAYMENT_GATEWAY=paystack")
 		}
+		if !validHTTPSURL(c.Payments.PaystackCallbackURL) {
+			p = append(p, "NETCORE_PAYSTACK_CALLBACK_URL must be a valid HTTPS URL when NETCORE_PAYMENT_GATEWAY=paystack")
+		} else if !callbackOriginAllowed(c.Payments.PaystackCallbackURL, c.Security.AllowedOrigins) {
+			p = append(p, "NETCORE_PAYSTACK_CALLBACK_URL must use an origin listed in NETCORE_ALLOWED_ORIGINS")
+		}
 		if c.Secrets.Ref == "" {
 			p = append(p, "NETCORE_SECRETS_REF is required when NETCORE_PAYMENT_GATEWAY=paystack")
 		}
 	default:
 		p = append(p, fmt.Sprintf("NETCORE_PAYMENT_GATEWAY %q must be disabled or paystack", c.Payments.Gateway))
+	}
+	switch c.Email.Provider {
+	case "disabled":
+	case "resend":
+		if !validSecretReference(c.Email.ResendAPIKeyRef) {
+			p = append(p, "NETCORE_RESEND_API_KEY_REF must be a logical secret reference when NETCORE_EMAIL_PROVIDER=resend")
+		}
+		if _, err := mail.ParseAddress(strings.TrimSpace(c.Email.From)); err != nil {
+			p = append(p, "NETCORE_EMAIL_FROM must be a valid sender when NETCORE_EMAIL_PROVIDER=resend")
+		}
+		if c.Secrets.Ref == "" {
+			p = append(p, "NETCORE_SECRETS_REF is required when NETCORE_EMAIL_PROVIDER=resend")
+		}
+		if !validPortalTenantSlug(c.Portal.TenantSlug) {
+			p = append(p, "NETCORE_PORTAL_TENANT_SLUG must be a lowercase tenant slug when NETCORE_EMAIL_PROVIDER=resend")
+		}
+	default:
+		p = append(p, fmt.Sprintf("NETCORE_EMAIL_PROVIDER %q must be disabled or resend", c.Email.Provider))
+	}
+	if c.Portal.TenantSlug != "" && !validPortalTenantSlug(c.Portal.TenantSlug) {
+		p = append(p, "NETCORE_PORTAL_TENANT_SLUG must be a lowercase tenant slug when configured")
 	}
 
 	// ------------------------------------------------------------------
@@ -393,6 +448,25 @@ func validTrustedProxy(value string) bool {
 	}
 	prefix, err := netip.ParsePrefix(value)
 	return err == nil && !prefix.Addr().IsUnspecified()
+}
+
+func validHTTPSURL(value string) bool {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(value))
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
+}
+
+func callbackOriginAllowed(value string, allowedOrigins []string) bool {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	origin := parsed.Scheme + "://" + parsed.Host
+	for _, allowed := range allowedOrigins {
+		if allowed == origin {
+			return true
+		}
+	}
+	return false
 }
 
 // ErrMissing is returned by MustLoad's caller path when configuration cannot
@@ -482,6 +556,20 @@ func validSecretReference(value string) bool {
 	for _, char := range value {
 		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
 			(char >= '0' && char <= '9') || char == '.' || char == '_' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validPortalTenantSlug(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 3 || len(value) > 63 || value[0] == '-' || value[len(value)-1] == '-' {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '-' {
 			continue
 		}
 		return false

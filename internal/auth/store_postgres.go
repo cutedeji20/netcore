@@ -35,12 +35,30 @@ func (s *PostgresStore) ResolveTenant(ctx context.Context, slug string) (string,
 func (s *PostgresStore) FindUser(ctx context.Context, tenantID, identifier string) (user User, found bool, err error) {
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
-SELECT id::text, tenant_id::text, COALESCE(email::text, ''), password_hash, status
-  FROM users
- WHERE tenant_id = $1
-   AND (email = $2 OR phone = $2)
+SELECT u.id::text,
+       u.tenant_id::text,
+       COALESCE(u.email::text, ''),
+       u.password_hash,
+       u.status,
+       u.email_verified_at IS NOT NULL,
+       EXISTS (
+           SELECT 1
+             FROM user_roles AS ur
+             JOIN roles AS r
+               ON r.id = ur.role_id
+              AND r.tenant_id = u.tenant_id
+             JOIN role_permissions AS rp
+               ON rp.role_id = r.id
+             JOIN permissions AS p
+               ON p.id = rp.permission_id
+            WHERE ur.user_id = u.id
+              AND p.name = 'auth.mfa_required'
+       )
+  FROM users AS u
+ WHERE u.tenant_id = $1
+   AND (u.email = $2 OR u.phone = $2)
  LIMIT 1`, tenantID, identifier).Scan(
-			&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Status,
+			&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Status, &user.EmailVerified, &user.RequiresMFA,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -151,6 +169,121 @@ UPDATE users
 		}
 		if command.RowsAffected() != 1 {
 			return fmt.Errorf("update password hash: user not found")
+		}
+		return nil
+	})
+}
+
+// PrepareEmailRegistration creates an unverified customer identity or lets its
+// owner restart registration with a new password. A verified account is never
+// altered by this public path, so it cannot become an account-takeover route.
+func (s *PostgresStore) PrepareEmailRegistration(ctx context.Context, tenantID, email, passwordHash string) error {
+	if tenantID == "" || email == "" || passwordHash == "" {
+		return ErrInvalidAccountInput
+	}
+	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO users (tenant_id, email, password_hash, password_params, status)
+VALUES ($1, $2, $3, '{}'::jsonb, 'ACTIVE')
+ON CONFLICT (tenant_id, email) WHERE email IS NOT NULL
+DO UPDATE SET password_hash = EXCLUDED.password_hash,
+              password_params = '{}'::jsonb,
+              updated_at = now()
+      WHERE users.email_verified_at IS NULL`, tenantID, email, passwordHash); err != nil {
+			return fmt.Errorf("prepare e-mail registration: %w", err)
+		}
+		return nil
+	})
+}
+
+// VerifyEmailAndEnsureCustomer promotes a code-proven user to a customer in
+// one tenant transaction. Customer linking is idempotent and the unique index
+// introduced with this workflow prevents duplicate profiles during retries.
+func (s *PostgresStore) VerifyEmailAndEnsureCustomer(ctx context.Context, tenantID, email string) error {
+	if tenantID == "" || email == "" {
+		return ErrInvalidAccountInput
+	}
+	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var userID string
+		transitioned := false
+		err := tx.QueryRow(ctx, `
+UPDATE users
+   SET email_verified_at = now(), updated_at = now()
+ WHERE tenant_id = $1
+   AND email = $2
+   AND email_verified_at IS NULL
+RETURNING id::text`, tenantID, email).Scan(&userID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = tx.QueryRow(ctx, `
+SELECT id::text
+  FROM users
+ WHERE tenant_id = $1
+   AND email = $2
+   AND email_verified_at IS NOT NULL`, tenantID, email).Scan(&userID)
+		} else if err == nil {
+			transitioned = true
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("verified e-mail registration user was not found")
+		}
+		if err != nil {
+			return fmt.Errorf("mark e-mail verified: %w", err)
+		}
+
+		var customerID string
+		if err := tx.QueryRow(ctx, `
+INSERT INTO customers (tenant_id, user_id, customer_number, status, email)
+VALUES ($1, $2, 'CUS-' || replace(gen_random_uuid()::text, '-', ''), 'ACTIVE', $3)
+ON CONFLICT (tenant_id, user_id) WHERE user_id IS NOT NULL
+DO UPDATE SET email = EXCLUDED.email, updated_at = now()
+RETURNING id::text`, tenantID, userID, email).Scan(&customerID); err != nil {
+			return fmt.Errorf("ensure customer profile: %w", err)
+		}
+		if transitioned {
+			if _, err := tx.Exec(ctx, `
+INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id)
+VALUES ($1, 'USER', $2, 'CUSTOMER_EMAIL_VERIFIED', 'customers', $3)`, tenantID, userID, customerID); err != nil {
+				return fmt.Errorf("write e-mail verification audit record: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+// ResetVerifiedPassword is intentionally a no-op for an unknown or
+// unverified e-mail address. Its public caller sends the same success response
+// in both cases, which prevents password-reset account enumeration.
+func (s *PostgresStore) ResetVerifiedPassword(ctx context.Context, tenantID, email, passwordHash string) error {
+	if tenantID == "" || email == "" || passwordHash == "" {
+		return ErrInvalidAccountInput
+	}
+	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var userID string
+		err := tx.QueryRow(ctx, `
+UPDATE users
+   SET password_hash = $3, password_params = '{}'::jsonb, updated_at = now()
+ WHERE tenant_id = $1
+   AND email = $2
+   AND email_verified_at IS NOT NULL
+RETURNING id::text`, tenantID, email, passwordHash).Scan(&userID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("reset verified password: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+UPDATE auth_sessions
+   SET invalidated_at = COALESCE(invalidated_at, now())
+ WHERE tenant_id = $1
+   AND user_id = $2
+   AND invalidated_at IS NULL`, tenantID, userID); err != nil {
+			return fmt.Errorf("invalidate password-reset sessions: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id)
+VALUES ($1, 'USER', $2, 'CUSTOMER_PASSWORD_RESET', 'users', $2)`, tenantID, userID); err != nil {
+			return fmt.Errorf("write password-reset audit record: %w", err)
 		}
 		return nil
 	})

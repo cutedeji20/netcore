@@ -33,11 +33,13 @@ type MFAVerifier interface {
 
 // User is the minimum credential record needed by the login service.
 type User struct {
-	ID           string
-	TenantID     string
-	Email        string
-	PasswordHash string
-	Status       string
+	ID            string
+	TenantID      string
+	Email         string
+	PasswordHash  string
+	Status        string
+	RequiresMFA   bool
+	EmailVerified bool
 }
 
 // Principal represents an authenticated actor. Permissions are a set because
@@ -95,9 +97,10 @@ type Service struct {
 	mfa        MFAVerifier
 }
 
-// RequireMFA enables mandatory TOTP verification for every successful
-// password login. It is intended to be called during process construction,
-// before the service is exposed through HTTP.
+// RequireMFA enables mandatory TOTP verification for successful privileged
+// staff logins. The user record determines whether the current principal has
+// the explicit auth.mfa_required permission. It is intended to be called
+// during process construction, before the service is exposed through HTTP.
 func (s *Service) RequireMFA(verifier MFAVerifier) error {
 	if s == nil {
 		return errors.New("auth: service is required")
@@ -159,10 +162,10 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (session Session, pr
 		hash = user.PasswordHash
 	}
 	matched, verifyErr := s.hasher.Verify(in.Password, hash)
-	if verifyErr != nil || !tenantFound || !userFound || !matched || user.Status != "ACTIVE" || user.TenantID != tenantID || user.ID == "" {
+	if verifyErr != nil || !tenantFound || !userFound || !matched || user.Status != "ACTIVE" || user.TenantID != tenantID || user.ID == "" || (!user.RequiresMFA && !user.EmailVerified) {
 		return Session{}, Principal{}, ErrInvalidCredentials
 	}
-	if s.mfa != nil {
+	if s.mfa != nil && user.RequiresMFA {
 		if err := s.mfa.VerifyTOTP(ctx, user.TenantID, user.ID, strings.TrimSpace(in.MFACode)); err != nil {
 			// The public login response must not disclose whether an account has
 			// an enrolled device or whether a code was replayed.

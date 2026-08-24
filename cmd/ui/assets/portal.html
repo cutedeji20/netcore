@@ -9,6 +9,9 @@
     <title>Connect to NetCore Wi-Fi</title>
     <link rel="stylesheet" href="/portal.css" />
     <script src="/portal-config.js"></script>
+    <script src="/portal-checkout.js" defer></script>
+    <script src="/portal-account.js" defer></script>
+    <script src="/portal-recovery.js" defer></script>
     <script src="/portal.js" defer></script>
   </head>
   <body>
@@ -38,7 +41,7 @@
           <div class="notice"><b>i</b><span>Joining this network is free. Internet access starts after your plan is confirmed.</span></div>
           <div class="main-actions">
             <button class="primary-action" type="button" data-action="plans">Choose a plan <span>→</span></button>
-            <button class="secondary-action" type="button" data-action="login">I already have a plan</button>
+            <button class="secondary-action" type="button" data-action="account">Sign in or manage my plan</button>
           </div>
           <p class="privacy-note">Your device is checked securely before access is granted.</p>
         </section>
@@ -48,39 +51,93 @@
           <p class="eyebrow">Choose your access</p>
           <h1 id="plans-title">Simple plans for this connection.</h1>
           <p class="lead compact">Pick a plan to continue to secure payment. Your access starts only after payment is verified.</p>
-          <div class="plan-grid">
-            <button class="plan-option" type="button" data-plan="Day Pass">
-              <span class="plan-top"><b>Day Pass</b><em>24 hours</em></span>
-              <strong>₦1,000</strong>
-              <small>Fast Wi-Fi for one day</small>
-            </button>
-            <button class="plan-option featured" type="button" data-plan="Week Pass">
-              <span class="plan-badge">Most popular</span>
-              <span class="plan-top"><b>Week Pass</b><em>7 days</em></span>
-              <strong>₦4,500</strong>
-              <small>Reliable access all week</small>
-            </button>
-            <button class="plan-option" type="button" data-plan="Monthly Home">
-              <span class="plan-top"><b>Monthly Home</b><em>30 days</em></span>
-              <strong>₦12,500</strong>
-              <small>Best value for regular use</small>
-            </button>
-          </div>
+          <div class="plan-grid" id="portal-plans" aria-live="polite"></div>
           <p class="form-status" id="plan-status" role="status"></p>
+        </section>
+
+        <section class="portal-view" id="register-view" aria-labelledby="register-title" hidden>
+          <button class="back-button" type="button" data-action="plans">← Back to plans</button>
+          <p class="eyebrow">Create your account</p>
+          <h1 id="register-title">Verify your email before payment.</h1>
+          <p class="lead compact">We’ll send a short-lived code to confirm this email belongs to you.</p>
+          <form id="portal-register" novalidate>
+            <label>Email<input name="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required /></label>
+            <label>Password<input name="password" autocomplete="new-password" type="password" minlength="12" placeholder="At least 12 characters" required /></label>
+            <label>Confirm password<input name="confirm_password" autocomplete="new-password" type="password" minlength="12" placeholder="Enter your password again" required /></label>
+            <button class="primary-action" type="submit">Send verification code <span>→</span></button>
+          </form>
+          <button class="link-button" type="button" data-action="login">Already have an account? Sign in</button>
+          <p class="form-status" id="register-status" role="status"></p>
+        </section>
+
+        <section class="portal-view" id="verify-view" aria-labelledby="verify-title" hidden>
+          <button class="back-button" type="button" data-action="register">← Back</button>
+          <p class="eyebrow">Check your inbox</p>
+          <h1 id="verify-title">Enter your verification code.</h1>
+          <p class="lead compact">The code expires after 10 minutes and can be used once.</p>
+          <form id="portal-verify-email" novalidate>
+            <label>Six-digit code<input name="code" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" required /></label>
+            <button class="primary-action" type="submit">Verify email <span>→</span></button>
+          </form>
+          <p class="form-status" id="verify-status" role="status"></p>
         </section>
 
         <section class="portal-view" id="login-view" aria-labelledby="login-title" hidden>
           <button class="back-button" type="button" data-action="home">← Back</button>
           <p class="eyebrow">Existing customer</p>
-          <h1 id="login-title">Sign in to get online.</h1>
-          <p class="lead compact">Use the phone number or email linked to your active NetCore plan.</p>
+          <h1 id="login-title">Sign in to continue.</h1>
+          <p class="lead compact">Use the verified email linked to your NetCore plan.</p>
           <form id="portal-login" novalidate>
-            <label>Email or phone<input name="identifier" autocomplete="username" inputmode="email" placeholder="you@example.com or +234…" required /></label>
+            <label>Email<input name="identifier" autocomplete="username" inputmode="email" placeholder="you@example.com" required /></label>
             <label>Password<input name="password" autocomplete="current-password" type="password" placeholder="Enter your password" required /></label>
-            <button class="primary-action" type="submit">Sign in and connect <span>→</span></button>
+            <button class="primary-action" type="submit">Sign in <span>→</span></button>
           </form>
+          <button class="link-button" type="button" data-action="reset-request">Forgot your password?</button>
           <button class="link-button" type="button" data-action="plans">Need a plan? Choose one instead</button>
           <p class="form-status" id="login-status" role="status"></p>
+        </section>
+
+        <section class="portal-view" id="reset-request-view" aria-labelledby="reset-request-title" hidden>
+          <button class="back-button" type="button" data-action="login">← Back to sign in</button>
+          <p class="eyebrow">Recover your account</p>
+          <h1 id="reset-request-title">Reset your password.</h1>
+          <p class="lead compact">Enter the verified email on your NetCore account and we’ll send a short-lived recovery code.</p>
+          <form id="portal-reset-request" novalidate>
+            <label>Email<input name="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required /></label>
+            <button class="primary-action" type="submit">Send recovery code <span>→</span></button>
+          </form>
+          <p class="form-status" id="reset-request-status" role="status"></p>
+        </section>
+
+        <section class="portal-view" id="reset-confirm-view" aria-labelledby="reset-confirm-title" hidden>
+          <button class="back-button" type="button" data-action="reset-request">← Use another email</button>
+          <p class="eyebrow">Check your inbox</p>
+          <h1 id="reset-confirm-title">Choose a new password.</h1>
+          <p class="lead compact">Enter the six-digit recovery code and a new password for your NetCore account.</p>
+          <form id="portal-reset-confirm" novalidate>
+            <label>Six-digit code<input name="code" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" required /></label>
+            <label>New password<input name="password" autocomplete="new-password" type="password" minlength="12" placeholder="At least 12 characters" required /></label>
+            <label>Confirm new password<input name="confirm_password" autocomplete="new-password" type="password" minlength="12" placeholder="Enter your new password again" required /></label>
+            <button class="primary-action" type="submit">Reset password <span>→</span></button>
+          </form>
+          <p class="form-status" id="reset-confirm-status" role="status"></p>
+        </section>
+
+        <section class="portal-view" id="account-view" aria-labelledby="account-title" hidden>
+          <button class="back-button" type="button" data-action="home">← Back</button>
+          <p class="eyebrow">Your NetCore account</p>
+          <h1 id="account-title">Your plans and payments.</h1>
+          <p class="lead compact">Plans are prepaid and renew only when you choose a new plan.</p>
+          <div class="account-section">
+            <h2>Your access</h2>
+            <div class="account-list" id="account-subscriptions" aria-live="polite"></div>
+          </div>
+          <button class="primary-action account-renew" type="button" data-action="renew">Choose a plan to renew <span>→</span></button>
+          <div class="account-section">
+            <h2>Recent payments</h2>
+            <div class="account-list" id="account-payments" aria-live="polite"></div>
+          </div>
+          <p class="form-status" id="account-status" role="status"></p>
         </section>
 
         <footer class="portal-footer">

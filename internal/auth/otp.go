@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 )
@@ -30,6 +31,7 @@ var (
 type OTPPurpose string
 
 const (
+	OTPEmailVerification OTPPurpose = "EMAIL_VERIFICATION"
 	OTPPasswordReset     OTPPurpose = "PASSWORD_RESET"
 	OTPPhoneVerification OTPPurpose = "PHONE_VERIFICATION"
 	OTPPasswordlessLogin OTPPurpose = "PASSWORDLESS_LOGIN"
@@ -39,8 +41,8 @@ const (
 // must count failed attempts and destroy a challenge on success or exhaustion.
 // It stores only an opaque ID and a fixed-length digest.
 type OTPChallengeStore interface {
-	CreateOTPChallenge(ctx context.Context, challengeID, purpose string, digest []byte, ttl time.Duration) error
-	ConsumeOTPChallenge(ctx context.Context, challengeID, purpose string, digest []byte, maxAttempts int64) (bool, error)
+	CreateOTPChallenge(ctx context.Context, challengeID, purpose string, binding, digest []byte, ttl time.Duration) error
+	ConsumeOTPChallenge(ctx context.Context, challengeID, purpose string, binding, digest []byte, maxAttempts int64) (bool, error)
 	DeleteOTPChallenge(ctx context.Context, challengeID string) error
 }
 
@@ -88,6 +90,21 @@ func NewOTPService(store OTPChallengeStore, notifier OTPNotifier) (*OTPService, 
 // Issue persists a challenge before sending its code. If delivery fails, the
 // challenge is removed so an undelivered code cannot later be guessed.
 func (s *OTPService) Issue(ctx context.Context, purpose OTPPurpose, destination string) (IssuedOTP, error) {
+	return s.issue(ctx, purpose, destination, nil)
+}
+
+// IssueForEmail cryptographically binds the challenge to the exact e-mail
+// recipient as well as to its action. Redis receives only the binding digest,
+// never the e-mail address itself.
+func (s *OTPService) IssueForEmail(ctx context.Context, purpose OTPPurpose, destination string) (IssuedOTP, error) {
+	email, binding, ok := emailOTPBinding(destination)
+	if !ok {
+		return IssuedOTP{}, ErrOTPUnavailable
+	}
+	return s.issue(ctx, purpose, email, binding)
+}
+
+func (s *OTPService) issue(ctx context.Context, purpose OTPPurpose, destination string, binding []byte) (IssuedOTP, error) {
 	if !validOTPPurpose(purpose) || strings.TrimSpace(destination) == "" {
 		return IssuedOTP{}, ErrOTPUnavailable
 	}
@@ -100,7 +117,7 @@ func (s *OTPService) Issue(ctx context.Context, purpose OTPPurpose, destination 
 		return IssuedOTP{}, err
 	}
 	expiresAt := s.now().UTC().Add(s.ttl)
-	if err := s.store.CreateOTPChallenge(ctx, challengeID, string(purpose), otpDigest(challengeID, code), s.ttl); err != nil {
+	if err := s.store.CreateOTPChallenge(ctx, challengeID, string(purpose), binding, otpDigest(challengeID, code), s.ttl); err != nil {
 		return IssuedOTP{}, fmt.Errorf("%w: %v", ErrOTPUnavailable, err)
 	}
 	if err := s.notifier.SendOTP(ctx, purpose, strings.TrimSpace(destination), code, expiresAt); err != nil {
@@ -113,10 +130,25 @@ func (s *OTPService) Issue(ctx context.Context, purpose OTPPurpose, destination 
 // Verify consumes a valid challenge. It treats every challenge-state failure
 // identically; callers must rate-limit this operation before invoking it.
 func (s *OTPService) Verify(ctx context.Context, purpose OTPPurpose, challengeID, code string) error {
+	return s.verify(ctx, purpose, challengeID, nil, code)
+}
+
+// VerifyForEmail accepts a code only for the e-mail address that received it.
+// It returns the same generic errors as Verify so callers cannot distinguish
+// an incorrect code, recipient, expired challenge, or consumed challenge.
+func (s *OTPService) VerifyForEmail(ctx context.Context, purpose OTPPurpose, challengeID, destination, code string) error {
+	_, binding, ok := emailOTPBinding(destination)
+	if !ok {
+		return ErrInvalidOTP
+	}
+	return s.verify(ctx, purpose, challengeID, binding, code)
+}
+
+func (s *OTPService) verify(ctx context.Context, purpose OTPPurpose, challengeID string, binding []byte, code string) error {
 	if !validOTPPurpose(purpose) || !validChallengeID(challengeID) || !validOTPCode(code) {
 		return ErrInvalidOTP
 	}
-	matched, err := s.store.ConsumeOTPChallenge(ctx, challengeID, string(purpose), otpDigest(challengeID, code), s.maxAttempts)
+	matched, err := s.store.ConsumeOTPChallenge(ctx, challengeID, string(purpose), binding, otpDigest(challengeID, code), s.maxAttempts)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrOTPUnavailable, err)
 	}
@@ -126,9 +158,19 @@ func (s *OTPService) Verify(ctx context.Context, purpose OTPPurpose, challengeID
 	return nil
 }
 
+func emailOTPBinding(value string) (string, []byte, bool) {
+	email := strings.ToLower(strings.TrimSpace(value))
+	parsed, err := mail.ParseAddress(email)
+	if err != nil || parsed.Address != email || len(email) > 254 {
+		return "", nil, false
+	}
+	sum := sha256.Sum256([]byte("netcore:otp:email-binding\x00" + email))
+	return email, sum[:], true
+}
+
 func validOTPPurpose(purpose OTPPurpose) bool {
 	switch purpose {
-	case OTPPasswordReset, OTPPhoneVerification, OTPPasswordlessLogin:
+	case OTPEmailVerification, OTPPasswordReset, OTPPhoneVerification, OTPPasswordlessLogin:
 		return true
 	default:
 		return false

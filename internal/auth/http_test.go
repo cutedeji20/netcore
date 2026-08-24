@@ -182,6 +182,23 @@ func TestLogoutRejectsCrossOriginSessionRequest(t *testing.T) {
 	}
 }
 
+func TestRequireAllowedOriginRejectsCrossSiteWrites(t *testing.T) {
+	h, _, _ := newTestHTTP(t)
+	called := false
+	protected := h.RequireAllowedOrigin(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/plans", nil)
+	request.Header.Set("Origin", "https://attacker.example")
+	response := httptest.NewRecorder()
+
+	protected.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden || called {
+		t.Fatalf("status=%d called=%t body=%s", response.Code, called, response.Body.String())
+	}
+}
+
 func TestRequirePermissionUsesExplicitPermission(t *testing.T) {
 	called := false
 	h := RequirePermission("customer.read", http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))

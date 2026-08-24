@@ -47,6 +47,7 @@ type GatewayInitialization struct {
 	AmountMinor   int64
 	Currency      string
 	CustomerEmail string
+	CallbackURL   string
 }
 
 type GatewayCheckout struct {
@@ -128,18 +129,26 @@ type ActivationResult struct {
 // Service deliberately does not trust any browser success redirect.  The
 // only path to ActivateVerified follows Gateway.Verify.
 type Service struct {
-	store   Store
-	gateway Gateway
+	store       Store
+	gateway     Gateway
+	callbackURL string
 }
 
-func NewService(store Store, gateway Gateway) (*Service, error) {
+func NewService(store Store, gateway Gateway, callbackURLs ...string) (*Service, error) {
 	if store == nil || gateway == nil {
 		return nil, errors.New("payments: store and gateway are required")
 	}
 	if strings.TrimSpace(gateway.Name()) == "" {
 		return nil, errors.New("payments: gateway name is required")
 	}
-	return &Service{store: store, gateway: gateway}, nil
+	if len(callbackURLs) > 1 || (len(callbackURLs) == 1 && strings.TrimSpace(callbackURLs[0]) != "" && !validPaymentCallbackURL(callbackURLs[0])) {
+		return nil, errors.New("payments: callback URL must be a valid HTTPS URL")
+	}
+	callbackURL := ""
+	if len(callbackURLs) == 1 {
+		callbackURL = strings.TrimSpace(callbackURLs[0])
+	}
+	return &Service{store: store, gateway: gateway, callbackURL: callbackURL}, nil
 }
 
 // Initiate freezes the plan price in a PENDING payment, then begins checkout.
@@ -169,7 +178,7 @@ func (s *Service) Initiate(ctx context.Context, tenantID, userID, planID, idempo
 
 	gatewayCheckout, err := s.gateway.Initialize(ctx, GatewayInitialization{
 		Reference: pending.Reference, AmountMinor: pending.AmountMinor,
-		Currency: pending.Currency, CustomerEmail: pending.CustomerEmail,
+		Currency: pending.Currency, CustomerEmail: pending.CustomerEmail, CallbackURL: s.callbackURL,
 	})
 	if err != nil {
 		return Checkout{}, fmt.Errorf("%w: %v", ErrGatewayUnavailable, err)
@@ -228,6 +237,11 @@ func (s *Service) Verify(ctx context.Context, tenantID, userID, reference string
 func validCheckoutURL(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
+}
+
+func validPaymentCallbackURL(raw string) bool {
+	u, err := url.ParseRequestURI(strings.TrimSpace(raw))
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.Fragment == ""
 }
 
 func sameCurrency(a, b string) bool {

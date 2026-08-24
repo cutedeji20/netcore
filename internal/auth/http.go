@@ -165,6 +165,20 @@ func (h *HTTP) RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
+// RequireAllowedOrigin permits non-browser clients with no Origin header, but
+// rejects browser requests that did not start on an explicitly approved
+// dashboard origin. Apply it to every cookie-authenticated mutation.
+func (h *HTTP) RequireAllowedOrigin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" && !slices.Contains(h.allowedOrigins, origin) {
+			security.WriteError(w, r, http.StatusForbidden, "CSRF_REJECTED", "Request origin is not allowed.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // RequirePermission enforces authorization by explicit permission. A same-
 // tenant permission failure is a 403; object routes use an additional tenant
 // predicate and return 404 for cross-tenant objects.
@@ -250,6 +264,16 @@ func parseTrustedProxies(values []string) ([]netip.Prefix, error) {
 // configured proxy. The right-most untrusted hop is the client; an arbitrary
 // browser cannot spoof this header when it reaches the API directly.
 func (h *HTTP) clientIP(r *http.Request) string {
+	return clientAddress(r, h.trustedProxies)
+}
+
+// ClientIP returns the client address using the same trusted-proxy policy as
+// the session boundary, so audit records cannot be spoofed with X-Forwarded-For.
+func (h *HTTP) ClientIP(r *http.Request) string {
+	return h.clientIP(r)
+}
+
+func clientAddress(r *http.Request, trustedProxies []netip.Prefix) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return ""
@@ -258,7 +282,7 @@ func (h *HTTP) clientIP(r *http.Request) string {
 	if err != nil {
 		return ""
 	}
-	if !h.isTrustedProxy(remote) {
+	if !containsTrustedProxy(trustedProxies, remote) {
 		return remote.String()
 	}
 	forwarded := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
@@ -267,7 +291,7 @@ func (h *HTTP) clientIP(r *http.Request) string {
 		if err != nil {
 			continue
 		}
-		if !h.isTrustedProxy(candidate) {
+		if !containsTrustedProxy(trustedProxies, candidate) {
 			return candidate.String()
 		}
 	}
@@ -275,7 +299,11 @@ func (h *HTTP) clientIP(r *http.Request) string {
 }
 
 func (h *HTTP) isTrustedProxy(address netip.Addr) bool {
-	for _, prefix := range h.trustedProxies {
+	return containsTrustedProxy(h.trustedProxies, address)
+}
+
+func containsTrustedProxy(trustedProxies []netip.Prefix, address netip.Addr) bool {
+	for _, prefix := range trustedProxies {
 		if prefix.Contains(address) {
 			return true
 		}

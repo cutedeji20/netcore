@@ -21,13 +21,20 @@ import (
 // PostgresStore preserves the payment boundary in the database: price lookup,
 // pending record, activation event, quota period, outbox records and audit
 // record all run under the same tenant transaction where applicable.
-type PostgresStore struct{ db *database.Pool }
+type PostgresStore struct {
+	db             *database.Pool
+	receiptEnabled bool
+}
 
-func NewPostgresStore(db *database.Pool) (*PostgresStore, error) {
+func NewPostgresStore(db *database.Pool, receiptEnabled ...bool) (*PostgresStore, error) {
 	if db == nil {
 		return nil, errors.New("payments: database pool is required")
 	}
-	return &PostgresStore{db: db}, nil
+	store := &PostgresStore{db: db}
+	if len(receiptEnabled) > 0 {
+		store.receiptEnabled = receiptEnabled[0]
+	}
+	return store, nil
 }
 
 func (s *PostgresStore) PrepareInitiation(ctx context.Context, input Initiation) (pending PendingPayment, replay *Checkout, err error) {
@@ -234,13 +241,13 @@ func (s *PostgresStore) ActivateVerified(ctx context.Context, input Activation) 
 		return ActivationResult{}, ErrInvalidRequest
 	}
 	err = s.db.InTenantTx(ctx, input.TenantID, func(tx pgx.Tx) error {
-		var paymentID, subscriptionID, customerID, planID, paymentStatus, subscriptionStatus, currency string
+		var paymentID, subscriptionID, customerID, planID, planName, paymentStatus, subscriptionStatus, currency string
 		var amountMinor, quotaBytes int64
 		var durationSeconds int64
 		lookupErr := tx.QueryRow(ctx, `
-SELECT p.id::text, p.subscription_id::text, p.status, p.amount_minor, p.currency,
-       s.customer_id::text, s.plan_id::text, s.status,
-       plan.duration_seconds, COALESCE(plan.quota_bytes, 0)
+		SELECT p.id::text, p.subscription_id::text, p.status, p.amount_minor, p.currency,
+	       s.customer_id::text, s.plan_id::text, s.status, plan.name,
+	       plan.duration_seconds, COALESCE(plan.quota_bytes, 0)
   FROM payments AS p
   JOIN subscriptions AS s ON s.id = p.subscription_id AND s.tenant_id = p.tenant_id
   JOIN customers AS c ON c.id = p.customer_id AND c.tenant_id = p.tenant_id
@@ -251,7 +258,7 @@ SELECT p.id::text, p.subscription_id::text, p.status, p.amount_minor, p.currency
    AND p.provider_reference = $4
  FOR UPDATE OF p, s`, input.TenantID, input.UserID, input.Gateway, input.Reference).Scan(
 			&paymentID, &subscriptionID, &paymentStatus, &amountMinor, &currency,
-			&customerID, &planID, &subscriptionStatus, &durationSeconds, &quotaBytes,
+			&customerID, &planID, &subscriptionStatus, &planName, &durationSeconds, &quotaBytes,
 		)
 		if errors.Is(lookupErr, pgx.ErrNoRows) {
 			return ErrPaymentNotFound
@@ -345,6 +352,25 @@ VALUES ($1::uuid, $2, 'payment', $3::uuid, 'payment.succeeded',
 			deterministicEventID("payment.succeeded", input.Gateway, input.Reference), input.TenantID,
 			paymentID, input.Gateway, input.Reference, customerID, subscriptionID, amountMinor, currency, verifiedAt); err != nil {
 			return fmt.Errorf("payments: queue payment success: %w", err)
+		}
+		if s.receiptEnabled {
+			receipt, err := NewReceiptEvent(paymentID, customerID, planName, input.Reference, amountMinor, currency, startsAt, expiresAt)
+			if err != nil {
+				return fmt.Errorf("payments: build receipt event: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `
+INSERT INTO outbox_events
+    (event_id, tenant_id, aggregate_type, aggregate_id, event_type, payload)
+VALUES ($1::uuid, $2, 'payment', $3::uuid, 'payment.receipt.requested',
+        jsonb_build_object('payment_id', $3::uuid, 'customer_id', $4::uuid,
+            'plan_name', $5, 'reference', $6, 'amount_minor', $7,
+            'currency', $8, 'starts_at', $9, 'expires_at', $10))
+ON CONFLICT (event_id) DO NOTHING`,
+				receipt.EventID, input.TenantID, receipt.PaymentID, receipt.CustomerID,
+				receipt.PlanName, receipt.Reference, receipt.AmountMinor, receipt.Currency,
+				receipt.StartsAt, receipt.ExpiresAt); err != nil {
+				return fmt.Errorf("payments: queue payment receipt: %w", err)
+			}
 		}
 		if _, err := tx.Exec(ctx, `
 INSERT INTO audit_logs (tenant_id, actor_type, action, resource_type, resource_id, metadata)

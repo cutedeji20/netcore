@@ -10,6 +10,7 @@ import (
 type memoryOTPStore struct {
 	digests  map[string][]byte
 	purposes map[string]string
+	bindings map[string][]byte
 	attempts map[string]int64
 	deleted  []string
 	err      error
@@ -19,11 +20,12 @@ func newMemoryOTPStore() *memoryOTPStore {
 	return &memoryOTPStore{
 		digests:  make(map[string][]byte),
 		purposes: make(map[string]string),
+		bindings: make(map[string][]byte),
 		attempts: make(map[string]int64),
 	}
 }
 
-func (s *memoryOTPStore) CreateOTPChallenge(_ context.Context, id, purpose string, digest []byte, _ time.Duration) error {
+func (s *memoryOTPStore) CreateOTPChallenge(_ context.Context, id, purpose string, binding, digest []byte, _ time.Duration) error {
 	if s.err != nil {
 		return s.err
 	}
@@ -32,18 +34,20 @@ func (s *memoryOTPStore) CreateOTPChallenge(_ context.Context, id, purpose strin
 	}
 	s.digests[id] = append([]byte(nil), digest...)
 	s.purposes[id] = purpose
+	s.bindings[id] = append([]byte(nil), binding...)
 	return nil
 }
 
-func (s *memoryOTPStore) ConsumeOTPChallenge(_ context.Context, id, purpose string, digest []byte, maxAttempts int64) (bool, error) {
+func (s *memoryOTPStore) ConsumeOTPChallenge(_ context.Context, id, purpose string, binding, digest []byte, maxAttempts int64) (bool, error) {
 	if s.err != nil {
 		return false, s.err
 	}
 	s.attempts[id]++
-	matched := s.purposes[id] == purpose && string(s.digests[id]) == string(digest)
+	matched := s.purposes[id] == purpose && string(s.bindings[id]) == string(binding) && string(s.digests[id]) == string(digest)
 	if matched || s.attempts[id] >= maxAttempts {
 		delete(s.digests, id)
 		delete(s.purposes, id)
+		delete(s.bindings, id)
 	}
 	return matched, nil
 }
@@ -51,6 +55,7 @@ func (s *memoryOTPStore) ConsumeOTPChallenge(_ context.Context, id, purpose stri
 func (s *memoryOTPStore) DeleteOTPChallenge(_ context.Context, id string) error {
 	delete(s.digests, id)
 	delete(s.purposes, id)
+	delete(s.bindings, id)
 	s.deleted = append(s.deleted, id)
 	return nil
 }
@@ -125,6 +130,25 @@ func TestOTPServiceBindsCodeToItsPurpose(t *testing.T) {
 	}
 	if err := service.Verify(context.Background(), OTPPasswordReset, issued.ChallengeID, notifier.code); err != nil {
 		t.Fatalf("correct-purpose OTP error = %v", err)
+	}
+}
+
+func TestOTPServiceBindsEmailCodeToItsRecipient(t *testing.T) {
+	store := newMemoryOTPStore()
+	notifier := &recordingNotifier{}
+	service, err := NewOTPService(store, notifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := service.IssueForEmail(context.Background(), OTPEmailVerification, "customer@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.VerifyForEmail(context.Background(), OTPEmailVerification, issued.ChallengeID, "other@example.com", notifier.code); !errors.Is(err, ErrInvalidOTP) {
+		t.Fatalf("wrong-recipient OTP error = %v, want ErrInvalidOTP", err)
+	}
+	if err := service.VerifyForEmail(context.Background(), OTPEmailVerification, issued.ChallengeID, "customer@example.com", notifier.code); err != nil {
+		t.Fatalf("correct-recipient OTP error = %v", err)
 	}
 }
 

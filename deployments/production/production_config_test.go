@@ -94,6 +94,14 @@ func TestCaddyTrustedProxyAddressIsOutsideTheDynamicPool(t *testing.T) {
 	requireContains(t, composeText, "ip_range: 172.30.0.128/25")
 }
 
+func TestCaddyRoutesPublicCustomerAccountEndpointsToAPI(t *testing.T) {
+	caddy, err := os.ReadFile("Caddyfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireContains(t, string(caddy), "/portal/auth/*")
+}
+
 func TestProductionPostgresUsesSeparateBootstrapSuperuser(t *testing.T) {
 	compose, err := os.ReadFile("compose.yaml")
 	if err != nil {
@@ -116,4 +124,39 @@ func TestProductionPostgresUsesSeparateBootstrapSuperuser(t *testing.T) {
 	requireContains(t, initText, "ALTER DATABASE netcore OWNER TO netcore_owner;")
 	requireContains(t, initText, "ALTER SCHEMA public OWNER TO netcore_owner;")
 	requireNotContains(t, initText, "ALTER ROLE netcore_owner NOSUPERUSER")
+}
+
+func TestWorkerReceivesOnlyLogicalResendConfiguration(t *testing.T) {
+	compose, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	composeText := string(compose)
+	workerStart := strings.Index(composeText, "  worker:")
+	radiusStart := strings.Index(composeText, "  radius-spool-init:")
+	if workerStart == -1 || radiusStart == -1 || radiusStart <= workerStart {
+		t.Fatal("worker section is not bounded by the radius service")
+	}
+	worker := composeText[workerStart:radiusStart]
+	requireContains(t, worker, "NETCORE_EMAIL_PROVIDER: ${NETCORE_EMAIL_PROVIDER:-disabled}")
+	requireContains(t, worker, "NETCORE_RESEND_API_KEY_REF: ${NETCORE_RESEND_API_KEY_REF:-}")
+	requireContains(t, worker, "NETCORE_EMAIL_FROM: ${NETCORE_EMAIL_FROM:-}")
+	requireContains(t, worker, "/app:/run/netcore/runtime:ro")
+	requireNotContains(t, worker, "NETCORE_RESEND_API_KEY:")
+}
+
+func TestReceiptOutboxMigrationScopesGlobalWorkerOperations(t *testing.T) {
+	migration, err := os.ReadFile("../../db/migrations/0033_receipt_outbox_delivery.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(migration)
+	for _, want := range []string{
+		"CREATE FUNCTION payment_receipt_claim",
+		"SECURITY DEFINER",
+		"REVOKE ALL ON FUNCTION payment_receipt_claim(integer) FROM PUBLIC",
+		"GRANT EXECUTE ON FUNCTION payment_receipt_claim(integer) TO netcore_app_rw",
+	} {
+		requireContains(t, text, want)
+	}
 }

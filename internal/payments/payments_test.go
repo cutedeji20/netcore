@@ -108,6 +108,22 @@ func TestInitiateFreezesServerPaymentAndReturnsOnlyCheckout(t *testing.T) {
 	}
 }
 
+func TestInitiatePassesConfiguredCallbackURLToGateway(t *testing.T) {
+	store := &memoryPaymentStore{pending: PendingPayment{ID: "payment", SubscriptionID: "subscription", AmountMinor: 500000, Currency: "NGN", CustomerEmail: "a@example.test"}}
+	gateway := &memoryGateway{available: true, checkout: GatewayCheckout{AuthorizationURL: "https://checkout.example.test/pay"}}
+	service, err := NewService(store, gateway, "https://portal.example.test/portal.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001"); err != nil {
+		t.Fatal(err)
+	}
+	if gateway.initialization.CallbackURL != "https://portal.example.test/portal.html" {
+		t.Fatalf("gateway callback URL = %q", gateway.initialization.CallbackURL)
+	}
+}
+
 func TestInitiateFailsBeforeCreatingPaymentWhenGatewayDisabled(t *testing.T) {
 	store := &memoryPaymentStore{}
 	service := newPaymentService(t, store, &memoryGateway{})

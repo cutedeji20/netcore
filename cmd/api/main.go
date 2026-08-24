@@ -28,6 +28,7 @@ import (
 	"github.com/netcore-isp/netcore/internal/health"
 	"github.com/netcore-isp/netcore/internal/logger"
 	"github.com/netcore-isp/netcore/internal/network"
+	"github.com/netcore-isp/netcore/internal/notify"
 	"github.com/netcore-isp/netcore/internal/payments"
 	"github.com/netcore-isp/netcore/internal/plans"
 	"github.com/netcore-isp/netcore/internal/portal"
@@ -129,6 +130,10 @@ func run() error {
 		}
 	}
 	authHTTP, err := auth.NewHTTP(authService, redisClient, cfg.Env != config.EnvDevelopment, cfg.Security.AllowedOrigins, cfg.Security.TrustedProxies)
+	if err != nil {
+		return err
+	}
+	accountHTTP, err := configuredAccountHTTP(startupCtx, cfg, authStore, authService, passwordHasher, redisClient)
 	if err != nil {
 		return err
 	}
@@ -235,7 +240,26 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	paymentStore, err := payments.NewPostgresStore(postgres)
+	portalAccountService, err := portal.NewAccountService(portalStore)
+	if err != nil {
+		return err
+	}
+	portalAccountHTTP, err := portal.NewAccountHTTP(portalAccountService)
+	if err != nil {
+		return err
+	}
+	var catalogueHTTP *portal.CatalogueHTTP
+	if cfg.Portal.TenantSlug != "" {
+		catalogueService, err := portal.NewCatalogueService(portalStore, cfg.Portal.TenantSlug)
+		if err != nil {
+			return err
+		}
+		catalogueHTTP, err = portal.NewCatalogueHTTP(catalogueService)
+		if err != nil {
+			return err
+		}
+	}
+	paymentStore, err := payments.NewPostgresStore(postgres, cfg.Email.Provider == "resend")
 	if err != nil {
 		return err
 	}
@@ -243,11 +267,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	paymentService, err := payments.NewService(paymentStore, paymentGateway)
+	paymentService, err := payments.NewService(paymentStore, paymentGateway, cfg.Payments.PaystackCallbackURL)
 	if err != nil {
 		return err
 	}
 	paymentHTTP, err := payments.NewHTTP(paymentService, cfg.Security.AllowedOrigins)
+	if err != nil {
+		return err
+	}
+	paymentReadinessHTTP, err := payments.NewReadinessHTTP(paymentGateway, cfg.Payments.PaystackCallbackURL)
 	if err != nil {
 		return err
 	}
@@ -275,6 +303,9 @@ func run() error {
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	authHTTP.Routes(mux)
+	if accountHTTP != nil {
+		accountHTTP.Routes(mux)
+	}
 	if err := customerHTTP.Routes(mux, authHTTP); err != nil {
 		return err
 	}
@@ -311,7 +342,16 @@ func run() error {
 	if err := portalHTTP.Routes(mux, authHTTP); err != nil {
 		return err
 	}
+	if err := portalAccountHTTP.Routes(mux, authHTTP); err != nil {
+		return err
+	}
+	if catalogueHTTP != nil {
+		catalogueHTTP.Routes(mux)
+	}
 	if err := paymentHTTP.Routes(mux, authHTTP); err != nil {
+		return err
+	}
+	if err := paymentReadinessHTTP.Routes(mux, authHTTP); err != nil {
 		return err
 	}
 	if paymentWebhookHTTP != nil {
@@ -366,6 +406,51 @@ func run() error {
 	}
 	log.Info("stopped cleanly")
 	return nil
+}
+
+// configuredAccountHTTP fails closed: public customer account routes exist
+// only when an explicitly configured Resend key can be resolved from the
+// SOPS-mounted SecretStore. The secret is not retained in configuration or
+// returned to a browser.
+type accountRuntimeStore interface {
+	auth.LoginLimiter
+	auth.OTPChallengeStore
+}
+
+func configuredAccountHTTP(ctx context.Context, cfg *config.Config, store auth.AccountStore, loginService *auth.Service, hasher argon2id.Hasher, runtime accountRuntimeStore) (*auth.AccountHTTP, error) {
+	if cfg == nil {
+		return nil, errors.New("account e-mail configuration is required")
+	}
+	switch cfg.Email.Provider {
+	case "disabled":
+		return nil, nil
+	case "resend":
+		if cfg.Secrets.Backend != "sops" {
+			return nil, fmt.Errorf("e-mail provider resend requires the SOPS SecretStore; backend %q is not wired", cfg.Secrets.Backend)
+		}
+		secretStore, err := secrets.NewSOPSFileStore(cfg.Secrets.Ref)
+		if err != nil {
+			return nil, fmt.Errorf("e-mail SecretStore: %w", err)
+		}
+		if _, err := secretStore.Resolve(ctx, cfg.Email.ResendAPIKeyRef); err != nil {
+			return nil, fmt.Errorf("e-mail SecretStore reference: %w", err)
+		}
+		notifier, err := notify.NewResendNotifier(secretStore, cfg.Email.ResendAPIKeyRef, cfg.Email.From, nil)
+		if err != nil {
+			return nil, err
+		}
+		otpService, err := auth.NewOTPService(runtime, notifier)
+		if err != nil {
+			return nil, err
+		}
+		accountService, err := auth.NewAccountService(store, hasher, otpService)
+		if err != nil {
+			return nil, err
+		}
+		return auth.NewAccountHTTP(accountService, loginService, runtime, cfg.Portal.TenantSlug, cfg.Env != config.EnvDevelopment, cfg.Security.AllowedOrigins, cfg.Security.TrustedProxies)
+	default:
+		return nil, fmt.Errorf("unsupported e-mail provider %q", cfg.Email.Provider)
+	}
 }
 
 // configuredPaymentGateway is deliberately fail-closed. A payment provider is

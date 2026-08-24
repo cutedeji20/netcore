@@ -45,13 +45,13 @@ func TestPaystackInitializeUsesFrozenMinorUnitsAndServerReference(t *testing.T) 
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
 		}
-		if request["amount"] != "500000" || request["currency"] != "NGN" || request["reference"] != reference || request["email"] != "customer@example.test" {
+		if request["amount"] != "500000" || request["currency"] != "NGN" || request["reference"] != reference || request["email"] != "customer@example.test" || request["callback_url"] != "https://portal.example.test/portal.html" {
 			t.Fatalf("request body = %#v", request)
 		}
 		_, _ = w.Write([]byte(`{"status":true,"data":{"authorization_url":"https://checkout.paystack.test/abc","reference":"` + reference + `","new_field":"ignored"}}`))
 	})
 
-	checkout, err := gateway.Initialize(context.Background(), GatewayInitialization{Reference: reference, AmountMinor: 500000, Currency: "NGN", CustomerEmail: "customer@example.test"})
+	checkout, err := gateway.Initialize(context.Background(), GatewayInitialization{Reference: reference, AmountMinor: 500000, Currency: "NGN", CustomerEmail: "customer@example.test", CallbackURL: "https://portal.example.test/portal.html"})
 	if err != nil || checkout.AuthorizationURL != "https://checkout.paystack.test/abc" {
 		t.Fatalf("checkout=%+v err=%v", checkout, err)
 	}

@@ -311,13 +311,33 @@ func TestValidate_PaystackNeedsLogicalSecretReference(t *testing.T) {
 		"NETCORE_DB_DSN":          "postgres://localhost/dev",
 		"NETCORE_PAYMENT_GATEWAY": "paystack",
 		"NETCORE_SECRETS_REF":     "/run/secrets/netcore.json",
+		"NETCORE_ALLOWED_ORIGINS": "https://portal.example.test",
 	}
 	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "PAYSTACK_SECRET_REF") {
 		t.Fatalf("expected missing Paystack secret reference to fail, err=%v", err)
 	}
 	m["NETCORE_PAYSTACK_SECRET_REF"] = "payments.paystack.secret_key"
+	m["NETCORE_PAYSTACK_CALLBACK_URL"] = "https://portal.example.test/portal.html"
 	if _, err := Load(env(m)); err != nil {
 		t.Fatalf("configured Paystack gateway rejected: %v", err)
+	}
+}
+
+func TestValidate_PaystackRequiresTrustedHTTPSCallbackURL(t *testing.T) {
+	m := baseProd()
+	m["NETCORE_PAYMENT_GATEWAY"] = "paystack"
+	m["NETCORE_PAYSTACK_SECRET_REF"] = "payments.paystack.secret_key"
+	m["NETCORE_PAYSTACK_CALLBACK_URL"] = "http://portal.example.com/portal.html"
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "PAYSTACK_CALLBACK_URL") {
+		t.Fatalf("insecure Paystack callback was accepted: %v", err)
+	}
+	m["NETCORE_PAYSTACK_CALLBACK_URL"] = "https://other.example.com/portal.html"
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "NETCORE_ALLOWED_ORIGINS") {
+		t.Fatalf("untrusted Paystack callback was accepted: %v", err)
+	}
+	m["NETCORE_PAYSTACK_CALLBACK_URL"] = "https://portal.example.com/portal.html"
+	if _, err := Load(env(m)); err != nil {
+		t.Fatalf("trusted Paystack callback rejected: %v", err)
 	}
 }
 
@@ -336,6 +356,54 @@ func TestValidate_PaymentGatewayAndWebhookBounds(t *testing.T) {
 				t.Fatalf("expected %s=%s to fail with %q, err=%v", tc.key, tc.value, tc.want, err)
 			}
 		})
+	}
+}
+
+func TestValidate_ResendEmailProviderRequiresLogicalSecretAndSender(t *testing.T) {
+	m := map[string]string{
+		"NETCORE_ENV":            "development",
+		"NETCORE_DB_DSN":         "postgres://localhost/dev",
+		"NETCORE_EMAIL_PROVIDER": "resend",
+		"NETCORE_SECRETS_REF":    "/run/secrets/netcore.json",
+	}
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "NETCORE_RESEND_API_KEY_REF") {
+		t.Fatalf("missing Resend key reference error=%v", err)
+	}
+	m["NETCORE_RESEND_API_KEY_REF"] = "email.resend.api_key"
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "NETCORE_EMAIL_FROM") {
+		t.Fatalf("missing Resend sender error=%v", err)
+	}
+	m["NETCORE_EMAIL_FROM"] = "NetCore <access@notify.durabledatahubs.com>"
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "NETCORE_PORTAL_TENANT_SLUG") {
+		t.Fatalf("missing trusted portal tenant error=%v", err)
+	}
+	m["NETCORE_PORTAL_TENANT_SLUG"] = "data-hub"
+	config, err := Load(env(m))
+	if err != nil {
+		t.Fatalf("valid Resend email configuration rejected: %v", err)
+	}
+	if config.Email.Provider != "resend" || config.Email.ResendAPIKeyRef != "email.resend.api_key" || config.Portal.TenantSlug != "data-hub" {
+		t.Fatalf("email/portal configuration = %#v / %#v", config.Email, config.Portal)
+	}
+	m["NETCORE_EMAIL_FROM"] = "not a sender"
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "NETCORE_EMAIL_FROM") {
+		t.Fatalf("invalid Resend sender error=%v", err)
+	}
+	m["NETCORE_EMAIL_FROM"] = "NetCore <access@notify.durabledatahubs.com>"
+	m["NETCORE_PORTAL_TENANT_SLUG"] = "DataHub"
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "NETCORE_PORTAL_TENANT_SLUG") {
+		t.Fatalf("invalid trusted portal tenant error=%v", err)
+	}
+}
+
+func TestValidate_OptionalPortalTenantSlugMustBeSafe(t *testing.T) {
+	m := map[string]string{
+		"NETCORE_ENV":                "development",
+		"NETCORE_DB_DSN":             "postgres://localhost/dev",
+		"NETCORE_PORTAL_TENANT_SLUG": "not a valid slug",
+	}
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "NETCORE_PORTAL_TENANT_SLUG") {
+		t.Fatalf("invalid optional portal tenant error=%v", err)
 	}
 }
 

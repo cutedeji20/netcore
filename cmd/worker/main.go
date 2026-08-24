@@ -19,6 +19,7 @@ import (
 	"github.com/netcore-isp/netcore/internal/config"
 	"github.com/netcore-isp/netcore/internal/database"
 	"github.com/netcore-isp/netcore/internal/logger"
+	"github.com/netcore-isp/netcore/internal/notify"
 	"github.com/netcore-isp/netcore/internal/payments"
 	"github.com/netcore-isp/netcore/internal/secrets"
 )
@@ -61,25 +62,42 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	processor, err := configuredWebhookProcessor(startupCtx, cfg, postgres)
+	webhookProcessor, err := configuredWebhookProcessor(startupCtx, cfg, postgres)
 	if err != nil {
 		return err
 	}
-	if processor == nil {
-		log.Info("worker started", slog.String("queue", "payment webhooks disabled"))
+	receiptProcessor, err := configuredReceiptProcessor(startupCtx, cfg, postgres)
+	if err != nil {
+		return err
+	}
+	if webhookProcessor == nil && receiptProcessor == nil {
+		log.Info("worker started", slog.String("queue", "payment queues disabled"))
 		<-ctx.Done()
 		log.Info("worker shutdown signal received")
 		return nil
 	}
-	log.Info("worker started", slog.String("queue", "payment webhooks"))
+	log.Info("worker started", slog.Bool("webhooks_enabled", webhookProcessor != nil), slog.Bool("receipts_enabled", receiptProcessor != nil))
 	ticker := time.NewTicker(cfg.Payments.WebhookPollInterval)
 	defer ticker.Stop()
 	for {
-		worked, err := processor.ProcessOne(ctx)
-		if err != nil {
-			log.Error("payment webhook processing failed", slog.String("error", err.Error()))
+		worked := false
+		if webhookProcessor != nil {
+			webhookWorked, err := webhookProcessor.ProcessOne(ctx)
+			if err != nil {
+				log.Error("payment webhook processing failed", slog.String("error", err.Error()))
+			} else if webhookWorked {
+				worked = true
+			}
 		}
-		if worked && err == nil {
+		if receiptProcessor != nil {
+			receiptWorked, err := receiptProcessor.ProcessOne(ctx)
+			if err != nil {
+				log.Error("payment receipt processing failed", slog.String("error", err.Error()))
+			} else if receiptWorked {
+				worked = true
+			}
+		}
+		if worked {
 			continue
 		}
 		select {
@@ -112,7 +130,7 @@ func configuredWebhookProcessor(ctx context.Context, cfg *config.Config, db *dat
 	if err != nil {
 		return nil, err
 	}
-	paymentStore, err := payments.NewPostgresStore(db)
+	paymentStore, err := payments.NewPostgresStore(db, cfg.Email.Provider == "resend")
 	if err != nil {
 		return nil, err
 	}
@@ -121,4 +139,45 @@ func configuredWebhookProcessor(ctx context.Context, cfg *config.Config, db *dat
 		return nil, err
 	}
 	return payments.NewWebhookProcessor(paymentStore, service, gateway.Name(), cfg.Payments.WebhookMaxAttempts)
+}
+
+func configuredReceiptProcessor(ctx context.Context, cfg *config.Config, db *database.Pool) (*payments.ReceiptProcessor, error) {
+	if cfg == nil || db == nil {
+		return nil, fmt.Errorf("payment worker configuration is required")
+	}
+	if cfg.Email.Provider == "disabled" {
+		return nil, nil
+	}
+	if cfg.Email.Provider != "resend" || cfg.Secrets.Backend != "sops" {
+		return nil, fmt.Errorf("payment receipt worker has no configured e-mail secret store")
+	}
+	store, err := secrets.NewSOPSFileStore(cfg.Secrets.Ref)
+	if err != nil {
+		return nil, fmt.Errorf("receipt SecretStore: %w", err)
+	}
+	return configuredReceiptProcessorWithResolver(ctx, cfg, db, store)
+}
+
+func configuredReceiptProcessorWithResolver(ctx context.Context, cfg *config.Config, db *database.Pool, resolver secrets.Resolver) (*payments.ReceiptProcessor, error) {
+	if cfg == nil || db == nil {
+		return nil, fmt.Errorf("payment worker configuration is required")
+	}
+	if cfg.Email.Provider == "disabled" {
+		return nil, nil
+	}
+	if cfg.Email.Provider != "resend" || cfg.Secrets.Backend != "sops" || resolver == nil {
+		return nil, fmt.Errorf("payment receipt worker has no configured e-mail secret store")
+	}
+	if _, err := resolver.Resolve(ctx, cfg.Email.ResendAPIKeyRef); err != nil {
+		return nil, fmt.Errorf("receipt SecretStore reference: %w", err)
+	}
+	notifier, err := notify.NewResendNotifier(resolver, cfg.Email.ResendAPIKeyRef, cfg.Email.From, nil)
+	if err != nil {
+		return nil, err
+	}
+	paymentStore, err := payments.NewPostgresStore(db, true)
+	if err != nil {
+		return nil, err
+	}
+	return payments.NewReceiptProcessor(paymentStore, notifier, cfg.Payments.WebhookMaxAttempts)
 }

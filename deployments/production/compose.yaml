@@ -35,6 +35,11 @@ services:
       # one-time MFA administrator ceremony documented in README.md succeeds.
       NETCORE_UI_MODE: ${NETCORE_UI_MODE:-locked}
       NETCORE_TENANT_SLUG: ${NETCORE_TENANT_SLUG:-}
+      # This exposes only an availability flag to the captive portal. The
+      # Resend and Paystack keys themselves stay in the read-only API runtime
+      # secret and are never mounted into the UI container.
+      NETCORE_EMAIL_PROVIDER: ${NETCORE_EMAIL_PROVIDER:-disabled}
+      NETCORE_PAYMENT_GATEWAY: ${NETCORE_PAYMENT_GATEWAY:-disabled}
     networks: [netcore]
     read_only: true
     cap_drop: ["ALL"]
@@ -56,7 +61,15 @@ services:
       NETCORE_SECRETS_BACKEND: sops
       NETCORE_SECRETS_REF: /run/netcore/runtime/netcore.json
       NETCORE_AUTH_REQUIRE_MFA: "true"
-      NETCORE_PAYMENT_GATEWAY: disabled
+      # Customer e-mail remains disabled until a verified Resend sender and
+      # encrypted logical key have passed the release acceptance checks.
+      NETCORE_EMAIL_PROVIDER: ${NETCORE_EMAIL_PROVIDER:-disabled}
+      NETCORE_RESEND_API_KEY_REF: ${NETCORE_RESEND_API_KEY_REF:-}
+      NETCORE_EMAIL_FROM: ${NETCORE_EMAIL_FROM:-}
+      NETCORE_PORTAL_TENANT_SLUG: ${NETCORE_TENANT_SLUG:-}
+      NETCORE_PAYMENT_GATEWAY: ${NETCORE_PAYMENT_GATEWAY:-disabled}
+      NETCORE_PAYSTACK_SECRET_REF: ${NETCORE_PAYSTACK_SECRET_REF:-}
+      NETCORE_PAYSTACK_CALLBACK_URL: https://${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}/portal.html
     volumes:
       - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/app:/run/netcore/runtime:ro
       - postgres_tls:/run/netcore/postgres-tls:ro
@@ -93,7 +106,12 @@ services:
       NETCORE_SECRETS_BACKEND: sops
       NETCORE_SECRETS_REF: /run/netcore/runtime/netcore.json
       NETCORE_AUTH_REQUIRE_MFA: "true"
-      NETCORE_PAYMENT_GATEWAY: disabled
+      NETCORE_EMAIL_PROVIDER: ${NETCORE_EMAIL_PROVIDER:-disabled}
+      NETCORE_RESEND_API_KEY_REF: ${NETCORE_RESEND_API_KEY_REF:-}
+      NETCORE_EMAIL_FROM: ${NETCORE_EMAIL_FROM:-}
+      NETCORE_PAYMENT_GATEWAY: ${NETCORE_PAYMENT_GATEWAY:-disabled}
+      NETCORE_PAYSTACK_SECRET_REF: ${NETCORE_PAYSTACK_SECRET_REF:-}
+      NETCORE_PAYSTACK_CALLBACK_URL: https://${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}/portal.html
     volumes:
       - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/app:/run/netcore/runtime:ro
       - postgres_tls:/run/netcore/postgres-tls:ro

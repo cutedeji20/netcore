@@ -79,7 +79,7 @@ func (g *PaystackGateway) Available() bool {
 }
 
 func (g *PaystackGateway) Initialize(ctx context.Context, input GatewayInitialization) (GatewayCheckout, error) {
-	if !g.Available() || !validPaystackReference(input.Reference) || input.AmountMinor <= 0 || !sameCurrency(input.Currency, input.Currency) || strings.TrimSpace(input.CustomerEmail) == "" {
+	if !g.Available() || !validPaystackReference(input.Reference) || input.AmountMinor <= 0 || !sameCurrency(input.Currency, input.Currency) || strings.TrimSpace(input.CustomerEmail) == "" || (strings.TrimSpace(input.CallbackURL) != "" && !validPaymentCallbackURL(input.CallbackURL)) {
 		return GatewayCheckout{}, ErrGatewayUnavailable
 	}
 	secret, err := g.resolveSecret(ctx)
@@ -87,13 +87,14 @@ func (g *PaystackGateway) Initialize(ctx context.Context, input GatewayInitializ
 		return GatewayCheckout{}, err
 	}
 	body, err := json.Marshal(struct {
-		Email     string `json:"email"`
-		Amount    string `json:"amount"`
-		Currency  string `json:"currency"`
-		Reference string `json:"reference"`
+		Email       string `json:"email"`
+		Amount      string `json:"amount"`
+		Currency    string `json:"currency"`
+		Reference   string `json:"reference"`
+		CallbackURL string `json:"callback_url,omitempty"`
 	}{
 		Email: strings.TrimSpace(input.CustomerEmail), Amount: strconv.FormatInt(input.AmountMinor, 10),
-		Currency: strings.ToUpper(strings.TrimSpace(input.Currency)), Reference: input.Reference,
+		Currency: strings.ToUpper(strings.TrimSpace(input.Currency)), Reference: input.Reference, CallbackURL: strings.TrimSpace(input.CallbackURL),
 	})
 	if err != nil {
 		return GatewayCheckout{}, fmt.Errorf("payments: encode Paystack initialization: %w", err)

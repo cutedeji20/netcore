@@ -95,6 +95,7 @@ func newTestService(t *testing.T) (*Service, *memoryStore) {
 			Email:        "admin@example.com",
 			PasswordHash: hash,
 			Status:       "ACTIVE",
+			RequiresMFA:  true,
 		},
 		userFound:   true,
 		permissions: map[string]struct{}{"customer.read": {}},
@@ -170,6 +171,44 @@ func TestLoginRequiresMFABeforeCreatingSession(t *testing.T) {
 	}
 	if verifier.calls != 2 || verifier.code != "654321" || len(store.tokenHash) != 32 {
 		t.Fatalf("successful MFA login calls=%d code=%q token_hash=%d", verifier.calls, verifier.code, len(store.tokenHash))
+	}
+}
+
+func TestLoginDoesNotRequireTOTPForCustomerWithoutStaffPermission(t *testing.T) {
+	service, store := newTestService(t)
+	store.user.RequiresMFA = false
+	store.user.EmailVerified = true
+	verifier := &testMFAVerifier{err: ErrInvalidMFA}
+	if err := service.RequireMFA(verifier); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := service.Login(context.Background(), LoginInput{
+		TenantSlug: "example", Identifier: "admin@example.com", Password: "correct password",
+	}); err != nil {
+		t.Fatalf("customer login = %v", err)
+	}
+	if verifier.calls != 0 {
+		t.Fatalf("customer login called TOTP verifier %d times", verifier.calls)
+	}
+	if len(store.tokenHash) != 32 {
+		t.Fatal("customer session was not created")
+	}
+}
+
+func TestLoginRejectsUnverifiedCustomerBeforeCreatingSession(t *testing.T) {
+	service, store := newTestService(t)
+	store.user.RequiresMFA = false
+	store.user.EmailVerified = false
+
+	_, _, err := service.Login(context.Background(), LoginInput{
+		TenantSlug: "example", Identifier: "admin@example.com", Password: "correct password",
+	})
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("unverified customer error = %v, want ErrInvalidCredentials", err)
+	}
+	if len(store.tokenHash) != 0 {
+		t.Fatal("unverified customer created a session")
 	}
 }
 

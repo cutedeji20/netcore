@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ type HTTP struct {
 	store           Store
 	defaultPageSize int
 	maxPageSize     int
+	clientIP        func(*http.Request) string
 }
 
 func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
@@ -48,6 +50,15 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"GET /api/v1/plans",
 		sessions.RequireAuth(auth.RequirePermission("plan.read", http.HandlerFunc(h.list))),
 	)
+	mux.Handle(
+		"POST /api/v1/plans",
+		sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("plan.write", http.HandlerFunc(h.create)))),
+	)
+	mux.Handle(
+		"PUT /api/v1/plans/{id}",
+		sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("plan.write", http.HandlerFunc(h.update)))),
+	)
+	h.clientIP = sessions.ClientIP
 	return nil
 }
 
@@ -84,6 +95,131 @@ func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {
 		response.Meta.NextCursor = encodeCursor(page.Next)
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *HTTP) create(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	input, err := decodeWriteInput(r, false)
+	if err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_PLAN", "Plan details are invalid.")
+		return
+	}
+	plan, err := h.store.Create(r.Context(), principal.TenantID, MutationActor{
+		UserID:    principal.UserID,
+		IP:        h.requestIP(r),
+		UserAgent: r.UserAgent(),
+	}, input)
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "PLANS_UNAVAILABLE", "Plan data is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusCreated, responsePlan(plan))
+}
+
+func (h *HTTP) update(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	planID := r.PathValue("id")
+	if !validUUID(planID) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_PLAN", "Plan details are invalid.")
+		return
+	}
+	input, err := decodeWriteInput(r, true)
+	if err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_PLAN", "Plan details are invalid.")
+		return
+	}
+	plan, err := h.store.Update(r.Context(), principal.TenantID, planID, MutationActor{
+		UserID:    principal.UserID,
+		IP:        h.requestIP(r),
+		UserAgent: r.UserAgent(),
+	}, input)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		security.WriteError(w, r, http.StatusNotFound, "PLAN_NOT_FOUND", "The plan was not found.")
+		return
+	case errors.Is(err, ErrTermsLocked):
+		security.WriteError(w, r, http.StatusConflict, "PLAN_TERMS_LOCKED", "Only publication status can change after a plan has subscriptions.")
+		return
+	case err != nil:
+		security.WriteError(w, r, http.StatusServiceUnavailable, "PLANS_UNAVAILABLE", "Plan data is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusOK, responsePlan(plan))
+}
+
+type writeRequest struct {
+	Name                  string `json:"name"`
+	Description           string `json:"description"`
+	PriceMinor            string `json:"price_minor"`
+	Currency              string `json:"currency"`
+	DurationSeconds       int64  `json:"duration_seconds"`
+	DownloadBPS           int64  `json:"download_bps"`
+	UploadBPS             int64  `json:"upload_bps"`
+	MaxDevices            int    `json:"max_devices"`
+	MaxConcurrentSessions int    `json:"max_concurrent_sessions"`
+	QuotaBytes            *int64 `json:"quota_bytes"`
+	QuotaResetPolicy      string `json:"quota_reset_policy"`
+	Status                Status `json:"status"`
+}
+
+func decodeWriteInput(r *http.Request, requireStatus bool) (WriteInput, error) {
+	var request writeRequest
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 32<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return WriteInput{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return WriteInput{}, errors.New("additional JSON values")
+	}
+	if requireStatus && strings.TrimSpace(string(request.Status)) == "" {
+		return WriteInput{}, ErrInvalidInput
+	}
+	priceMinor, err := strconv.ParseInt(strings.TrimSpace(request.PriceMinor), 10, 64)
+	if err != nil {
+		return WriteInput{}, ErrInvalidInput
+	}
+	input := WriteInput{
+		Name:                  request.Name,
+		Description:           request.Description,
+		PriceMinor:            priceMinor,
+		Currency:              request.Currency,
+		DurationSeconds:       request.DurationSeconds,
+		DownloadBPS:           request.DownloadBPS,
+		UploadBPS:             request.UploadBPS,
+		MaxDevices:            request.MaxDevices,
+		MaxConcurrentSessions: request.MaxConcurrentSessions,
+		QuotaBytes:            request.QuotaBytes,
+		QuotaResetPolicy:      request.QuotaResetPolicy,
+		Status:                request.Status,
+	}
+	if err := input.NormalizeAndValidate(); err != nil {
+		return WriteInput{}, err
+	}
+	return input, nil
+}
+
+func requestIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return ""
+	}
+	return host
+}
+
+func (h *HTTP) requestIP(r *http.Request) string {
+	if h.clientIP != nil {
+		return h.clientIP(r)
+	}
+	return requestIP(r)
 }
 
 func (h *HTTP) listOptions(r *http.Request) (ListOptions, error) {

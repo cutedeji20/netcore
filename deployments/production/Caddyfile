@@ -14,7 +14,7 @@
 		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
 	}
 
-	@api path /api/* /auth/* /webhooks/*
+	@api path /api/* /auth/* /webhooks/* /portal/auth/*
 	handle @api {
 		reverse_proxy api:8080 {
 			# Replace, rather than append, client-provided forwarding headers. The

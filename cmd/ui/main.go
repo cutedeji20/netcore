@@ -37,6 +37,10 @@ func newHandler() (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
+	portalConfig, err := loadPortalConfig(os.Getenv)
+	if err != nil {
+		return nil, err
+	}
 	content, err := fs.Sub(assets, "assets")
 	if err != nil {
 		return nil, fmt.Errorf("load UI assets: %w", err)
@@ -49,6 +53,10 @@ func newHandler() (http.Handler, error) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:")
 		if r.URL.Path == "/admin-config.js" {
 			serveAdminConfig(w, adminConfig)
+			return
+		}
+		if r.URL.Path == "/portal-config.js" {
+			servePortalConfig(w, portalConfig)
 			return
 		}
 		// The UI uses stable asset names. Revalidate the HTML, styles and scripts
@@ -75,6 +83,16 @@ func newHandler() (http.Handler, error) {
 type adminConfig struct {
 	Mode   string `json:"mode"`
 	Tenant string `json:"tenant"`
+}
+
+// portalConfig contains only browser-safe same-origin configuration. The API
+// itself resolves the tenant from deployment configuration, so the portal
+// neither receives nor sends a tenant selector.
+type portalConfig struct {
+	Mode            string `json:"mode"`
+	APIBase         string `json:"apiBase"`
+	AccountsEnabled bool   `json:"accountsEnabled"`
+	PaymentsEnabled bool   `json:"paymentsEnabled"`
 }
 
 func loadAdminConfig(getenv func(string) string) (adminConfig, error) {
@@ -104,6 +122,21 @@ func validTenantSlug(value string) bool {
 	return true
 }
 
+func loadPortalConfig(getenv func(string) string) (portalConfig, error) {
+	admin, err := loadAdminConfig(getenv)
+	if err != nil {
+		return portalConfig{}, err
+	}
+	if admin.Mode != "live" {
+		return portalConfig{Mode: "preview"}, nil
+	}
+	return portalConfig{
+		Mode:            "live",
+		AccountsEnabled: strings.EqualFold(strings.TrimSpace(getenv("NETCORE_EMAIL_PROVIDER")), "resend"),
+		PaymentsEnabled: strings.EqualFold(strings.TrimSpace(getenv("NETCORE_PAYMENT_GATEWAY")), "paystack"),
+	}, nil
+}
+
 func serveAdminConfig(w http.ResponseWriter, config adminConfig) {
 	payload, err := json.Marshal(config)
 	if err != nil {
@@ -113,4 +146,15 @@ func serveAdminConfig(w http.ResponseWriter, config adminConfig) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	_, _ = fmt.Fprintf(w, "window.NETCORE_ADMIN_CONFIG = Object.freeze(%s);\n", payload)
+}
+
+func servePortalConfig(w http.ResponseWriter, config portalConfig) {
+	payload, err := json.Marshal(config)
+	if err != nil {
+		http.Error(w, "portal configuration unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	_, _ = fmt.Fprintf(w, "window.NETCORE_PORTAL_CONFIG = Object.freeze(%s);\n", payload)
 }
