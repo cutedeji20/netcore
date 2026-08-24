@@ -18,10 +18,10 @@ import (
 	"github.com/netcore-isp/netcore/internal/cache"
 	"github.com/netcore-isp/netcore/internal/config"
 	"github.com/netcore-isp/netcore/internal/database"
+	"github.com/netcore-isp/netcore/internal/integrations"
 	"github.com/netcore-isp/netcore/internal/logger"
 	"github.com/netcore-isp/netcore/internal/notify"
 	"github.com/netcore-isp/netcore/internal/payments"
-	"github.com/netcore-isp/netcore/internal/secrets"
 )
 
 func main() {
@@ -113,24 +113,30 @@ func configuredWebhookProcessor(ctx context.Context, cfg *config.Config, db *dat
 	if cfg == nil || db == nil {
 		return nil, fmt.Errorf("payment worker configuration is required")
 	}
-	if cfg.Payments.Gateway == "disabled" {
-		return nil, nil
-	}
-	if cfg.Payments.Gateway != "paystack" || cfg.Secrets.Backend != "sops" {
-		return nil, fmt.Errorf("payment webhook worker has no configured gateway secret store")
-	}
-	store, err := secrets.NewSOPSFileStore(cfg.Secrets.Ref)
+	tenant, found, err := db.ResolveActiveTenant(ctx, cfg.Portal.TenantSlug)
 	if err != nil {
-		return nil, fmt.Errorf("payment SecretStore: %w", err)
+		return nil, fmt.Errorf("resolve webhook portal tenant: %w", err)
 	}
-	if _, err := store.Resolve(ctx, cfg.Payments.PaystackSecretRef); err != nil {
-		return nil, fmt.Errorf("payment SecretStore reference: %w", err)
+	if !found || tenant.ID == "" {
+		return nil, fmt.Errorf("webhook portal tenant is not active")
 	}
-	gateway, err := payments.NewPaystackGateway(store, cfg.Payments.PaystackSecretRef, nil)
+	store, err := integrations.NewPostgresStore(db)
 	if err != nil {
 		return nil, err
 	}
-	paymentStore, err := payments.NewPostgresStore(db, cfg.Email.Provider == "resend")
+	wrapper, err := configuredIntegrationKeyWrapper(cfg)
+	if err != nil {
+		return nil, err
+	}
+	credentials, err := integrations.NewCredentialResolver(store, wrapper)
+	if err != nil {
+		return nil, err
+	}
+	gateway, err := payments.NewTenantPaystackGateway(credentials, tenant.ID, nil)
+	if err != nil {
+		return nil, err
+	}
+	paymentStore, err := payments.NewPostgresStore(db, true)
 	if err != nil {
 		return nil, err
 	}
@@ -145,33 +151,33 @@ func configuredReceiptProcessor(ctx context.Context, cfg *config.Config, db *dat
 	if cfg == nil || db == nil {
 		return nil, fmt.Errorf("payment worker configuration is required")
 	}
-	if cfg.Email.Provider == "disabled" {
-		return nil, nil
-	}
-	if cfg.Email.Provider != "resend" || cfg.Secrets.Backend != "sops" {
-		return nil, fmt.Errorf("payment receipt worker has no configured e-mail secret store")
-	}
-	store, err := secrets.NewSOPSFileStore(cfg.Secrets.Ref)
+	tenant, found, err := db.ResolveActiveTenant(ctx, cfg.Portal.TenantSlug)
 	if err != nil {
-		return nil, fmt.Errorf("receipt SecretStore: %w", err)
+		return nil, fmt.Errorf("resolve receipt portal tenant: %w", err)
 	}
-	return configuredReceiptProcessorWithResolver(ctx, cfg, db, store)
+	if !found || tenant.ID == "" {
+		return nil, fmt.Errorf("receipt portal tenant is not active")
+	}
+	store, err := integrations.NewPostgresStore(db)
+	if err != nil {
+		return nil, err
+	}
+	wrapper, err := configuredIntegrationKeyWrapper(cfg)
+	if err != nil {
+		return nil, err
+	}
+	credentials, err := integrations.NewCredentialResolver(store, wrapper)
+	if err != nil {
+		return nil, err
+	}
+	return configuredReceiptProcessorWithCredentialResolver(cfg, db, tenant.ID, credentials)
 }
 
-func configuredReceiptProcessorWithResolver(ctx context.Context, cfg *config.Config, db *database.Pool, resolver secrets.Resolver) (*payments.ReceiptProcessor, error) {
-	if cfg == nil || db == nil {
+func configuredReceiptProcessorWithCredentialResolver(cfg *config.Config, db *database.Pool, tenantID string, resolver notify.TenantResendCredentialResolver) (*payments.ReceiptProcessor, error) {
+	if cfg == nil || db == nil || tenantID == "" || resolver == nil {
 		return nil, fmt.Errorf("payment worker configuration is required")
 	}
-	if cfg.Email.Provider == "disabled" {
-		return nil, nil
-	}
-	if cfg.Email.Provider != "resend" || cfg.Secrets.Backend != "sops" || resolver == nil {
-		return nil, fmt.Errorf("payment receipt worker has no configured e-mail secret store")
-	}
-	if _, err := resolver.Resolve(ctx, cfg.Email.ResendAPIKeyRef); err != nil {
-		return nil, fmt.Errorf("receipt SecretStore reference: %w", err)
-	}
-	notifier, err := notify.NewResendNotifier(resolver, cfg.Email.ResendAPIKeyRef, cfg.Email.From, nil)
+	notifier, err := notify.NewTenantResendNotifier(resolver, tenantID, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -131,9 +131,12 @@ func loadPortalConfig(getenv func(string) string) (portalConfig, error) {
 		return portalConfig{Mode: "preview"}, nil
 	}
 	return portalConfig{
-		Mode:            "live",
-		AccountsEnabled: strings.EqualFold(strings.TrimSpace(getenv("NETCORE_EMAIL_PROVIDER")), "resend"),
-		PaymentsEnabled: strings.EqualFold(strings.TrimSpace(getenv("NETCORE_PAYMENT_GATEWAY")), "paystack"),
+		Mode: "live",
+		// Provider activation is checked by the API on each operation from the
+		// tenant's encrypted dashboard settings. Static provider flags would
+		// require a UI redeploy after every safe admin configuration change.
+		AccountsEnabled: true,
+		PaymentsEnabled: true,
 	}, nil
 }
 

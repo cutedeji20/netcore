@@ -26,6 +26,7 @@ import (
 	"github.com/netcore-isp/netcore/internal/customers"
 	"github.com/netcore-isp/netcore/internal/database"
 	"github.com/netcore-isp/netcore/internal/health"
+	"github.com/netcore-isp/netcore/internal/integrations"
 	"github.com/netcore-isp/netcore/internal/logger"
 	"github.com/netcore-isp/netcore/internal/network"
 	"github.com/netcore-isp/netcore/internal/notify"
@@ -133,7 +134,31 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	accountHTTP, err := configuredAccountHTTP(startupCtx, cfg, authStore, authService, passwordHasher, redisClient)
+	integrationStore, err := integrations.NewPostgresStore(postgres)
+	if err != nil {
+		return err
+	}
+	integrationWrapper, err := configuredIntegrationKeyWrapper(cfg)
+	if err != nil {
+		return err
+	}
+	integrationCredentialResolver, err := integrations.NewCredentialResolver(integrationStore, integrationWrapper)
+	if err != nil {
+		return err
+	}
+	integrationValidator, err := integrations.NewHTTPProviderValidator(nil)
+	if err != nil {
+		return err
+	}
+	integrationService, err := integrations.NewService(integrationStore, integrationWrapper, authService, integrationValidator)
+	if err != nil {
+		return err
+	}
+	integrationHTTP, err := integrations.NewHTTP(integrationService)
+	if err != nil {
+		return err
+	}
+	accountHTTP, err := configuredAccountHTTP(startupCtx, cfg, authStore, authService, passwordHasher, redisClient, integrationCredentialResolver)
 	if err != nil {
 		return err
 	}
@@ -259,11 +284,11 @@ func run() error {
 			return err
 		}
 	}
-	paymentStore, err := payments.NewPostgresStore(postgres, cfg.Email.Provider == "resend")
+	paymentStore, err := payments.NewPostgresStore(postgres, true)
 	if err != nil {
 		return err
 	}
-	paymentGateway, webhookGateway, err := configuredPaymentGateway(startupCtx, cfg)
+	paymentGateway, webhookGateway, err := configuredPaymentGateway(startupCtx, cfg, authStore, integrationCredentialResolver)
 	if err != nil {
 		return err
 	}
@@ -339,6 +364,9 @@ func run() error {
 	if err := workspaceHTTP.Routes(mux, authHTTP); err != nil {
 		return err
 	}
+	if err := integrationHTTP.Routes(mux, authHTTP); err != nil {
+		return err
+	}
 	if err := portalHTTP.Routes(mux, authHTTP); err != nil {
 		return err
 	}
@@ -408,81 +436,60 @@ func run() error {
 	return nil
 }
 
-// configuredAccountHTTP fails closed: public customer account routes exist
-// only when an explicitly configured Resend key can be resolved from the
-// SOPS-mounted SecretStore. The secret is not retained in configuration or
-// returned to a browser.
+// configuredAccountHTTP binds public customer verification and recovery e-mail
+// to the dashboard-managed Resend credential of the configured portal tenant.
+// The public routes remain available when no provider is connected, but every
+// attempted delivery fails closed without exposing the configuration state.
 type accountRuntimeStore interface {
 	auth.LoginLimiter
 	auth.OTPChallengeStore
 }
 
-func configuredAccountHTTP(ctx context.Context, cfg *config.Config, store auth.AccountStore, loginService *auth.Service, hasher argon2id.Hasher, runtime accountRuntimeStore) (*auth.AccountHTTP, error) {
-	if cfg == nil {
+func configuredAccountHTTP(ctx context.Context, cfg *config.Config, store auth.AccountStore, loginService *auth.Service, hasher argon2id.Hasher, runtime accountRuntimeStore, credentials *integrations.CredentialResolver) (*auth.AccountHTTP, error) {
+	if cfg == nil || store == nil || credentials == nil {
 		return nil, errors.New("account e-mail configuration is required")
 	}
-	switch cfg.Email.Provider {
-	case "disabled":
-		return nil, nil
-	case "resend":
-		if cfg.Secrets.Backend != "sops" {
-			return nil, fmt.Errorf("e-mail provider resend requires the SOPS SecretStore; backend %q is not wired", cfg.Secrets.Backend)
-		}
-		secretStore, err := secrets.NewSOPSFileStore(cfg.Secrets.Ref)
-		if err != nil {
-			return nil, fmt.Errorf("e-mail SecretStore: %w", err)
-		}
-		if _, err := secretStore.Resolve(ctx, cfg.Email.ResendAPIKeyRef); err != nil {
-			return nil, fmt.Errorf("e-mail SecretStore reference: %w", err)
-		}
-		notifier, err := notify.NewResendNotifier(secretStore, cfg.Email.ResendAPIKeyRef, cfg.Email.From, nil)
-		if err != nil {
-			return nil, err
-		}
-		otpService, err := auth.NewOTPService(runtime, notifier)
-		if err != nil {
-			return nil, err
-		}
-		accountService, err := auth.NewAccountService(store, hasher, otpService)
-		if err != nil {
-			return nil, err
-		}
-		return auth.NewAccountHTTP(accountService, loginService, runtime, cfg.Portal.TenantSlug, cfg.Env != config.EnvDevelopment, cfg.Security.AllowedOrigins, cfg.Security.TrustedProxies)
-	default:
-		return nil, fmt.Errorf("unsupported e-mail provider %q", cfg.Email.Provider)
+	tenantID, found, err := store.ResolveTenant(ctx, cfg.Portal.TenantSlug)
+	if err != nil {
+		return nil, fmt.Errorf("resolve portal tenant: %w", err)
 	}
+	if !found || tenantID == "" {
+		return nil, errors.New("portal tenant is not active")
+	}
+	notifier, err := notify.NewTenantResendNotifier(credentials, tenantID, nil)
+	if err != nil {
+		return nil, err
+	}
+	otpService, err := auth.NewOTPService(runtime, notifier)
+	if err != nil {
+		return nil, err
+	}
+	accountService, err := auth.NewAccountService(store, hasher, otpService)
+	if err != nil {
+		return nil, err
+	}
+	return auth.NewAccountHTTP(accountService, loginService, runtime, cfg.Portal.TenantSlug, cfg.Env != config.EnvDevelopment, cfg.Security.AllowedOrigins, cfg.Security.TrustedProxies)
 }
 
-// configuredPaymentGateway is deliberately fail-closed. A payment provider is
-// usable only after its secret is resolved from the configured SOPS mount at
-// startup; a missing mount or key prevents the API from accepting checkout.
-func configuredPaymentGateway(ctx context.Context, cfg *config.Config) (payments.Gateway, payments.WebhookGateway, error) {
-	if cfg == nil {
+// configuredPaymentGateway binds checkout and webhook verification to the
+// active Paystack credential configured for the public portal tenant. It does
+// not resolve or retain any payment key at process startup.
+func configuredPaymentGateway(ctx context.Context, cfg *config.Config, store auth.AccountStore, credentials *integrations.CredentialResolver) (payments.Gateway, payments.WebhookGateway, error) {
+	if cfg == nil || store == nil || credentials == nil {
 		return nil, nil, errors.New("payment configuration is required")
 	}
-	switch cfg.Payments.Gateway {
-	case "disabled":
-		gateway := payments.NewDisabledGateway()
-		return gateway, nil, nil
-	case "paystack":
-		if cfg.Secrets.Backend != "sops" {
-			return nil, nil, fmt.Errorf("payment gateway paystack requires the SOPS SecretStore; backend %q is not wired", cfg.Secrets.Backend)
-		}
-		store, err := secrets.NewSOPSFileStore(cfg.Secrets.Ref)
-		if err != nil {
-			return nil, nil, fmt.Errorf("payment SecretStore: %w", err)
-		}
-		if _, err := store.Resolve(ctx, cfg.Payments.PaystackSecretRef); err != nil {
-			return nil, nil, fmt.Errorf("payment SecretStore reference: %w", err)
-		}
-		gateway, err := payments.NewPaystackGateway(store, cfg.Payments.PaystackSecretRef, nil)
-		if err != nil {
-			return nil, nil, err
-		}
-		return gateway, gateway, nil
-	default:
-		return nil, nil, fmt.Errorf("unsupported payment gateway %q", cfg.Payments.Gateway)
+	tenantID, found, err := store.ResolveTenant(ctx, cfg.Portal.TenantSlug)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve payment portal tenant: %w", err)
 	}
+	if !found || tenantID == "" {
+		return nil, nil, errors.New("payment portal tenant is not active")
+	}
+	gateway, err := payments.NewTenantPaystackGateway(credentials, tenantID, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	return gateway, gateway, nil
 }
 
 // healthcheck is the Docker health-check entry point. It probes liveness over

@@ -148,6 +148,52 @@ func TestValidate_ValidProductionConfigLoads(t *testing.T) {
 	}
 }
 
+func TestLoad_ProductionAzureIntegrationCryptoUsesOnlySafeKeyIdentifier(t *testing.T) {
+	// This fails if production accepts a malformed KEK location or cannot carry
+	// the safe Key Vault identifier required for database credential envelopes.
+	m := baseProd()
+	m["NETCORE_INTEGRATION_CRYPTO_BACKEND"] = "azure-key-vault"
+	m["NETCORE_INTEGRATION_KEK_ID"] = "https://netcore-integrations.vault.azure.net/keys/netcore-integrations-kek/0123456789abcdef"
+	c, err := Load(env(m))
+	if err != nil {
+		t.Fatalf("Azure Key Vault integration configuration rejected: %v", err)
+	}
+	if c.IntegrationCrypto.Backend != "azure-key-vault" || c.IntegrationCrypto.KEKID != m["NETCORE_INTEGRATION_KEK_ID"] {
+		t.Fatalf("integration crypto configuration = %#v", c.IntegrationCrypto)
+	}
+
+	m["NETCORE_INTEGRATION_KEK_ID"] = "https://vault.example/keys/key/version"
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "NETCORE_INTEGRATION_KEK_ID") {
+		t.Fatalf("non-Key-Vault KEK identifier was accepted: %v", err)
+	}
+}
+
+func TestValidate_ProductionRejectsStaticProviderCredentialSources(t *testing.T) {
+	// This fails if an old deployment variable can silently bypass the
+	// dashboard-managed, encrypted integration record in production.
+	for name, mutate := range map[string]func(map[string]string){
+		"Resend": func(m map[string]string) {
+			m["NETCORE_EMAIL_PROVIDER"] = "resend"
+			m["NETCORE_RESEND_API_KEY_REF"] = "email.resend.api_key"
+			m["NETCORE_EMAIL_FROM"] = "NetCore <access@notify.example.test>"
+			m["NETCORE_PORTAL_TENANT_SLUG"] = "data-hub"
+		},
+		"Paystack": func(m map[string]string) {
+			m["NETCORE_PAYMENT_GATEWAY"] = "paystack"
+			m["NETCORE_PAYSTACK_SECRET_REF"] = "payments.paystack.secret_key"
+			m["NETCORE_PAYSTACK_CALLBACK_URL"] = "https://portal.example.com/portal.html"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := baseProd()
+			mutate(m)
+			if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "dashboard-managed encrypted integration") {
+				t.Fatalf("static %s provider configuration was accepted: %v", name, err)
+			}
+		})
+	}
+}
+
 func TestLoad_SensitiveValuesMayComeFromMountedFiles(t *testing.T) {
 	dir := t.TempDir()
 	dsnFile := filepath.Join(dir, "db_dsn")
@@ -324,7 +370,12 @@ func TestValidate_PaystackNeedsLogicalSecretReference(t *testing.T) {
 }
 
 func TestValidate_PaystackRequiresTrustedHTTPSCallbackURL(t *testing.T) {
-	m := baseProd()
+	m := map[string]string{
+		"NETCORE_ENV":             "development",
+		"NETCORE_DB_DSN":          "postgres://localhost/dev",
+		"NETCORE_SECRETS_REF":     "/run/secrets/netcore.json",
+		"NETCORE_ALLOWED_ORIGINS": "https://portal.example.com",
+	}
 	m["NETCORE_PAYMENT_GATEWAY"] = "paystack"
 	m["NETCORE_PAYSTACK_SECRET_REF"] = "payments.paystack.secret_key"
 	m["NETCORE_PAYSTACK_CALLBACK_URL"] = "http://portal.example.com/portal.html"

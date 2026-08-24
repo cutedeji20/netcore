@@ -28,7 +28,7 @@ const adminConfig = window.NETCORE_ADMIN_CONFIG || {};
 const liveAdapterPaths = [
   "/live-customers.js", "/live-subscriptions.js", "/live-plans.js", "/live-sessions.js",
   "/live-billing.js", "/live-network.js", "/live-vouchers.js", "/live-team.js",
-  "/live-security.js", "/live-automations.js", "/live-workspace.js", "/live-payment-readiness.js"
+  "/live-security.js", "/live-automations.js", "/live-workspace.js", "/live-payment-readiness.js", "/integration-display.js", "/live-integrations.js"
 ];
 const hasLiveConfig = adminConfig.mode === "live" && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(String(adminConfig.tenant || ""));
 let adminState = { authorised: false, adaptersLoaded: false, identity: null };

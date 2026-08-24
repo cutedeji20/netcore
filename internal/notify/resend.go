@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/netcore-isp/netcore/internal/auth"
+	"github.com/netcore-isp/netcore/internal/integrations"
 	"github.com/netcore-isp/netcore/internal/payments"
 	"github.com/netcore-isp/netcore/pkg/money"
 )
@@ -35,6 +36,35 @@ type ResendNotifier struct {
 	from      string
 	client    *http.Client
 	baseURL   string
+}
+
+// TenantResendCredentialResolver supplies a short-lived Resend credential
+// decrypted from the tenant's active dashboard configuration.
+type TenantResendCredentialResolver interface {
+	Resolve(context.Context, string, integrations.Provider) ([]byte, integrations.CredentialMetadata, error)
+}
+
+// TenantResendNotifier obtains the tenant's credential immediately before
+// delivery. It intentionally does not keep a provider key in memory between
+// requests, so disabled/disconnected settings take effect without a restart.
+type TenantResendNotifier struct {
+	resolver TenantResendCredentialResolver
+	tenantID string
+	client   *http.Client
+	baseURL  string
+}
+
+func NewTenantResendNotifier(resolver TenantResendCredentialResolver, tenantID string, client *http.Client) (*TenantResendNotifier, error) {
+	if resolver == nil || strings.TrimSpace(tenantID) == "" {
+		return nil, errors.New("notify: tenant Resend credential resolver and tenant are required")
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	if client.Timeout <= 0 {
+		return nil, errors.New("notify: Resend HTTP client requires a timeout")
+	}
+	return &TenantResendNotifier{resolver: resolver, tenantID: strings.TrimSpace(tenantID), client: client, baseURL: resendEmailsURL}, nil
 }
 
 func NewResendNotifier(secrets SecretResolver, secretRef, from string, client *http.Client) (*ResendNotifier, error) {
@@ -157,6 +187,113 @@ func (n *ResendNotifier) SendPaymentReceipt(ctx context.Context, receipt payment
 		return errors.New("notify: Resend delivery was rejected")
 	}
 	return nil
+}
+
+// SendOTP implements auth.OTPNotifier for a fixed public portal tenant. OTP
+// destinations and codes remain outside operational logs.
+func (n *TenantResendNotifier) SendOTP(ctx context.Context, purpose auth.OTPPurpose, destination, code string, _ time.Time) error {
+	if n == nil || n.resolver == nil || n.client == nil || strings.TrimSpace(n.baseURL) == "" {
+		return errors.New("notify: tenant Resend notifier is unavailable")
+	}
+	destination = strings.TrimSpace(destination)
+	parsed, err := mail.ParseAddress(destination)
+	if err != nil || parsed.Address != destination {
+		return errors.New("notify: email destination is invalid")
+	}
+	subject, text, ok := otpMessage(purpose, code)
+	if !ok {
+		return errors.New("notify: unsupported OTP purpose")
+	}
+	key, metadata, err := n.resolver.Resolve(ctx, n.tenantID, integrations.ProviderResend)
+	if err != nil || len(key) == 0 || !validResendSender(metadata.SenderEmail) {
+		return errors.New("notify: Resend credential is unavailable")
+	}
+	defer clearCredential(key)
+	payload, err := json.Marshal(struct {
+		From    string `json:"from"`
+		To      string `json:"to"`
+		Subject string `json:"subject"`
+		Text    string `json:"text"`
+	}{From: strings.TrimSpace(metadata.SenderEmail), To: destination, Subject: subject, Text: text})
+	if err != nil {
+		return fmt.Errorf("notify: encode Resend message: %w", err)
+	}
+	return n.send(ctx, key, payload, "")
+}
+
+// SendPaymentReceipt implements payments.ReceiptSender for a fixed tenant.
+// Receipt data was already frozen after payment verification by the worker.
+func (n *TenantResendNotifier) SendPaymentReceipt(ctx context.Context, receipt payments.ReceiptEmail) error {
+	if n == nil || n.resolver == nil || n.client == nil || strings.TrimSpace(n.baseURL) == "" {
+		return errors.New("notify: tenant Resend notifier is unavailable")
+	}
+	destination := strings.TrimSpace(receipt.To)
+	parsed, err := mail.ParseAddress(destination)
+	if err != nil || parsed.Address != destination || !validReceiptFacts(receipt) {
+		return errors.New("notify: payment receipt is invalid")
+	}
+	amount, err := money.New(receipt.AmountMinor, receipt.Currency)
+	if err != nil {
+		return errors.New("notify: payment receipt amount is invalid")
+	}
+	key, metadata, err := n.resolver.Resolve(ctx, n.tenantID, integrations.ProviderResend)
+	if err != nil || len(key) == 0 || !validResendSender(metadata.SenderEmail) {
+		return errors.New("notify: Resend credential is unavailable")
+	}
+	defer clearCredential(key)
+	payload, err := json.Marshal(struct {
+		From    string `json:"from"`
+		To      string `json:"to"`
+		Subject string `json:"subject"`
+		Text    string `json:"text"`
+	}{
+		From:    strings.TrimSpace(metadata.SenderEmail),
+		To:      destination,
+		Subject: "Your NetCore payment receipt",
+		Text: "Your NetCore payment has been verified.\n\n" +
+			"Plan: " + strings.TrimSpace(receipt.PlanName) + "\n" +
+			"Amount: " + amount.String() + "\n" +
+			"Paystack reference: " + strings.TrimSpace(receipt.Reference) + "\n" +
+			"Access starts: " + receipt.StartsAt.UTC().Format(time.RFC3339) + "\n" +
+			"Access expires: " + receipt.ExpiresAt.UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return fmt.Errorf("notify: encode Resend receipt: %w", err)
+	}
+	return n.send(ctx, key, payload, "payment.receipt.requested/"+receipt.EventID)
+}
+
+func (n *TenantResendNotifier) send(ctx context.Context, key, payload []byte, idempotencyKey string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.baseURL+"/emails", bytes.NewReader(payload))
+	if err != nil {
+		return errors.New("notify: Resend request is invalid")
+	}
+	req.Header.Set("Authorization", "Bearer "+string(key))
+	req.Header.Set("Content-Type", "application/json")
+	if idempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	req.Header.Set("User-Agent", "netcore-notifier/1.0")
+	response, err := n.client.Do(req)
+	if err != nil {
+		return errors.New("notify: Resend delivery is unavailable")
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return errors.New("notify: Resend delivery was rejected")
+	}
+	return nil
+}
+
+func validResendSender(sender string) bool {
+	parsed, err := mail.ParseAddress(strings.TrimSpace(sender))
+	return err == nil && parsed.Address != ""
+}
+
+func clearCredential(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
 }
 
 func validReceiptFacts(receipt payments.ReceiptEmail) bool {

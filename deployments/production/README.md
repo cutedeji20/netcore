@@ -93,6 +93,31 @@ the latter is owned by UID/GID `101:101` with mode `0400` for FreeRADIUS.
 Rotate the pair together. Never loosen either file's mode merely to make two
 containers share it.
 
+### Dashboard-managed Resend and Paystack credentials
+
+Resend and Paystack keys are not mounted into the API, worker, UI, `.env`, or
+`netcore.json`. A privileged administrator enters each key through **Settings
+→ Integrations** using a current password and authenticator code. NetCore sends
+a confirmation message to that administrator for Resend and makes a read-only
+Paystack balance request before accepting the record. The database retains only
+an AES-GCM encrypted envelope; the data-encryption key is wrapped by a
+versioned, non-exportable Azure Key Vault key.
+
+Before enabling this capability, set only these public configuration values in
+the production `.env`:
+
+```text
+NETCORE_INTEGRATION_CRYPTO_BACKEND=azure-key-vault
+NETCORE_INTEGRATION_KEK_ID=https://<vault>.vault.azure.net/keys/netcore-integrations-kek/<version>
+```
+
+The Azure VM's **system-assigned managed identity** must receive only the
+`Key Vault Crypto Service Encryption User` role on that individual key. The
+vault must use a private endpoint and private DNS zone; public network access
+is disabled. An unavailable key vault fails configuration, checkout, receipt
+delivery and webhook signature verification closed. It never falls back to a
+file key or environment secret.
+
 `radius/clients.conf` is a rendered FreeRADIUS file, not the tracked template.
 It contains exactly one `client` block per active database NAS, using the NAS
 source address and its independently generated shared secret. It is a secret:
@@ -271,9 +296,10 @@ router or Paystack:
 
 1. A same-origin HTTPS Caddy deployment, a production API and worker, and a
    PostgreSQL connection with certificate verification. No API port is public.
-2. Encrypted, mounted runtime secrets. Repository files, environment files and
-   image layers must contain no passwords, Paystack secret keys, RADIUS shared
-   secrets, database keys or MFA secrets.
+2. Encrypted runtime secrets plus the dashboard-managed envelope design:
+   repository files, environment files and image layers contain no passwords,
+   Resend keys, Paystack secret keys, RADIUS shared secrets, database keys or
+   MFA secrets; the Key Vault KEK is private-network-only and least-privilege.
 3. Schema migrations and SQL invariants pass against the production candidate,
    with a tested backup and restore procedure.
 4. An operator bootstrap procedure creates the first tenant, administrator
@@ -283,9 +309,9 @@ router or Paystack:
    access, a disk-backed accounting detail spool, replay listener, disk quota
    and alerts. Test Start, Interim, Stop, retransmit, database outage and
    replay before connecting a live router.
-6. Paystack stays disabled until the webhook secret is mounted, webhook
-   verification/idempotency is exercised in a test account, and a failed or
-   delayed callback cannot activate a subscription.
+6. Paystack stays disabled until the dashboard's test-key validation succeeds,
+   webhook verification/idempotency is exercised in a test account, and a
+   failed or delayed callback cannot activate a subscription.
 7. Monitoring, alert routing, audit-log retention, host patching, backup
    restoration, incident contacts and an explicit rollback procedure are
    verified.

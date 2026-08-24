@@ -15,52 +15,28 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/netcore-isp/netcore/internal/integrations"
 )
 
-const (
-	paystackName           = "paystack"
-	paystackAPIBase        = "https://api.paystack.co"
-	paystackResponseMaxLen = 64 * 1024
-)
-
-// SecretResolver is fulfilled by the deployment SecretStore. The logical ref
-// is configured separately from its value, so a payment secret can never be
-// read from the browser, database, or regular process configuration.
-type SecretResolver interface {
-	Resolve(context.Context, string) (string, error)
+// TenantPaystackCredentialResolver supplies one tenant's active dashboard
+// credential immediately before a Paystack operation.
+type TenantPaystackCredentialResolver interface {
+	Resolve(context.Context, string, integrations.Provider) ([]byte, integrations.CredentialMetadata, error)
 }
 
-// WebhookGateway is the provider-specific half of the webhook boundary. It
-// verifies the signature over raw bytes and extracts only the event identity
-// needed for asynchronous server-to-server verification.
-type WebhookGateway interface {
-	Name() string
-	VerifyWebhookSignature(context.Context, []byte, string) error
-	ParseWebhook([]byte) (GatewayWebhook, error)
+// TenantPaystackGateway keeps the public tenant selector separate from the
+// credential itself. It does not cache a Paystack key between operations.
+type TenantPaystackGateway struct {
+	resolver TenantPaystackCredentialResolver
+	tenantID string
+	client   *http.Client
+	baseURL  string
 }
 
-// GatewayWebhook is intentionally small. Its fields are signed but still not
-// trusted as payment facts; the worker always calls Gateway.Verify afterwards.
-type GatewayWebhook struct {
-	Provider  string
-	EventID   string
-	EventType string
-	Reference string
-}
-
-// PaystackGateway implements checkout initialization, independent transaction
-// verification, and raw-body webhook signatures using the same secret-store
-// reference. It does not keep the secret in its struct or logs.
-type PaystackGateway struct {
-	secrets   SecretResolver
-	secretRef string
-	client    *http.Client
-	baseURL   string
-}
-
-func NewPaystackGateway(secrets SecretResolver, secretRef string, client *http.Client) (*PaystackGateway, error) {
-	if secrets == nil || strings.TrimSpace(secretRef) == "" {
-		return nil, errors.New("payments: Paystack secret resolver and reference are required")
+func NewTenantPaystackGateway(resolver TenantPaystackCredentialResolver, tenantID string, client *http.Client) (*TenantPaystackGateway, error) {
+	if resolver == nil || strings.TrimSpace(tenantID) == "" {
+		return nil, errors.New("payments: tenant Paystack credential resolver and tenant are required")
 	}
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
@@ -68,17 +44,30 @@ func NewPaystackGateway(secrets SecretResolver, secretRef string, client *http.C
 	if client.Timeout <= 0 {
 		return nil, errors.New("payments: Paystack HTTP client requires a timeout")
 	}
-	return &PaystackGateway{
-		secrets: secrets, secretRef: strings.TrimSpace(secretRef), client: client, baseURL: paystackAPIBase,
-	}, nil
+	return &TenantPaystackGateway{resolver: resolver, tenantID: strings.TrimSpace(tenantID), client: client, baseURL: paystackAPIBase}, nil
 }
 
-func (*PaystackGateway) Name() string { return paystackName }
-func (g *PaystackGateway) Available() bool {
-	return g != nil && g.secrets != nil && g.secretRef != "" && g.client != nil
+func (*TenantPaystackGateway) Name() string { return paystackName }
+
+func (g *TenantPaystackGateway) Available() bool {
+	return g != nil && g.resolver != nil && g.tenantID != "" && g.client != nil
 }
 
-func (g *PaystackGateway) Initialize(ctx context.Context, input GatewayInitialization) (GatewayCheckout, error) {
+// Check proves an active tenant credential can be loaded before Service
+// reserves any pending payment state. The key bytes are cleared immediately.
+func (g *TenantPaystackGateway) Check(ctx context.Context) error {
+	if !g.Available() {
+		return ErrGatewayUnavailable
+	}
+	secret, err := g.resolveSecret(ctx)
+	if err != nil {
+		return ErrGatewayUnavailable
+	}
+	clearPaystackCredential(secret)
+	return nil
+}
+
+func (g *TenantPaystackGateway) Initialize(ctx context.Context, input GatewayInitialization) (GatewayCheckout, error) {
 	if !g.Available() || !validPaystackReference(input.Reference) || input.AmountMinor <= 0 || !sameCurrency(input.Currency, input.Currency) || strings.TrimSpace(input.CustomerEmail) == "" || (strings.TrimSpace(input.CallbackURL) != "" && !validPaymentCallbackURL(input.CallbackURL)) {
 		return GatewayCheckout{}, ErrGatewayUnavailable
 	}
@@ -86,6 +75,7 @@ func (g *PaystackGateway) Initialize(ctx context.Context, input GatewayInitializ
 	if err != nil {
 		return GatewayCheckout{}, err
 	}
+	defer clearPaystackCredential(secret)
 	body, err := json.Marshal(struct {
 		Email       string `json:"email"`
 		Amount      string `json:"amount"`
@@ -99,7 +89,6 @@ func (g *PaystackGateway) Initialize(ctx context.Context, input GatewayInitializ
 	if err != nil {
 		return GatewayCheckout{}, fmt.Errorf("payments: encode Paystack initialization: %w", err)
 	}
-
 	var response struct {
 		Status bool `json:"status"`
 		Data   struct {
@@ -116,7 +105,7 @@ func (g *PaystackGateway) Initialize(ctx context.Context, input GatewayInitializ
 	return GatewayCheckout{AuthorizationURL: response.Data.AuthorizationURL}, nil
 }
 
-func (g *PaystackGateway) Verify(ctx context.Context, reference string) (GatewayVerification, error) {
+func (g *TenantPaystackGateway) Verify(ctx context.Context, reference string) (GatewayVerification, error) {
 	if !g.Available() || !validPaystackReference(reference) {
 		return GatewayVerification{}, ErrGatewayUnavailable
 	}
@@ -124,6 +113,7 @@ func (g *PaystackGateway) Verify(ctx context.Context, reference string) (Gateway
 	if err != nil {
 		return GatewayVerification{}, err
 	}
+	defer clearPaystackCredential(secret)
 	var response struct {
 		Status bool `json:"status"`
 		Data   struct {
@@ -158,10 +148,7 @@ func (g *PaystackGateway) Verify(ctx context.Context, reference string) (Gateway
 	return verification, nil
 }
 
-// VerifyWebhookSignature authenticates exactly the bytes received over HTTP.
-// It decodes the supplied hex signature before hmac.Equal, avoiding a
-// timing-sensitive string comparison and accepting no malformed value.
-func (g *PaystackGateway) VerifyWebhookSignature(ctx context.Context, raw []byte, supplied string) error {
+func (g *TenantPaystackGateway) VerifyWebhookSignature(ctx context.Context, raw []byte, supplied string) error {
 	if !g.Available() || len(raw) == 0 || len(raw) > paystackResponseMaxLen {
 		return ErrWebhookInvalid
 	}
@@ -173,7 +160,8 @@ func (g *PaystackGateway) VerifyWebhookSignature(ctx context.Context, raw []byte
 	if err != nil {
 		return fmt.Errorf("%w: resolve signing key", ErrGatewayUnavailable)
 	}
-	mac := hmac.New(sha512.New, []byte(secret))
+	defer clearPaystackCredential(secret)
+	mac := hmac.New(sha512.New, secret)
 	_, _ = mac.Write(raw)
 	if !hmac.Equal(mac.Sum(nil), provided) {
 		return ErrWebhookInvalid
@@ -181,51 +169,25 @@ func (g *PaystackGateway) VerifyWebhookSignature(ctx context.Context, raw []byte
 	return nil
 }
 
-func (*PaystackGateway) ParseWebhook(raw []byte) (GatewayWebhook, error) {
+func (*TenantPaystackGateway) ParseWebhook(raw []byte) (GatewayWebhook, error) {
 	return parsePaystackWebhook(raw)
 }
 
-func parsePaystackWebhook(raw []byte) (GatewayWebhook, error) {
-	var payload struct {
-		Event string `json:"event"`
-		Data  struct {
-			ID        json.Number `json:"id"`
-			Reference string      `json:"reference"`
-		} `json:"data"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&payload); err != nil {
-		return GatewayWebhook{}, ErrWebhookInvalid
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return GatewayWebhook{}, ErrWebhookInvalid
-	}
-	id := payload.Data.ID.String()
-	if !validPaystackEventType(payload.Event) || !validPositiveDecimal(id) || !validReference(payload.Data.Reference) {
-		return GatewayWebhook{}, ErrWebhookInvalid
-	}
-	return GatewayWebhook{
-		Provider: paystackName, EventID: payload.Event + ":" + id,
-		EventType: payload.Event, Reference: payload.Data.Reference,
-	}, nil
-}
-
-func (g *PaystackGateway) resolveSecret(ctx context.Context) (string, error) {
-	secret, err := g.secrets.Resolve(ctx, g.secretRef)
-	if err != nil || strings.TrimSpace(secret) == "" {
-		return "", errors.New("payments: Paystack secret is unavailable")
+func (g *TenantPaystackGateway) resolveSecret(ctx context.Context) ([]byte, error) {
+	secret, metadata, err := g.resolver.Resolve(ctx, g.tenantID, integrations.ProviderPaystack)
+	if err != nil || len(secret) == 0 || (metadata.PaystackMode != "TEST" && metadata.PaystackMode != "LIVE") {
+		return nil, errors.New("payments: Paystack secret is unavailable")
 	}
 	return secret, nil
 }
 
-func (g *PaystackGateway) doJSON(ctx context.Context, method, path, secret string, requestBody []byte, destination any) error {
+func (g *TenantPaystackGateway) doJSON(ctx context.Context, method, path string, secret, requestBody []byte, destination any) error {
 	endpoint := strings.TrimRight(g.baseURL, "/") + path
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(requestBody))
 	if err != nil {
 		return fmt.Errorf("payments: build Paystack request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Authorization", "Bearer "+string(secret))
 	req.Header.Set("Accept", "application/json")
 	if requestBody != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -250,31 +212,8 @@ func (g *PaystackGateway) doJSON(ctx context.Context, method, path, secret strin
 	return nil
 }
 
-func validPaystackReference(reference string) bool {
-	return len(reference) == 36 && strings.HasPrefix(reference, "pay-") && validReference(reference)
-}
-
-func validPaystackEventType(value string) bool {
-	if len(value) < 3 || len(value) > 80 {
-		return false
+func clearPaystackCredential(value []byte) {
+	for index := range value {
+		value[index] = 0
 	}
-	for _, char := range value {
-		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '.' || char == '-' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func validPositiveDecimal(value string) bool {
-	if len(value) == 0 || len(value) > 20 || value == "0" {
-		return false
-	}
-	for _, char := range value {
-		if char < '0' || char > '9' {
-			return false
-		}
-	}
-	return true
 }

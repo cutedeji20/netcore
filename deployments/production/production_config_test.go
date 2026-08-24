@@ -126,7 +126,7 @@ func TestProductionPostgresUsesSeparateBootstrapSuperuser(t *testing.T) {
 	requireNotContains(t, initText, "ALTER ROLE netcore_owner NOSUPERUSER")
 }
 
-func TestWorkerReceivesOnlyLogicalResendConfiguration(t *testing.T) {
+func TestWorkerUsesKeyVaultIntegrationConfigurationWithoutProviderKeys(t *testing.T) {
 	compose, err := os.ReadFile("compose.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -138,11 +138,11 @@ func TestWorkerReceivesOnlyLogicalResendConfiguration(t *testing.T) {
 		t.Fatal("worker section is not bounded by the radius service")
 	}
 	worker := composeText[workerStart:radiusStart]
-	requireContains(t, worker, "NETCORE_EMAIL_PROVIDER: ${NETCORE_EMAIL_PROVIDER:-disabled}")
-	requireContains(t, worker, "NETCORE_RESEND_API_KEY_REF: ${NETCORE_RESEND_API_KEY_REF:-}")
-	requireContains(t, worker, "NETCORE_EMAIL_FROM: ${NETCORE_EMAIL_FROM:-}")
+	requireContains(t, worker, "NETCORE_INTEGRATION_CRYPTO_BACKEND: ${NETCORE_INTEGRATION_CRYPTO_BACKEND:-disabled}")
+	requireContains(t, worker, "NETCORE_INTEGRATION_KEK_ID: ${NETCORE_INTEGRATION_KEK_ID:-}")
 	requireContains(t, worker, "/app:/run/netcore/runtime:ro")
 	requireNotContains(t, worker, "NETCORE_RESEND_API_KEY:")
+	requireNotContains(t, worker, "NETCORE_PAYSTACK_SECRET:")
 }
 
 func TestReceiptOutboxMigrationScopesGlobalWorkerOperations(t *testing.T) {

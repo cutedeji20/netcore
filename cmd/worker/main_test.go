@@ -6,39 +6,24 @@ import (
 
 	"github.com/netcore-isp/netcore/internal/config"
 	"github.com/netcore-isp/netcore/internal/database"
+	"github.com/netcore-isp/netcore/internal/integrations"
 )
 
-type workerTestSecretResolver struct {
-	values map[string]string
-	calls  int
+type workerTestResendResolver struct{}
+
+func (workerTestResendResolver) Resolve(_ context.Context, _ string, provider integrations.Provider) ([]byte, integrations.CredentialMetadata, error) {
+	if provider != integrations.ProviderResend {
+		return nil, integrations.CredentialMetadata{}, integrations.ErrCredentialInvalid
+	}
+	return []byte("re_test_secret"), integrations.CredentialMetadata{SenderEmail: "NetCore <access@notify.durabledatahubs.com>"}, nil
 }
 
-func (r *workerTestSecretResolver) Resolve(_ context.Context, reference string) (string, error) {
-	r.calls++
-	return r.values[reference], nil
-}
-
-func TestConfiguredReceiptProcessorUsesResendOnlyWhenEnabled(t *testing.T) {
+func TestConfiguredReceiptProcessorUsesTenantResendCredentialResolver(t *testing.T) {
 	cfg := &config.Config{
-		Secrets: config.Secrets{Backend: "sops"},
-		Email: config.Email{
-			Provider:        "resend",
-			ResendAPIKeyRef: "email.resend.api_key",
-			From:            "NetCore <access@notify.durabledatahubs.com>",
-		},
 		Payments: config.Payments{WebhookMaxAttempts: 5},
 	}
-	resolver := &workerTestSecretResolver{values: map[string]string{"email.resend.api_key": "re_test_secret"}}
-	processor, err := configuredReceiptProcessorWithResolver(context.Background(), cfg, &database.Pool{}, resolver)
-	if err != nil || processor == nil || resolver.calls != 1 {
-		t.Fatalf("processor=%v err=%v resolver_calls=%d", processor, err, resolver.calls)
-	}
-
-	disabled := *cfg
-	disabled.Email.Provider = "disabled"
-	resolver.calls = 0
-	processor, err = configuredReceiptProcessorWithResolver(context.Background(), &disabled, &database.Pool{}, resolver)
-	if err != nil || processor != nil || resolver.calls != 0 {
-		t.Fatalf("disabled processor=%v err=%v resolver_calls=%d", processor, err, resolver.calls)
+	processor, err := configuredReceiptProcessorWithCredentialResolver(cfg, &database.Pool{}, "tenant-data-hub", workerTestResendResolver{})
+	if err != nil || processor == nil {
+		t.Fatalf("processor=%v err=%v", processor, err)
 	}
 }

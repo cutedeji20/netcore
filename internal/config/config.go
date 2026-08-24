@@ -47,6 +47,10 @@ type Config struct {
 	Email    Email
 	Portal   Portal
 	Payments Payments
+	// IntegrationCrypto contains only the location of the Key Vault KEK used
+	// to wrap database-held provider credentials. It never contains a provider
+	// credential or an Azure client secret.
+	IntegrationCrypto IntegrationCrypto
 }
 
 type Database struct {
@@ -142,6 +146,14 @@ type Payments struct {
 	WebhookMaxAttempts  int
 }
 
+// IntegrationCrypto controls the envelope-key wrapper for dashboard-managed
+// provider credentials. The disabled default permits a staged deployment while
+// ensuring no provider can be connected until Key Vault is ready.
+type IntegrationCrypto struct {
+	Backend string
+	KEKID   string
+}
+
 // ValidationError aggregates every configuration problem so an operator sees
 // all of them at once instead of fixing one per restart.
 type ValidationError struct{ Problems []string }
@@ -231,6 +243,10 @@ func Load(getenv func(string) string) (*Config, error) {
 			PaystackCallbackURL: getenv("NETCORE_PAYSTACK_CALLBACK_URL"),
 			WebhookPollInterval: durDefault(getenv("NETCORE_WEBHOOK_POLL_INTERVAL"), time.Second),
 			WebhookMaxAttempts:  intDefault(getenv("NETCORE_WEBHOOK_MAX_ATTEMPTS"), 8),
+		},
+		IntegrationCrypto: IntegrationCrypto{
+			Backend: strDefault(getenv("NETCORE_INTEGRATION_CRYPTO_BACKEND"), "disabled"),
+			KEKID:   strings.TrimSpace(getenv("NETCORE_INTEGRATION_KEK_ID")),
 		},
 	}
 
@@ -374,6 +390,19 @@ func (c *Config) Validate() error {
 	default:
 		p = append(p, fmt.Sprintf("NETCORE_EMAIL_PROVIDER %q must be disabled or resend", c.Email.Provider))
 	}
+
+	switch c.IntegrationCrypto.Backend {
+	case "disabled":
+		if c.IntegrationCrypto.KEKID != "" {
+			p = append(p, "NETCORE_INTEGRATION_KEK_ID must be empty when NETCORE_INTEGRATION_CRYPTO_BACKEND=disabled")
+		}
+	case "azure-key-vault":
+		if !validAzureKeyVaultKeyID(c.IntegrationCrypto.KEKID) {
+			p = append(p, "NETCORE_INTEGRATION_KEK_ID must be a versioned Azure Key Vault key URL when NETCORE_INTEGRATION_CRYPTO_BACKEND=azure-key-vault")
+		}
+	default:
+		p = append(p, fmt.Sprintf("NETCORE_INTEGRATION_CRYPTO_BACKEND %q must be disabled or azure-key-vault", c.IntegrationCrypto.Backend))
+	}
 	if c.Portal.TenantSlug != "" && !validPortalTenantSlug(c.Portal.TenantSlug) {
 		p = append(p, "NETCORE_PORTAL_TENANT_SLUG must be a lowercase tenant slug when configured")
 	}
@@ -383,6 +412,12 @@ func (c *Config) Validate() error {
 	// exists — presence checks alone would let all of these through.
 	// ------------------------------------------------------------------
 	if c.Env.IsProduction() {
+		if c.Email.Provider != "disabled" {
+			p = append(p, "NETCORE_EMAIL_PROVIDER must be disabled in production; use a dashboard-managed encrypted integration")
+		}
+		if c.Payments.Gateway != "disabled" {
+			p = append(p, "NETCORE_PAYMENT_GATEWAY must be disabled in production; use a dashboard-managed encrypted integration")
+		}
 		if !c.Auth.RequireMFA {
 			p = append(p, "NETCORE_AUTH_REQUIRE_MFA must be true in production (privileged operator access)")
 		}
@@ -453,6 +488,19 @@ func validTrustedProxy(value string) bool {
 func validHTTPSURL(value string) bool {
 	parsed, err := url.ParseRequestURI(strings.TrimSpace(value))
 	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
+}
+
+func validAzureKeyVaultKeyID(value string) bool {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if !strings.HasSuffix(host, ".vault.azure.net") || strings.TrimSuffix(host, ".vault.azure.net") == "" {
+		return false
+	}
+	parts := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
+	return len(parts) == 3 && parts[0] == "keys" && parts[1] != "" && parts[2] != ""
 }
 
 func callbackOriginAllowed(value string, allowedOrigins []string) bool {

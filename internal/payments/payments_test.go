@@ -62,6 +62,7 @@ type memoryGateway struct {
 	initCalls      int
 	verifyCalls    int
 	initialization GatewayInitialization
+	checkErr       error
 }
 
 func (g *memoryGateway) Name() string    { return "paystack" }
@@ -75,6 +76,7 @@ func (g *memoryGateway) Verify(context.Context, string) (GatewayVerification, er
 	g.verifyCalls++
 	return g.verify, g.err
 }
+func (g *memoryGateway) Check(context.Context) error { return g.checkErr }
 
 func newPaymentService(t *testing.T, store *memoryPaymentStore, gateway *memoryGateway) *Service {
 	t.Helper()
@@ -127,6 +129,17 @@ func TestInitiatePassesConfiguredCallbackURLToGateway(t *testing.T) {
 func TestInitiateFailsBeforeCreatingPaymentWhenGatewayDisabled(t *testing.T) {
 	store := &memoryPaymentStore{}
 	service := newPaymentService(t, store, &memoryGateway{})
+	_, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001")
+	if !errors.Is(err, ErrGatewayUnavailable) || store.prepareCalls != 0 {
+		t.Fatalf("err=%v prepare_calls=%d", err, store.prepareCalls)
+	}
+}
+
+func TestInitiateDoesNotPersistPaymentWhenCredentialProbeFails(t *testing.T) {
+	// This fails if an absent dashboard-managed credential creates a pending
+	// subscription before the gateway can prove that it is usable.
+	store := &memoryPaymentStore{}
+	service := newPaymentService(t, store, &memoryGateway{available: true, checkErr: errors.New("credential unavailable")})
 	_, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001")
 	if !errors.Is(err, ErrGatewayUnavailable) || store.prepareCalls != 0 {
 		t.Fatalf("err=%v prepare_calls=%d", err, store.prepareCalls)

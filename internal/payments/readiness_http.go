@@ -45,14 +45,18 @@ type readinessResponse struct {
 	WebhookURL     string `json:"webhook_url,omitempty"`
 }
 
-func (h *ReadinessHTTP) get(w http.ResponseWriter, _ *http.Request) {
+func (h *ReadinessHTTP) get(w http.ResponseWriter, r *http.Request) {
 	response := readinessResponse{Provider: h.gateway.Name(), CheckoutStatus: "UNAVAILABLE"}
 	if response.Provider == "disabled" {
 		response.CheckoutStatus = "DISABLED"
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
-	if response.Provider == paystackName && h.gateway.Available() && validPaymentCallbackURL(h.callbackURL) {
+	ready := h.gateway.Available()
+	if probe, ok := h.gateway.(GatewayProbe); ok && ready {
+		ready = probe.Check(r.Context()) == nil
+	}
+	if response.Provider == paystackName && ready && validPaymentCallbackURL(h.callbackURL) {
 		response.CheckoutStatus = "READY"
 		response.CallbackURL = h.callbackURL
 		response.WebhookURL = webhookURL(h.callbackURL)

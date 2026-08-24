@@ -42,6 +42,13 @@ type Gateway interface {
 	Verify(context.Context, string) (GatewayVerification, error)
 }
 
+// GatewayProbe is implemented by gateways whose credentials are fetched at
+// request time. It lets Service reject an unavailable provider before it
+// creates a pending payment or subscription record.
+type GatewayProbe interface {
+	Check(context.Context) error
+}
+
 type GatewayInitialization struct {
 	Reference     string
 	AmountMinor   int64
@@ -159,6 +166,11 @@ func (s *Service) Initiate(ctx context.Context, tenantID, userID, planID, idempo
 	}
 	if !s.gateway.Available() {
 		return Checkout{}, ErrGatewayUnavailable
+	}
+	if probe, ok := s.gateway.(GatewayProbe); ok {
+		if err := probe.Check(ctx); err != nil {
+			return Checkout{}, ErrGatewayUnavailable
+		}
 	}
 	reference, err := newReference()
 	if err != nil {

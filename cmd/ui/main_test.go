@@ -72,7 +72,7 @@ func TestLoadPortalConfigUsesSameOriginLiveModeWithoutTenant(t *testing.T) {
 		}
 		return "lagos-hub"
 	})
-	if err != nil || config.Mode != "live" || config.APIBase != "" {
+	if err != nil || config.Mode != "live" || config.APIBase != "" || !config.AccountsEnabled || !config.PaymentsEnabled {
 		t.Fatalf("loadPortalConfig() = %#v, %v", config, err)
 	}
 	payload := httptest.NewRecorder()
@@ -82,65 +82,15 @@ func TestLoadPortalConfigUsesSameOriginLiveModeWithoutTenant(t *testing.T) {
 	}
 }
 
-func TestLoadPortalConfigEnablesAccountsOnlyForResend(t *testing.T) {
+func TestLoadPortalConfigDoesNotRequireProviderEnvironmentFlags(t *testing.T) {
 	config, err := loadPortalConfig(func(key string) string {
-		switch key {
-		case "NETCORE_UI_MODE":
+		if key == "NETCORE_UI_MODE" || key == "NETCORE_TENANT_SLUG" {
 			return "live"
-		case "NETCORE_TENANT_SLUG":
-			return "lagos-hub"
-		case "NETCORE_EMAIL_PROVIDER":
-			return "resend"
-		default:
-			return ""
-		}
-	})
-	if err != nil || !config.AccountsEnabled {
-		t.Fatalf("loadPortalConfig() = %#v, %v; want customer accounts enabled", config, err)
-	}
-
-	disabled, err := loadPortalConfig(func(key string) string {
-		if key == "NETCORE_UI_MODE" {
-			return "live"
-		}
-		if key == "NETCORE_TENANT_SLUG" {
-			return "lagos-hub"
 		}
 		return "disabled"
 	})
-	if err != nil || disabled.AccountsEnabled {
-		t.Fatalf("loadPortalConfig() = %#v, %v; disabled e-mail must not expose account setup", disabled, err)
-	}
-}
-
-func TestLoadPortalConfigEnablesPaymentsOnlyForPaystack(t *testing.T) {
-	configured, err := loadPortalConfig(func(key string) string {
-		switch key {
-		case "NETCORE_UI_MODE":
-			return "live"
-		case "NETCORE_TENANT_SLUG":
-			return "lagos-hub"
-		case "NETCORE_PAYMENT_GATEWAY":
-			return "paystack"
-		default:
-			return ""
-		}
-	})
-	if err != nil || !configured.PaymentsEnabled {
-		t.Fatalf("loadPortalConfig() = %#v, %v; want Paystack checkout enabled", configured, err)
-	}
-
-	disabled, err := loadPortalConfig(func(key string) string {
-		if key == "NETCORE_UI_MODE" {
-			return "live"
-		}
-		if key == "NETCORE_TENANT_SLUG" {
-			return "lagos-hub"
-		}
-		return "disabled"
-	})
-	if err != nil || disabled.PaymentsEnabled {
-		t.Fatalf("loadPortalConfig() = %#v, %v; disabled payments must not expose checkout", disabled, err)
+	if err != nil || !config.AccountsEnabled || !config.PaymentsEnabled {
+		t.Fatalf("loadPortalConfig() = %#v, %v; live portal must follow dashboard-managed providers", config, err)
 	}
 }
 
