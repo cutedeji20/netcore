@@ -139,7 +139,7 @@ func (h *HTTP) logout(w http.ResponseWriter, r *http.Request) {
 
 func (h *HTTP) me(w http.ResponseWriter, r *http.Request) {
 	principal, _ := PrincipalFromContext(r.Context())
-	writeJSON(w, http.StatusOK, meResponse{User: responseUser(principal)})
+	writeJSON(w, http.StatusOK, meResponse{User: responseUser(principal), ExpiresAt: principal.SessionExpiresAt})
 }
 
 // RequireAuth loads the session principal and places it on the request context.

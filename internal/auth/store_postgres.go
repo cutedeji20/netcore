@@ -95,7 +95,12 @@ VALUES ($1, 'USER', $2, 'AUTH_LOGIN', 'user', $2, NULLIF($3, '')::inet, NULLIF($
 func (s *PostgresStore) SessionPrincipal(ctx context.Context, tenantID string, tokenHash []byte) (principal Principal, found bool, err error) {
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
-SELECT s.id::text, s.tenant_id::text, u.id::text, COALESCE(u.email::text, '')
+SELECT s.id::text,
+       s.created_at,
+       s.expires_at,
+       s.tenant_id::text,
+       u.id::text,
+       COALESCE(u.email::text, '')
   FROM auth_sessions s
   JOIN users u ON u.id = s.user_id AND u.tenant_id = s.tenant_id
  WHERE s.tenant_id = $1
@@ -103,7 +108,12 @@ SELECT s.id::text, s.tenant_id::text, u.id::text, COALESCE(u.email::text, '')
    AND s.invalidated_at IS NULL
    AND s.expires_at > now()
    AND u.status = 'ACTIVE'`, tenantID, tokenHash).Scan(
-			&principal.SessionID, &principal.TenantID, &principal.UserID, &principal.Email,
+			&principal.SessionID,
+			&principal.SessionCreatedAt,
+			&principal.SessionExpiresAt,
+			&principal.TenantID,
+			&principal.UserID,
+			&principal.Email,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil

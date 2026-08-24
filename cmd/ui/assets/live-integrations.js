@@ -2,8 +2,8 @@
   "use strict";
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
   var payload = null;
+  var activePage = window.location.hash.slice(1) || "overview";
 
-  function settingsPage() { return window.location.hash.slice(1) === "settings"; }
   function request() {
     return fetch(apiBase + "/api/v1/integrations", { credentials: "include", cache: "no-store" })
       .then(function (response) { return response.ok ? response.json() : null; })
@@ -12,7 +12,7 @@
   }
   function element(name, text) { var node = document.createElement(name); if (text != null) node.textContent = text; return node; }
   function render() {
-    if (!settingsPage() || !window.NetCoreIntegrationDisplay) return;
+    if (activePage !== "settings" || !window.NetCoreIntegrationDisplay) return;
     var content = document.querySelector("#page-content");
     if (!content) return;
     var existing = content.querySelector("#integration-settings");
@@ -57,6 +57,9 @@
 	function close() { dialog.reset(); overlay.remove(); }
 	dialog.addEventListener("submit", function (event) { event.preventDefault(); var body = { password: password.value, mfa_code: mfa.value }; dialog.reset(); submit.disabled = true; fetch(apiBase + "/api/v1/integrations/" + provider + (action === "disable" ? "/disable" : ""), { method: action === "disable" ? "POST" : "DELETE", credentials: "include", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (response) { if (!response.ok) throw new Error(); close(); return request(); }).catch(function () { message.textContent = "The change was not completed. Check your password and authenticator code."; submit.disabled = false; }); });
   }
-  window.addEventListener("netcore:page-rendered", function (event) { if (event.detail === "settings") request(); });
-  if (settingsPage()) request();
+  window.addEventListener("netcore:page-rendered", function (event) {
+    activePage = event.detail || "overview";
+    if (activePage === "settings") request();
+  });
+  if (activePage === "settings") request();
 }());

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -50,6 +51,38 @@ func TestLoginSuccessSetsHTTPOnlySessionCookie(t *testing.T) {
 	}
 	if len(limiter.keys) != 2 || strings.Contains(limiter.keys[0], "admin@example.com") {
 		t.Fatalf("rate limit keys leaked raw account data: %v", limiter.keys)
+	}
+}
+
+func TestMeReturnsEffectiveSessionExpiry(t *testing.T) {
+	h, store, _ := newTestHTTP(t)
+	session, _, err := h.service.Login(context.Background(), LoginInput{
+		TenantSlug: "example", Identifier: "admin@example.com", Password: "correct password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.sessionCreatedAt = h.service.now().Add(-30 * time.Minute)
+	store.sessionExpiresAt = h.service.now().Add(23 * time.Hour)
+
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session.Token})
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	want := h.service.now().Add(30 * time.Minute)
+	if !body.ExpiresAt.Equal(want) {
+		t.Fatalf("expires_at = %v, want %v", body.ExpiresAt, want)
 	}
 }
 

@@ -56,6 +56,9 @@ services:
       NETCORE_SECRETS_BACKEND: sops
       NETCORE_SECRETS_REF: /run/netcore/runtime/netcore.json
       NETCORE_AUTH_REQUIRE_MFA: "true"
+      # An operator session is absolute, not sliding. This also caps sessions
+      # issued before a shorter production policy is deployed.
+      NETCORE_AUTH_SESSION_TTL: ${NETCORE_AUTH_SESSION_TTL:-8h}
       NETCORE_PORTAL_TENANT_SLUG: ${NETCORE_TENANT_SLUG:-}
       NETCORE_PAYSTACK_CALLBACK_URL: https://${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}/portal.html
       # Provider credentials are encrypted in PostgreSQL and wrapped by this
@@ -98,6 +101,7 @@ services:
       NETCORE_SECRETS_BACKEND: sops
       NETCORE_SECRETS_REF: /run/netcore/runtime/netcore.json
       NETCORE_AUTH_REQUIRE_MFA: "true"
+      NETCORE_AUTH_SESSION_TTL: ${NETCORE_AUTH_SESSION_TTL:-8h}
       NETCORE_PORTAL_TENANT_SLUG: ${NETCORE_TENANT_SLUG:-}
       NETCORE_PAYSTACK_CALLBACK_URL: https://${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}/portal.html
       NETCORE_INTEGRATION_CRYPTO_BACKEND: ${NETCORE_INTEGRATION_CRYPTO_BACKEND:-disabled}

@@ -45,11 +45,13 @@ type User struct {
 // Principal represents an authenticated actor. Permissions are a set because
 // role names must never become an authorization mechanism.
 type Principal struct {
-	SessionID   string
-	TenantID    string
-	UserID      string
-	Email       string
-	Permissions map[string]struct{}
+	SessionID        string
+	SessionCreatedAt time.Time
+	SessionExpiresAt time.Time
+	TenantID         string
+	UserID           string
+	Email            string
+	Permissions      map[string]struct{}
 }
 
 // HasPermission reports whether p has the named explicit permission.
@@ -215,6 +217,16 @@ func (s *Service) Authenticate(ctx context.Context, cookieValue string) (Princip
 		return Principal{}, fmt.Errorf("auth: load session: %w", err)
 	}
 	if !ok {
+		return Principal{}, ErrUnauthenticated
+	}
+	if principal.SessionCreatedAt.IsZero() || principal.SessionExpiresAt.IsZero() {
+		return Principal{}, ErrUnauthenticated
+	}
+	policyExpiresAt := principal.SessionCreatedAt.Add(s.sessionTTL)
+	if policyExpiresAt.Before(principal.SessionExpiresAt) {
+		principal.SessionExpiresAt = policyExpiresAt
+	}
+	if !principal.SessionExpiresAt.After(s.now()) {
 		return Principal{}, ErrUnauthenticated
 	}
 	return principal, nil

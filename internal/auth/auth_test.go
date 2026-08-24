@@ -12,13 +12,15 @@ import (
 const testTenantID = "11111111-1111-4111-8111-111111111111"
 
 type memoryStore struct {
-	tenantID    string
-	user        User
-	userFound   bool
-	tokenHash   []byte
-	invalidated bool
-	permissions map[string]struct{}
-	rehashed    string
+	tenantID         string
+	user             User
+	userFound        bool
+	tokenHash        []byte
+	invalidated      bool
+	permissions      map[string]struct{}
+	rehashed         string
+	sessionCreatedAt time.Time
+	sessionExpiresAt time.Time
 }
 
 type testMFAVerifier struct {
@@ -47,8 +49,10 @@ func (s *memoryStore) FindUser(_ context.Context, tenantID, identifier string) (
 	return s.user, s.userFound, nil
 }
 
-func (s *memoryStore) CreateSession(_ context.Context, _ User, tokenHash []byte, _ time.Time, _, _ string) error {
+func (s *memoryStore) CreateSession(_ context.Context, _ User, tokenHash []byte, expiresAt time.Time, _, _ string) error {
 	s.tokenHash = append([]byte(nil), tokenHash...)
+	s.sessionCreatedAt = expiresAt.Add(-time.Hour)
+	s.sessionExpiresAt = expiresAt
 	return nil
 }
 
@@ -56,13 +60,16 @@ func (s *memoryStore) SessionPrincipal(_ context.Context, tenantID string, token
 	if tenantID != s.tenantID || s.invalidated || string(tokenHash) != string(s.tokenHash) {
 		return Principal{}, false, nil
 	}
-	return Principal{
-		SessionID:   "22222222-2222-4222-8222-222222222222",
-		TenantID:    s.tenantID,
-		UserID:      s.user.ID,
-		Email:       s.user.Email,
-		Permissions: s.permissions,
-	}, true, nil
+	principal := Principal{
+		SessionID:        "22222222-2222-4222-8222-222222222222",
+		SessionCreatedAt: s.sessionCreatedAt,
+		SessionExpiresAt: s.sessionExpiresAt,
+		TenantID:         s.tenantID,
+		UserID:           s.user.ID,
+		Email:            s.user.Email,
+		Permissions:      s.permissions,
+	}
+	return principal, true, nil
 }
 
 func (s *memoryStore) InvalidateSession(_ context.Context, tenantID string, tokenHash []byte) error {
@@ -238,6 +245,22 @@ func TestLogoutInvalidatesSession(t *testing.T) {
 	}
 	if _, err := service.Authenticate(context.Background(), session.Token); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("Authenticate after logout = %v, want ErrUnauthenticated", err)
+	}
+}
+
+func TestAuthenticateRejectsExistingSessionPastConfiguredTTL(t *testing.T) {
+	service, store := newTestService(t)
+	session, _, err := service.Login(context.Background(), LoginInput{
+		TenantSlug: "example", Identifier: "admin@example.com", Password: "correct password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.sessionCreatedAt = service.now().Add(-time.Hour)
+	store.sessionExpiresAt = service.now().Add(23 * time.Hour)
+
+	if _, err := service.Authenticate(context.Background(), session.Token); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("Authenticate old session = %v, want unauthenticated", err)
 	}
 }
 

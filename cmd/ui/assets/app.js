@@ -28,10 +28,11 @@ const adminConfig = window.NETCORE_ADMIN_CONFIG || {};
 const liveAdapterPaths = [
   "/live-customers.js", "/live-subscriptions.js", "/live-plans.js", "/live-sessions.js",
   "/live-billing.js", "/live-network.js", "/live-vouchers.js", "/live-team.js",
-  "/live-security.js", "/live-automations.js", "/live-workspace.js", "/live-payment-readiness.js", "/integration-display.js", "/live-integrations.js"
+  "/live-security.js", "/live-automations.js", "/live-workspace.js", "/live-payment-readiness.js", "/integration-display.js", "/live-integrations.js", "/session-expiry.js"
 ];
 const hasLiveConfig = adminConfig.mode === "live" && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(String(adminConfig.tenant || ""));
 let adminState = { authorised: false, adaptersLoaded: false, identity: null };
+let cancelSessionExpiry = () => {};
 let toastTimer;
 
 const tag = (item) => {
@@ -133,6 +134,21 @@ function showLogin(message = "") {
   form.addEventListener("submit", submitLogin);
 }
 
+function lockExpiredSession() {
+  window.NETCORE_PRINCIPAL = null;
+  adminState = { authorised: false, adaptersLoaded: true, identity: null };
+  showLogin("Your secure session has expired. Sign in to continue.");
+}
+
+function scheduleSessionExpiry(expiresAt) {
+  cancelSessionExpiry();
+  if (!window.NetCoreSessionExpiry || typeof window.NetCoreSessionExpiry.arm !== "function") {
+    showLocked("The dashboard could not verify this session expiry safely.");
+    return;
+  }
+  cancelSessionExpiry = window.NetCoreSessionExpiry.arm(expiresAt, { onExpired: lockExpiredSession });
+}
+
 async function submitLogin(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -229,10 +245,13 @@ async function establishSession() {
   accessScreen.hidden = true;
   appShell.hidden = false;
   resetCommandOnLoad();
+  scheduleSessionExpiry(payload.expires_at);
   render(location.hash.slice(1) || "overview");
 }
 
 async function logout() {
+  cancelSessionExpiry();
+  cancelSessionExpiry = () => {};
   try {
     const response = await fetch("/auth/logout", { method: "POST", credentials: "same-origin", cache: "no-store" });
     if (!response.ok) throw new Error("logout rejected");

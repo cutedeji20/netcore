@@ -254,6 +254,11 @@ create tenants or grant every permission.
    the same-origin API. A session cookie is created only after all three are
    accepted; a missing, invalid, replayed or unavailable MFA factor creates no
    session. Every page and action still receives server-side permission checks.
+   Operator sessions are absolute, rather than extended by activity. The Compose
+   package uses an eight-hour maximum by default through
+   `NETCORE_AUTH_SESSION_TTL`; the dashboard locks itself at the server-provided
+   expiry and the API rejects older sessions even if they were issued before a
+   shorter policy was deployed.
 
 ## Current safe state
 
