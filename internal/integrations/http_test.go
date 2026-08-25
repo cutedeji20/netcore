@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/netcore-isp/netcore/internal/auth"
+	"github.com/netcore-isp/netcore/internal/logger"
 )
 
 func newTestIntegrationHTTP(t *testing.T) (*HTTP, *memoryIntegrationStore) {
@@ -129,4 +132,78 @@ func TestDisconnectHTTPClearsCredentialAfterStepUp(t *testing.T) {
 	if store.saved.Status != StatusDisconnected || len(store.saved.Envelope.Ciphertext) != 0 {
 		t.Fatalf("disconnect did not clear envelope: %#v", store.saved)
 	}
+}
+
+func TestConfigureResendLogsPrivateFailureStagesWithoutSubmittedSecrets(t *testing.T) {
+	// This fails if a Key Vault or database save failure is indistinguishable in
+	// production logs, or if diagnostic logging leaks the submitted secret.
+	cases := []struct {
+		name      string
+		wrapper   KeyWrapper
+		storeErr  error
+		wantStage string
+	}{
+		{name: "key vault", wrapper: failingIntegrationKeyWrapper{}, wantStage: "key_vault_wrap"},
+		{name: "database", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: errors.New("database write failed"), wantStage: "database_save"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(logger.New(&logs, logger.Options{ServiceName: "test", Env: "test"}))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+
+			store := &memoryIntegrationStore{err: tc.storeErr}
+			service, err := NewService(store, tc.wrapper, &testStepUpVerifier{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			handler, err := NewHTTP(service)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			const credential = "re_submitted_credential_must_not_appear"
+			const password = "submitted-password-must-not-appear"
+			const mfaCode = "654321"
+			request := integrationPrincipalRequest(http.MethodPut, "/api/v1/integrations/resend", []byte(`{"credential":"`+credential+`","sender_email":"access@example.test","password":"`+password+`","mfa_code":"`+mfaCode+`"}`))
+			request = request.WithContext(logger.WithRequestID(request.Context(), "integration-diagnostic-1"))
+			response := httptest.NewRecorder()
+
+			handler.configureResend(response, request)
+
+			if response.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body)
+			}
+			for _, forbidden := range []string{credential, password, mfaCode} {
+				if strings.Contains(response.Body.String(), forbidden) {
+					t.Fatalf("response exposed submitted value %q: %s", forbidden, response.Body)
+				}
+			}
+
+			var entry map[string]any
+			if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+				t.Fatalf("diagnostic log=%q: %v", logs.String(), err)
+			}
+			if entry["msg"] != "integration configuration failed" || entry["failure_stage"] != tc.wantStage || entry["request_id"] != "integration-diagnostic-1" {
+				t.Fatalf("diagnostic entry=%#v", entry)
+			}
+			for _, forbidden := range []string{credential, password, mfaCode, "database write failed"} {
+				if strings.Contains(logs.String(), forbidden) {
+					t.Fatalf("diagnostic log exposed %q: %s", forbidden, logs.String())
+				}
+			}
+		})
+	}
+}
+
+type failingIntegrationKeyWrapper struct{}
+
+func (failingIntegrationKeyWrapper) Wrap(context.Context, []byte) (WrappedDEK, error) {
+	return WrappedDEK{}, ErrKeyUnavailable
+}
+
+func (failingIntegrationKeyWrapper) Unwrap(context.Context, []byte, string) ([]byte, error) {
+	return nil, ErrKeyUnavailable
 }

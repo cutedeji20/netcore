@@ -3,10 +3,12 @@ package integrations
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/netcore-isp/netcore/internal/auth"
+	"github.com/netcore-isp/netcore/internal/logger"
 	"github.com/netcore-isp/netcore/internal/security"
 )
 
@@ -81,16 +83,7 @@ func (h *HTTP) configureResend(w http.ResponseWriter, r *http.Request) {
 	credential := []byte(input.Credential)
 	defer clear(credential)
 	err := h.service.Configure(r.Context(), ConfigureInput{Principal: principal, Password: input.Password, MFACode: input.MFACode, Provider: ProviderResend, Credential: credential, SenderEmail: input.SenderEmail})
-	if err != nil {
-		if errors.Is(err, ErrStepUpFailed) {
-			security.WriteError(w, r, http.StatusUnauthorized, "STEP_UP_FAILED", "Password or authenticator code was not accepted.")
-			return
-		}
-		if errors.Is(err, ErrInvalidSettings) || errors.Is(err, ErrInvalidCredential) {
-			security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "A valid Resend configuration is required.")
-			return
-		}
-		security.WriteError(w, r, http.StatusServiceUnavailable, "INTEGRATIONS_UNAVAILABLE", "Integration settings are temporarily unavailable.")
+	if h.writeConfigureError(w, r, err, "A valid Resend configuration is required.") {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -121,19 +114,35 @@ func (h *HTTP) configurePaystack(w http.ResponseWriter, r *http.Request) {
 	credential := []byte(input.Credential)
 	defer clear(credential)
 	err := h.service.Configure(r.Context(), ConfigureInput{Principal: principal, Password: input.Password, MFACode: input.MFACode, Provider: ProviderPaystack, Credential: credential, PaystackMode: input.Mode})
-	if err != nil {
-		if errors.Is(err, ErrStepUpFailed) {
-			security.WriteError(w, r, http.StatusUnauthorized, "STEP_UP_FAILED", "Password or authenticator code was not accepted.")
-			return
-		}
-		if errors.Is(err, ErrInvalidSettings) || errors.Is(err, ErrInvalidCredential) {
-			security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "A valid Paystack configuration is required.")
-			return
-		}
-		security.WriteError(w, r, http.StatusServiceUnavailable, "INTEGRATIONS_UNAVAILABLE", "Integration settings are temporarily unavailable.")
+	if h.writeConfigureError(w, r, err, "A valid Paystack configuration is required.") {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *HTTP) writeConfigureError(w http.ResponseWriter, r *http.Request, err error, invalidMessage string) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrStepUpFailed) {
+		security.WriteError(w, r, http.StatusUnauthorized, "STEP_UP_FAILED", "Password or authenticator code was not accepted.")
+		return true
+	}
+	if errors.Is(err, ErrInvalidSettings) || errors.Is(err, ErrInvalidCredential) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", invalidMessage)
+		return true
+	}
+
+	stage := "integration_service"
+	switch {
+	case errors.Is(err, ErrKeyUnavailable):
+		stage = "key_vault_wrap"
+	case errors.Is(err, ErrStoreUnavailable):
+		stage = "database_save"
+	}
+	logger.FromContext(r.Context(), slog.Default()).Error("integration configuration failed", slog.String("failure_stage", stage))
+	security.WriteError(w, r, http.StatusServiceUnavailable, "INTEGRATIONS_UNAVAILABLE", "Integration settings are temporarily unavailable.")
+	return true
 }
 
 func (h *HTTP) disable(provider Provider) http.HandlerFunc {
