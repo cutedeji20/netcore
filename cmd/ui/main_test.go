@@ -123,6 +123,28 @@ func TestDashboardAssetsHaveBrowserSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestStaffInvitationPageHasNoStoreNoReferrerSameOriginCSP(t *testing.T) {
+	handler, err := newHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/staff-invite.html", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+	if got := response.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Fatalf("Referrer-Policy = %q, want no-referrer", got)
+	}
+	const expectedCSP = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:"
+	if csp := response.Header().Get("Content-Security-Policy"); csp != expectedCSP {
+		t.Fatalf("CSP = %q, want %q", csp, expectedCSP)
+	}
+}
+
 func TestPreviewCommandPaletteClosesOnPageShow(t *testing.T) {
 	handler, err := newHandler()
 	if err != nil {

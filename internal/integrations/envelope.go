@@ -2,13 +2,10 @@ package integrations
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"errors"
-	"fmt"
-	"io"
 	"strings"
+
+	cryptoenvelope "github.com/netcore-isp/netcore/pkg/crypto/envelope"
 )
 
 const (
@@ -42,33 +39,16 @@ func EncryptCredential(ctx context.Context, wrapper KeyWrapper, tenantID string,
 		return CredentialEnvelope{}, ErrInvalidCredential
 	}
 
-	dek := make([]byte, dataEncryptionKeyLength)
-	if _, err := io.ReadFull(rand.Reader, dek); err != nil {
-		return CredentialEnvelope{}, fmt.Errorf("%w: generate data encryption key", ErrKeyUnavailable)
-	}
-	block, err := aes.NewCipher(dek)
+	record, err := cryptoenvelope.Seal(ctx, wrapper, credentialAAD(tenantID, provider), credential)
 	if err != nil {
-		return CredentialEnvelope{}, fmt.Errorf("%w: create cipher", ErrKeyUnavailable)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return CredentialEnvelope{}, fmt.Errorf("%w: create authenticated cipher", ErrKeyUnavailable)
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return CredentialEnvelope{}, fmt.Errorf("%w: generate nonce", ErrKeyUnavailable)
-	}
-	ciphertext := gcm.Seal(nil, nonce, credential, credentialAAD(tenantID, provider))
-	wrapped, err := wrapper.Wrap(ctx, dek)
-	if err != nil || len(wrapped.Ciphertext) == 0 || strings.TrimSpace(wrapped.KeyID) == "" {
 		return CredentialEnvelope{}, ErrKeyUnavailable
 	}
 
 	return CredentialEnvelope{
-		Ciphertext: append([]byte(nil), ciphertext...),
-		Nonce:      append([]byte(nil), nonce...),
-		WrappedDEK: append([]byte(nil), wrapped.Ciphertext...),
-		KEKKeyID:   strings.TrimSpace(wrapped.KeyID),
+		Ciphertext: record.Ciphertext,
+		Nonce:      record.Nonce,
+		WrappedDEK: record.WrappedDEK,
+		KEKKeyID:   record.KEKKeyID,
 	}, nil
 }
 
@@ -84,28 +64,19 @@ func DecryptCredential(ctx context.Context, wrapper KeyWrapper, tenantID string,
 	if !validTenantID(tenantID) {
 		return nil, ErrInvalidTenant
 	}
-	if len(envelope.Ciphertext) == 0 || len(envelope.WrappedDEK) == 0 || strings.TrimSpace(envelope.KEKKeyID) == "" {
-		return nil, ErrInvalidEnvelope
-	}
-
-	dek, err := wrapper.Unwrap(ctx, envelope.WrappedDEK, envelope.KEKKeyID)
-	if err != nil || len(dek) != dataEncryptionKeyLength {
-		return nil, ErrKeyUnavailable
-	}
-	block, err := aes.NewCipher(dek)
+	credential, err := cryptoenvelope.Open(ctx, wrapper, credentialAAD(tenantID, provider), cryptoenvelope.Record{
+		Ciphertext: envelope.Ciphertext, Nonce: envelope.Nonce,
+		WrappedDEK: envelope.WrappedDEK, KEKKeyID: envelope.KEKKeyID,
+	})
 	if err != nil {
-		return nil, ErrKeyUnavailable
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, ErrKeyUnavailable
-	}
-	if len(envelope.Nonce) != gcm.NonceSize() {
-		return nil, ErrInvalidEnvelope
-	}
-	credential, err := gcm.Open(nil, envelope.Nonce, envelope.Ciphertext, credentialAAD(tenantID, provider))
-	if err != nil {
-		return nil, ErrCredentialInvalid
+		switch {
+		case errors.Is(err, cryptoenvelope.ErrInvalidRecord):
+			return nil, ErrInvalidEnvelope
+		case errors.Is(err, cryptoenvelope.ErrAuthentication):
+			return nil, ErrCredentialInvalid
+		default:
+			return nil, ErrKeyUnavailable
+		}
 	}
 	if len(credential) == 0 || len(credential) > credentialMaxLength {
 		return nil, errors.New("integrations: decrypted credential violates policy")

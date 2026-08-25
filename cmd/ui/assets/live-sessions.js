@@ -4,9 +4,14 @@
   var loadedSessions = null;
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
+  var livePage = window.NetCoreLivePage;
 
   function currentPage() {
-    return window.location.hash.slice(1) || "overview";
+    return livePage.current();
+  }
+
+  function showState(state, options) {
+    livePage.showState("sessions", state, options);
   }
 
   function safeText(value) {
@@ -128,12 +133,7 @@
     var body = table.querySelector("tbody");
     body.replaceChildren();
     if (loadedSessions.length === 0) {
-      var emptyRow = document.createElement("tr");
-      var emptyCell = document.createElement("td");
-      emptyCell.colSpan = 5;
-      emptyCell.textContent = "No active sessions match this view.";
-      emptyRow.appendChild(emptyCell);
-      body.appendChild(emptyRow);
+      showState("empty", { message: "No active sessions match this view." });
       return;
     }
 
@@ -146,26 +146,30 @@
       appendStatusCell(row, session.status);
       body.appendChild(row);
     });
+    showState("records");
   }
 
-  function requestSessions() {
-    if (loadedSessions || requestInFlight) return;
+  function requestSessions(force) {
+    if (requestInFlight || (loadedSessions && !force)) return;
     requestInFlight = true;
+    if (!loadedSessions) showState("loading");
     fetch(apiBase + "/api/v1/sessions?limit=25&status=ACTIVE", {
       credentials: "include",
       cache: "no-store"
     })
       .then(function (response) {
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error("Sessions request failed");
         return response.json();
       })
       .then(function (payload) {
-        if (!payload || !Array.isArray(payload.data)) return;
+        if (!payload || !Array.isArray(payload.data)) throw new Error("Sessions response was invalid");
         loadedSessions = payload.data;
         displaySessions();
       })
       .catch(function () {
-        // The authorised page remains empty when its API request fails.
+        // Last verified records remain visible when a refresh fails.
+        if (loadedSessions) displaySessions();
+        showState("error", { message: "Sessions could not be loaded. Please try again.", preserve: Boolean(loadedSessions), retry: function () { requestSessions(true); } });
       })
       .finally(function () {
         requestInFlight = false;
@@ -174,10 +178,10 @@
 
   function onPageRendered(event) {
     if (event.detail !== "sessions") return;
-    if (loadedSessions) displaySessions();
+    if (loadedSessions) requestSessions(true);
     else requestSessions();
   }
 
-  window.addEventListener("netcore:page-rendered", onPageRendered);
+  livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
   if (currentPage() === "sessions") onPageRendered({ detail: "sessions" });
 }());

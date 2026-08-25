@@ -60,6 +60,7 @@ services:
       # issued before a shorter production policy is deployed.
       NETCORE_AUTH_SESSION_TTL: ${NETCORE_AUTH_SESSION_TTL:-8h}
       NETCORE_PORTAL_TENANT_SLUG: ${NETCORE_TENANT_SLUG:-}
+      NETCORE_STAFF_INVITE_URL: ${NETCORE_STAFF_INVITE_URL:-}
       NETCORE_PAYSTACK_CALLBACK_URL: https://${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}/portal.html
       # Provider credentials are encrypted in PostgreSQL and wrapped by this
       # versioned, non-exportable Key Vault key. No provider key is an env var.
@@ -103,6 +104,7 @@ services:
       NETCORE_AUTH_REQUIRE_MFA: "true"
       NETCORE_AUTH_SESSION_TTL: ${NETCORE_AUTH_SESSION_TTL:-8h}
       NETCORE_PORTAL_TENANT_SLUG: ${NETCORE_TENANT_SLUG:-}
+      NETCORE_STAFF_INVITE_URL: ${NETCORE_STAFF_INVITE_URL:-}
       NETCORE_PAYSTACK_CALLBACK_URL: https://${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}/portal.html
       NETCORE_INTEGRATION_CRYPTO_BACKEND: ${NETCORE_INTEGRATION_CRYPTO_BACKEND:-disabled}
       NETCORE_INTEGRATION_KEK_ID: ${NETCORE_INTEGRATION_KEK_ID:-}

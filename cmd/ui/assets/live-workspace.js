@@ -2,11 +2,17 @@
   "use strict";
 
   var workspace = null;
+  var workspaceIsEmpty = false;
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
+  var livePage = window.NetCoreLivePage;
 
   function currentPage() {
-    return window.location.hash.slice(1) || "overview";
+    return livePage.current();
+  }
+
+  function showState(state, options) {
+    livePage.showState("settings", state, options);
   }
 
   function safeText(value) {
@@ -36,7 +42,12 @@
   }
 
   function displayWorkspace() {
-    if (!workspace || currentPage() !== "settings") return;
+    if (currentPage() !== "settings") return;
+    if (workspaceIsEmpty) {
+      showState("empty", { message: "No workspace settings are available for this view." });
+      return;
+    }
+    if (!workspace) return;
     var content = document.querySelector("#page-content");
     var table = content.querySelector(".data-table");
     if (!table) return;
@@ -81,26 +92,36 @@
         side.appendChild(entry);
       });
     }
+    showState("records");
   }
 
-  function requestWorkspace() {
-    if (workspace || requestInFlight) return;
+  function requestWorkspace(force) {
+    if (requestInFlight || ((workspace || workspaceIsEmpty) && !force)) return;
     requestInFlight = true;
+    if (!workspace) showState("loading");
     fetch(apiBase + "/api/v1/workspace/settings", {
       credentials: "include",
       cache: "no-store"
     })
       .then(function (response) {
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error("Workspace request failed");
         return response.json();
       })
       .then(function (payload) {
-        if (!payload || typeof payload.name !== "string") return;
+        if (payload && Object.keys(payload).length === 0) {
+          workspaceIsEmpty = true;
+          displayWorkspace();
+          return;
+        }
+        if (!payload || typeof payload.name !== "string") throw new Error("Workspace response was invalid");
         workspace = payload;
+        workspaceIsEmpty = false;
         displayWorkspace();
       })
       .catch(function () {
-        // The authorised page remains empty when its API request fails.
+        // Last verified records remain visible when a refresh fails.
+        if (workspace || workspaceIsEmpty) displayWorkspace();
+        showState("error", { message: "Workspace settings could not be loaded. Please try again.", preserve: Boolean(workspace || workspaceIsEmpty), retry: function () { requestWorkspace(true); } });
       })
       .finally(function () {
         requestInFlight = false;
@@ -109,10 +130,10 @@
 
   function onPageRendered(event) {
     if (event.detail !== "settings") return;
-    if (workspace) displayWorkspace();
+    if (workspace || workspaceIsEmpty) requestWorkspace(true);
     else requestWorkspace();
   }
 
-  window.addEventListener("netcore:page-rendered", onPageRendered);
+  livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
   if (currentPage() === "settings") onPageRendered({ detail: "settings" });
 }());

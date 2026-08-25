@@ -4,9 +4,14 @@
   var loadedBatches = null;
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
+  var livePage = window.NetCoreLivePage;
 
   function currentPage() {
-    return window.location.hash.slice(1) || "overview";
+    return livePage.current();
+  }
+
+  function showState(state, options) {
+    livePage.showState("vouchers", state, options);
   }
 
   function safeText(value) {
@@ -101,12 +106,7 @@
     var body = table.querySelector("tbody");
     body.replaceChildren();
     if (loadedBatches.length === 0) {
-      var emptyRow = document.createElement("tr");
-      var emptyCell = document.createElement("td");
-      emptyCell.colSpan = 5;
-      emptyCell.textContent = "No voucher batches match this view.";
-      emptyRow.appendChild(emptyCell);
-      body.appendChild(emptyRow);
+      showState("empty", { message: "No voucher batches match this view." });
       return;
     }
 
@@ -119,26 +119,30 @@
       appendStatusCell(row, batch.status);
       body.appendChild(row);
     });
+    showState("records");
   }
 
-  function requestBatches() {
-    if (loadedBatches || requestInFlight) return;
+  function requestBatches(force) {
+    if (requestInFlight || (loadedBatches && !force)) return;
     requestInFlight = true;
+    if (!loadedBatches) showState("loading");
     fetch(apiBase + "/api/v1/vouchers/batches?limit=25", {
       credentials: "include",
       cache: "no-store"
     })
       .then(function (response) {
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error("Vouchers request failed");
         return response.json();
       })
       .then(function (payload) {
-        if (!payload || !Array.isArray(payload.data)) return;
+        if (!payload || !Array.isArray(payload.data)) throw new Error("Vouchers response was invalid");
         loadedBatches = payload.data;
         displayBatches();
       })
       .catch(function () {
-        // The authorised page remains empty when its API request fails.
+        // Last verified records remain visible when a refresh fails.
+        if (loadedBatches) displayBatches();
+        showState("error", { message: "Vouchers could not be loaded. Please try again.", preserve: Boolean(loadedBatches), retry: function () { requestBatches(true); } });
       })
       .finally(function () {
         requestInFlight = false;
@@ -147,10 +151,10 @@
 
   function onPageRendered(event) {
     if (event.detail !== "vouchers") return;
-    if (loadedBatches) displayBatches();
+    if (loadedBatches) requestBatches(true);
     else requestBatches();
   }
 
-  window.addEventListener("netcore:page-rendered", onPageRendered);
+  livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
   if (currentPage() === "vouchers") onPageRendered({ detail: "vouchers" });
 }());

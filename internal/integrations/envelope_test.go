@@ -41,11 +41,11 @@ func TestEnvelopeRoundTripBindsCredentialToTenantAndProvider(t *testing.T) {
 		t.Fatalf("decrypted credential = %q, want %q", got, want)
 	}
 
-	if _, err := DecryptCredential(context.Background(), wrapper, "tenant-b", ProviderResend, envelope); err == nil {
-		t.Fatal("decrypting for another tenant succeeded")
+	if _, err := DecryptCredential(context.Background(), wrapper, "tenant-b", ProviderResend, envelope); !errors.Is(err, ErrCredentialInvalid) {
+		t.Fatalf("other tenant error = %v, want ErrCredentialInvalid", err)
 	}
-	if _, err := DecryptCredential(context.Background(), wrapper, "tenant-a", ProviderPaystack, envelope); err == nil {
-		t.Fatal("decrypting for another provider succeeded")
+	if _, err := DecryptCredential(context.Background(), wrapper, "tenant-a", ProviderPaystack, envelope); !errors.Is(err, ErrCredentialInvalid) {
+		t.Fatalf("other provider error = %v, want ErrCredentialInvalid", err)
 	}
 }
 

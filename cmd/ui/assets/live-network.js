@@ -4,9 +4,14 @@
   var loadedRouters = null;
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
+  var livePage = window.NetCoreLivePage;
 
   function currentPage() {
-    return window.location.hash.slice(1) || "overview";
+    return livePage.current();
+  }
+
+  function showState(state, options) {
+    livePage.showState("network", state, options);
   }
 
   function safeText(value) {
@@ -98,12 +103,7 @@
     var body = table.querySelector("tbody");
     body.replaceChildren();
     if (loadedRouters.length === 0) {
-      var emptyRow = document.createElement("tr");
-      var emptyCell = document.createElement("td");
-      emptyCell.colSpan = 5;
-      emptyCell.textContent = "No routers match this view.";
-      emptyRow.appendChild(emptyCell);
-      body.appendChild(emptyRow);
+      showState("empty", { message: "No routers match this view." });
       return;
     }
 
@@ -116,26 +116,30 @@
       appendTagCell(row, routerStatusLabel(router.status), routerStatusClass(router.status));
       body.appendChild(row);
     });
+    showState("records");
   }
 
-  function requestRouters() {
-    if (loadedRouters || requestInFlight) return;
+  function requestRouters(force) {
+    if (requestInFlight || (loadedRouters && !force)) return;
     requestInFlight = true;
+    if (!loadedRouters) showState("loading");
     fetch(apiBase + "/api/v1/network/routers?limit=25", {
       credentials: "include",
       cache: "no-store"
     })
       .then(function (response) {
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error("Network request failed");
         return response.json();
       })
       .then(function (payload) {
-        if (!payload || !Array.isArray(payload.data)) return;
+        if (!payload || !Array.isArray(payload.data)) throw new Error("Network response was invalid");
         loadedRouters = payload.data;
         displayRouters();
       })
       .catch(function () {
-        // The authorised page remains empty when its API request fails.
+        // Last verified records remain visible when a refresh fails.
+        if (loadedRouters) displayRouters();
+        showState("error", { message: "Network data could not be loaded. Please try again.", preserve: Boolean(loadedRouters), retry: function () { requestRouters(true); } });
       })
       .finally(function () {
         requestInFlight = false;
@@ -144,10 +148,10 @@
 
   function onPageRendered(event) {
     if (event.detail !== "network") return;
-    if (loadedRouters) displayRouters();
+    if (loadedRouters) requestRouters(true);
     else requestRouters();
   }
 
-  window.addEventListener("netcore:page-rendered", onPageRendered);
+  livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
   if (currentPage() === "network") onPageRendered({ detail: "network" });
 }());

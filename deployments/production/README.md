@@ -111,6 +111,14 @@ NETCORE_INTEGRATION_CRYPTO_BACKEND=azure-key-vault
 NETCORE_INTEGRATION_KEK_ID=https://<vault>.vault.azure.net/keys/netcore-integrations-kek/<version>
 ```
 
+Set `NETCORE_STAFF_INVITE_URL` to the public HTTPS invitation page on the
+same exact origin as the dashboard (for example,
+`https://hotspot.durabledatahubs.com/staff-invite.html`). It is deployment
+configuration, not a secret: do not place invitation tokens, credentials, or
+query/fragment values in it. When Azure Key Vault envelope crypto is enabled,
+the production API refuses to start unless this URL is present, HTTPS, has no
+query or fragment, and its origin is listed in `NETCORE_ALLOWED_ORIGINS`.
+
 The Azure VM's **system-assigned managed identity** must receive only the
 `Key Vault Crypto Service Encryption User` role on that individual key. The
 vault must use a private endpoint and private DNS zone; public network access
@@ -146,6 +154,23 @@ first `up`, and inspect the API, worker, PostgreSQL and Redis logs. A migration
 failure is a stop condition; never delete a production data volume to make it
 start. Back up and restore-test PostgreSQL before applying any migration to a
 live environment.
+
+### Access and customer release rollout
+
+The staff-invitation and customer-profile release has a separate, deliberately
+non-destructive operator checklist in
+[`docs/production-rollout.md`](../../docs/production-rollout.md). It runs the
+migration before recreating only the API, worker, and UI, then exercises a
+disposable staff mailbox and customer profile. It does not charge Paystack,
+write to a router, or start/change FreeRADIUS.
+
+Before that checklist is started, confirm the Azure VM system-assigned managed
+identity still has only `Key Vault Crypto Service Encryption User` on the
+versioned key named by `NETCORE_INTEGRATION_KEK_ID`; confirm the vault private
+endpoint/DNS path remains available. Record the Azure portal or approved
+read-only CLI evidence without copying credentials or key material into a
+ticket or this repository. A failed Key Vault readiness check is a stop
+condition.
 
 ### FreeRADIUS durable spool and replay (staging first)
 

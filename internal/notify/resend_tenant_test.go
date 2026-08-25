@@ -100,3 +100,36 @@ func TestTenantResendNotifierLoadsDashboardCredentialForPaymentReceipt(t *testin
 		t.Fatalf("receipt resolver/sender = %q %q %q", resolver.tenantID, resolver.provider, request.From)
 	}
 }
+
+func TestTenantResendNotifierSendsInvitationWithInvitationScopedIdempotency(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Idempotency-Key"); got != "staff.invitation/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" {
+			t.Fatalf("idempotency key = %q", got)
+		}
+		if r.Referer() != "" {
+			t.Fatalf("referer = %q", r.Referer())
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = time.Second
+	notifier, err := NewTenantResendNotifier(&testTenantResendResolver{}, "tenant-data-hub", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifier.baseURL = server.URL
+	if err := notifier.SendStaffInvitationWithID(context.Background(), "staff@example.com", "https://app.example.test/invitations/accept#token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", time.Now().Add(time.Hour), "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTenantResendNotifierRejectsMalformedInvitationID(t *testing.T) {
+	notifier, err := NewTenantResendNotifier(&testTenantResendResolver{}, "tenant-data-hub", &http.Client{Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := notifier.SendStaffInvitationWithID(context.Background(), "staff@example.com", "https://app.example.test/accept#token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", time.Now().Add(time.Hour), "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); err == nil {
+		t.Fatal("malformed id was accepted")
+	}
+}

@@ -6,8 +6,10 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/netcore-isp/netcore/internal/database"
+	"github.com/netcore-isp/netcore/internal/team"
 )
 
 // PostgresStore uses the protected migration owner only for this local,
@@ -55,24 +57,43 @@ RETURNING id::text`, result.TenantID, record.Email, record.PasswordHash).Scan(&r
 			return fmt.Errorf("bootstrap: create first administrator: %w", err)
 		}
 
-		var roleID string
-		if err := tx.QueryRow(ctx, `
+		roleIDs := make(map[team.BuiltInRole]string, len(record.InitialRoles))
+		for _, role := range record.InitialRoles {
+			var roleID string
+			if err := tx.QueryRow(ctx, `
 INSERT INTO roles (tenant_id, name)
-VALUES ($1, 'Platform administrator')
-RETURNING id::text`, result.TenantID).Scan(&roleID); err != nil {
-			return fmt.Errorf("bootstrap: create administrator role: %w", err)
-		}
-		tag, err := tx.Exec(ctx, `
+VALUES ($1, $2)
+RETURNING id::text`, result.TenantID, string(role)).Scan(&roleID); err != nil {
+				return fmt.Errorf("bootstrap: create %s role: %w", role, err)
+			}
+			roleIDs[role] = roleID
+
+			var tag pgconn.CommandTag
+			var err error
+			if role == team.RoleAdministrator {
+				tag, err = tx.Exec(ctx, `
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT $1, id FROM permissions`, roleID)
-		if err != nil {
-			return fmt.Errorf("bootstrap: assign administrator permissions: %w", err)
+			} else {
+				tag, err = tx.Exec(ctx, `
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT $1, id FROM permissions WHERE name = ANY($2)`, roleID, role.Permissions())
+			}
+			if err != nil {
+				return fmt.Errorf("bootstrap: assign %s permissions: %w", role, err)
+			}
+			if tag.RowsAffected() == 0 {
+				return errors.New("bootstrap: permission catalogue is empty; run migrations first")
+			}
 		}
-		if tag.RowsAffected() == 0 {
-			return errors.New("bootstrap: permission catalogue is empty; run migrations first")
-		}
-		if _, err := tx.Exec(ctx, "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)", result.UserID, roleID); err != nil {
-			return fmt.Errorf("bootstrap: assign administrator role: %w", err)
+		for _, role := range record.InitialRoleAssignments {
+			roleID, ok := roleIDs[role]
+			if !ok {
+				return fmt.Errorf("bootstrap: initial role assignment %q was not seeded", role)
+			}
+			if _, err := tx.Exec(ctx, "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)", result.UserID, roleID); err != nil {
+				return fmt.Errorf("bootstrap: assign %s role: %w", role, err)
+			}
 		}
 		if _, err := tx.Exec(ctx, `
 INSERT INTO user_mfa_totp (tenant_id, user_id, secret_ref, status, last_used_counter, enabled_at)

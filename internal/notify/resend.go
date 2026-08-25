@@ -6,11 +6,14 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"strings"
 	"time"
 
@@ -52,6 +55,51 @@ type TenantResendNotifier struct {
 	tenantID string
 	client   *http.Client
 	baseURL  string
+}
+
+// StaffInvitationSender is implemented by tenant-scoped notifiers. The URL is
+// intentionally accepted only as HTTPS with its credential in a fragment;
+// fragments do not travel in HTTP requests or Referer headers.
+type StaffInvitationSender interface {
+	SendStaffInvitation(context.Context, string, string, time.Time) error
+}
+
+// TenantInvitationSender selects the active credential for the invitation's
+// tenant immediately before delivery. It is safe for use by a shared API
+// service handling invitations for more than one tenant.
+type TenantInvitationSender struct {
+	resolver TenantResendCredentialResolver
+	client   *http.Client
+}
+
+func NewTenantInvitationSender(resolver TenantResendCredentialResolver, client *http.Client) (*TenantInvitationSender, error) {
+	if resolver == nil {
+		return nil, errors.New("notify: tenant Resend credential resolver is required")
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	if client.Timeout <= 0 {
+		return nil, errors.New("notify: Resend HTTP client requires a timeout")
+	}
+	return &TenantInvitationSender{resolver: resolver, client: client}, nil
+}
+func (s *TenantInvitationSender) SendStaffInvitation(context.Context, string, string, time.Time) error {
+	return errors.New("notify: tenant is required for staff invitation")
+}
+func (s *TenantInvitationSender) SendStaffInvitationForTenant(ctx context.Context, tenantID, to, inviteURL string, expiresAt time.Time) error {
+	notifier, err := NewTenantResendNotifier(s.resolver, tenantID, s.client)
+	if err != nil {
+		return err
+	}
+	return notifier.SendStaffInvitation(ctx, to, inviteURL, expiresAt)
+}
+func (s *TenantInvitationSender) SendStaffInvitationForTenantWithID(ctx context.Context, tenantID, to, inviteURL string, expiresAt time.Time, invitationID string) error {
+	notifier, err := NewTenantResendNotifier(s.resolver, tenantID, s.client)
+	if err != nil {
+		return err
+	}
+	return notifier.SendStaffInvitationWithID(ctx, to, inviteURL, expiresAt, invitationID)
 }
 
 func NewTenantResendNotifier(resolver TenantResendCredentialResolver, tenantID string, client *http.Client) (*TenantResendNotifier, error) {
@@ -219,6 +267,77 @@ func (n *TenantResendNotifier) SendOTP(ctx context.Context, purpose auth.OTPPurp
 		return fmt.Errorf("notify: encode Resend message: %w", err)
 	}
 	return n.send(ctx, key, payload, "")
+}
+
+// SendStaffInvitation resolves the active tenant credential at delivery time.
+// It never logs the invite URL, provider credential, or provider response.
+func (n *TenantResendNotifier) SendStaffInvitation(ctx context.Context, to, inviteURL string, expiresAt time.Time) error {
+	return n.sendStaffInvitation(ctx, to, inviteURL, expiresAt, "")
+}
+
+// SendStaffInvitationWithID uses the non-secret invitation UUID as the
+// provider idempotency key. The credential remains only in the link fragment.
+func (n *TenantResendNotifier) SendStaffInvitationWithID(ctx context.Context, to, inviteURL string, expiresAt time.Time, invitationID string) error {
+	if !validInvitationUUID(invitationID) {
+		return errors.New("notify: staff invitation is invalid")
+	}
+	return n.sendStaffInvitation(ctx, to, inviteURL, expiresAt, invitationID)
+}
+
+func validInvitationUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i := range value {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if value[i] != '-' {
+				return false
+			}
+			continue
+		}
+		if !((value[i] >= '0' && value[i] <= '9') || (value[i] >= 'a' && value[i] <= 'f') || (value[i] >= 'A' && value[i] <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func (n *TenantResendNotifier) sendStaffInvitation(ctx context.Context, to, inviteURL string, expiresAt time.Time, invitationID string) error {
+	if n == nil || n.resolver == nil || n.client == nil || strings.TrimSpace(n.baseURL) == "" {
+		return errors.New("notify: tenant Resend notifier is unavailable")
+	}
+	destination := strings.TrimSpace(to)
+	parsed, err := mail.ParseAddress(destination)
+	if err != nil || parsed.Address != destination || expiresAt.IsZero() || !expiresAt.After(time.Now()) {
+		return errors.New("notify: staff invitation is invalid")
+	}
+	link, err := url.Parse(strings.TrimSpace(inviteURL))
+	if err != nil || link.Scheme != "https" || link.Host == "" || link.RawQuery != "" || !strings.HasPrefix(link.Fragment, "token=") || len(strings.TrimPrefix(link.Fragment, "token=")) != 43 {
+		return errors.New("notify: staff invitation is invalid")
+	}
+	key, metadata, err := n.resolver.Resolve(ctx, n.tenantID, integrations.ProviderResend)
+	if err != nil || len(key) == 0 || !validResendSender(metadata.SenderEmail) {
+		return errors.New("notify: Resend credential is unavailable")
+	}
+	defer clearCredential(key)
+	payload, err := json.Marshal(struct {
+		From    string `json:"from"`
+		To      string `json:"to"`
+		Subject string `json:"subject"`
+		Text    string `json:"text"`
+	}{
+		From: strings.TrimSpace(metadata.SenderEmail), To: destination, Subject: "You're invited to NetCore", Text: "Use this secure invitation link to set your password and authenticator app before " + expiresAt.UTC().Format(time.RFC3339) + ".\n\n" + link.String(),
+	})
+	if err != nil {
+		return errors.New("notify: encode staff invitation")
+	}
+	if invitationID != "" {
+		return n.send(ctx, key, payload, "staff.invitation/"+invitationID)
+	}
+	// The fallback key carries only a one-way URL digest, never the credential
+	// or recipient; the staff service always provides an invitation UUID.
+	digest := sha256.Sum256([]byte(link.String()))
+	return n.send(ctx, key, payload, "staff.invitation/"+hex.EncodeToString(digest[:]))
 }
 
 // SendPaymentReceipt implements payments.ReceiptSender for a fixed tenant.

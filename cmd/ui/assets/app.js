@@ -26,6 +26,7 @@ const accessScreen = document.querySelector("#admin-access");
 const logoutButton = document.querySelector("#logout-button");
 const adminConfig = window.NETCORE_ADMIN_CONFIG || {};
 const liveAdapterPaths = [
+  "/live-page.js",
   "/live-customers.js", "/live-subscriptions.js", "/live-plans.js", "/live-sessions.js",
   "/live-billing.js", "/live-network.js", "/live-vouchers.js", "/live-team.js",
   "/live-security.js", "/live-automations.js", "/live-workspace.js", "/live-payment-readiness.js", "/integration-display.js", "/live-integrations.js", "/session-expiry.js"
@@ -44,7 +45,11 @@ const entity = (item) => {
   return `<div class="entity"><span class="entity-mark">${initials}</span><span><strong>${name}</strong><small>${detail}</small></span></div>`;
 };
 const isTag = (value) => value.includes("|") && ["green","indigo","amber","red","gray"].includes(value.split("|")[1]);
-const heading = (page) => `<div class="page-heading"><div><p class="kicker">${page.kicker}</p><h1>${page.title}</h1><p class="description">${page.description}</p></div><div class="heading-actions"><button class="button" type="button" data-toast="Filters will appear here.">Filter</button><button class="button primary" type="button" data-toast="${page.action} is ready for the live-data phase.">＋ ${page.action}</button></div></div>`;
+const heading = (page) => {
+  const managedByLiveAdapter = page === pages.team || page === pages.customers;
+  const action = managedByLiveAdapter ? "" : `<button class="button primary" type="button" data-toast="${page.action} is ready for the live-data phase.">＋ ${page.action}</button>`;
+  return `<div class="page-heading"><div><p class="kicker">${page.kicker}</p><h1>${page.title}</h1><p class="description">${page.description}</p></div><div class="heading-actions"><button class="button" type="button" data-toast="Filters will appear here.">Filter</button>${action}</div></div>`;
+};
 const metrics = (items) => `<section class="metric-grid">${items.map(([name, value], index) => `<article class="metric"><p class="metric-label">${name}</p><p class="metric-value">${value}</p><span class="metric-change ${index === 2 ? "warn" : ""}">${index === 0 ? "↑ Healthy trend" : index === 1 ? "Updated today" : index === 2 ? "Needs attention" : "In current view"}</span></article>`).join("")}</section>`;
 const table = (page) => `<section class="panel table"><div class="toolbar"><input aria-label="Search ${page.title}" placeholder="Search ${page.title.toLowerCase()}" /><button class="button" type="button" data-toast="Filters will appear here.">All records ▾</button></div><table class="data-table"><thead><tr>${page.cols.map((column) => `<th>${column}</th>`).join("")}</tr></thead><tbody>${page.rows.map((row) => `<tr>${row.map((cell, index) => `<td>${index === 0 && cell.split("|").length === 3 ? entity(cell) : isTag(cell) ? tag(cell) : cell}</td>`).join("")}</tr>`).join("")}</tbody></table></section>`;
 
@@ -201,7 +206,7 @@ async function loadLiveAdapters() {
   // /api and /auth to the private API service; no cross-origin admin session
   // or browser-provided API target is allowed.
   window.NETCORE_API_URL = window.location.origin;
-  await Promise.all(liveAdapterPaths.map(loadAdapter));
+  for (const path of liveAdapterPaths) await loadAdapter(path);
   adminState.adaptersLoaded = true;
 }
 

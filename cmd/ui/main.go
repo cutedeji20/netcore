@@ -65,10 +65,10 @@ func newHandler() (http.Handler, error) {
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" || strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
-		if r.URL.Path == "/portal.html" {
+		if r.URL.Path == "/portal.html" || r.URL.Path == "/staff-invite.html" {
 			// A captive-portal handoff may briefly appear in the subsequent
-			// RouterOS login URL. The portal page itself must not be cached or
-			// forwarded as a Referer while the integration is being reviewed.
+			// RouterOS login URL. Invitation tokens live only in a URL fragment;
+			// both sensitive pages must not be cached or forwarded as a Referer.
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Referrer-Policy", "no-referrer")
 			w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:")

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/netcore-isp/netcore/pkg/crypto/envelope"
 	"github.com/netcore-isp/netcore/pkg/crypto/totp"
 )
 
@@ -24,6 +25,7 @@ type TOTPDevice struct {
 	TenantID        string
 	UserID          string
 	SecretRef       string
+	Envelope        MFASecretEnvelope
 	LastUsedCounter int64
 }
 
@@ -50,20 +52,25 @@ type SecretResolver interface {
 type MFAService struct {
 	store   MFAStore
 	secrets SecretResolver
+	wrapper envelope.KeyWrapper
 	now     func() time.Time
 	maxSkew int
 }
 
-func NewMFAService(store MFAStore, secrets SecretResolver) (*MFAService, error) {
+func NewMFAService(store MFAStore, secrets SecretResolver, wrapper envelope.KeyWrapper) (*MFAService, error) {
 	if store == nil {
 		return nil, errors.New("auth: MFA store is required")
 	}
 	if secrets == nil {
 		return nil, errors.New("auth: MFA secret resolver is required")
 	}
+	if wrapper == nil {
+		return nil, errors.New("auth: MFA key wrapper is required")
+	}
 	return &MFAService{
 		store:   store,
 		secrets: secrets,
+		wrapper: wrapper,
 		now:     time.Now,
 		maxSkew: 1,
 	}, nil
@@ -80,23 +87,36 @@ func (s *MFAService) VerifyTOTP(ctx context.Context, tenantID, userID, code stri
 	if err != nil {
 		return fmt.Errorf("%w: load device", ErrMFAUnavailable)
 	}
-	if !found || device.TenantID != tenantID || device.UserID != userID || device.SecretRef == "" {
+	if !found || device.TenantID != tenantID || device.UserID != userID {
 		return ErrInvalidMFA
 	}
-	secret, err := s.secrets.Resolve(ctx, device.SecretRef)
-	if err != nil || secret == "" {
-		return fmt.Errorf("%w: resolve device secret", ErrMFAUnavailable)
+	var secret string
+	if device.Envelope.complete() {
+		if device.SecretRef != "" {
+			return ErrInvalidMFA
+		}
+		secret, err = OpenTOTPSecret(ctx, s.wrapper, tenantID, userTOTPMFASubject, userID, device.Envelope)
+		if err != nil {
+			return ErrInvalidMFA
+		}
+	} else if device.Envelope.present() || device.SecretRef == "" {
+		return ErrInvalidMFA
+	} else {
+		secret, err = s.secrets.Resolve(ctx, device.SecretRef)
+		if err != nil || secret == "" {
+			return ErrMFAUnavailable
+		}
 	}
 	counter, matched, err := totp.Verify(secret, code, s.now(), totp.DefaultDigits, s.maxSkew)
 	if err != nil {
-		return fmt.Errorf("%w: verify device", ErrMFAUnavailable)
+		return ErrMFAUnavailable
 	}
 	if !matched {
 		return ErrInvalidMFA
 	}
 	consumed, err := s.store.ConsumeTOTPCounter(ctx, device, counter)
 	if err != nil {
-		return fmt.Errorf("%w: consume code", ErrMFAUnavailable)
+		return ErrMFAUnavailable
 	}
 	if !consumed {
 		return ErrInvalidMFA

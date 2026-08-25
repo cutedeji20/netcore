@@ -47,6 +47,9 @@ type Config struct {
 	Email    Email
 	Portal   Portal
 	Payments Payments
+	// Staff contains public browser-facing URLs used in staff workflows. It
+	// never contains invitation tokens or other secrets.
+	Staff Staff
 	// IntegrationCrypto contains only the location of the Key Vault KEK used
 	// to wrap database-held provider credentials. It never contains a provider
 	// credential or an Azure client secret.
@@ -146,6 +149,11 @@ type Payments struct {
 	WebhookMaxAttempts  int
 }
 
+// Staff configures the fixed public entry point for staff invitations.
+type Staff struct {
+	InviteURL string
+}
+
 // IntegrationCrypto controls the envelope-key wrapper for dashboard-managed
 // provider credentials. The disabled default permits a staged deployment while
 // ensuring no provider can be connected until Key Vault is ready.
@@ -243,6 +251,9 @@ func Load(getenv func(string) string) (*Config, error) {
 			PaystackCallbackURL: getenv("NETCORE_PAYSTACK_CALLBACK_URL"),
 			WebhookPollInterval: durDefault(getenv("NETCORE_WEBHOOK_POLL_INTERVAL"), time.Second),
 			WebhookMaxAttempts:  intDefault(getenv("NETCORE_WEBHOOK_MAX_ATTEMPTS"), 8),
+		},
+		Staff: Staff{
+			InviteURL: strings.TrimSpace(getenv("NETCORE_STAFF_INVITE_URL")),
 		},
 		IntegrationCrypto: IntegrationCrypto{
 			Backend: strDefault(getenv("NETCORE_INTEGRATION_CRYPTO_BACKEND"), "disabled"),
@@ -403,6 +414,12 @@ func (c *Config) Validate() error {
 	default:
 		p = append(p, fmt.Sprintf("NETCORE_INTEGRATION_CRYPTO_BACKEND %q must be disabled or azure-key-vault", c.IntegrationCrypto.Backend))
 	}
+	if c.Staff.InviteURL != "" && !validStaffInviteURL(c.Staff.InviteURL, c.Security.AllowedOrigins) {
+		p = append(p, "NETCORE_STAFF_INVITE_URL must be a fragment-free HTTPS URL without a query whose origin is listed in NETCORE_ALLOWED_ORIGINS")
+	}
+	if c.Env.IsProduction() && c.IntegrationCrypto.Backend == "azure-key-vault" && c.Staff.InviteURL == "" {
+		p = append(p, "NETCORE_STAFF_INVITE_URL is required in production when NETCORE_INTEGRATION_CRYPTO_BACKEND=azure-key-vault")
+	}
 	if c.Portal.TenantSlug != "" && !validPortalTenantSlug(c.Portal.TenantSlug) {
 		p = append(p, "NETCORE_PORTAL_TENANT_SLUG must be a lowercase tenant slug when configured")
 	}
@@ -506,6 +523,20 @@ func validAzureKeyVaultKeyID(value string) bool {
 func callbackOriginAllowed(value string, allowedOrigins []string) bool {
 	parsed, err := url.ParseRequestURI(strings.TrimSpace(value))
 	if err != nil {
+		return false
+	}
+	origin := parsed.Scheme + "://" + parsed.Host
+	for _, allowed := range allowedOrigins {
+		if allowed == origin {
+			return true
+		}
+	}
+	return false
+}
+
+func validStaffInviteURL(value string, allowedOrigins []string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return false
 	}
 	origin := parsed.Scheme + "://" + parsed.Host

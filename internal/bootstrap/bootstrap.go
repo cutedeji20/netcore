@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/netcore-isp/netcore/internal/team"
 	"github.com/netcore-isp/netcore/pkg/crypto/argon2id"
 	"github.com/netcore-isp/netcore/pkg/crypto/totp"
 )
@@ -30,14 +31,16 @@ type SecretResolver interface {
 // PasswordHash is already Argon2id-hashed; the raw password never reaches the
 // database store or an audit record.
 type Record struct {
-	TenantName         string
-	TenantSlug         string
-	Timezone           string
-	Currency           string
-	Email              string
-	PasswordHash       string
-	TOTPSecretRef      string
-	InitialTOTPCounter int64
+	TenantName             string
+	TenantSlug             string
+	Timezone               string
+	Currency               string
+	Email                  string
+	PasswordHash           string
+	TOTPSecretRef          string
+	InitialTOTPCounter     int64
+	InitialRoles           []team.BuiltInRole
+	InitialRoleAssignments []team.BuiltInRole
 }
 
 type Result struct {
@@ -104,6 +107,8 @@ func (s *Service) Run(ctx context.Context, in Input) (Result, error) {
 		return Result{}, fmt.Errorf("%w: authenticator code was not accepted", ErrInvalidInput)
 	}
 	record.InitialTOTPCounter = counter
+	record.InitialRoles = team.BuiltInRoles()
+	record.InitialRoleAssignments = []team.BuiltInRole{team.RoleAdministrator}
 	record.PasswordHash, err = s.hasher.Hash(in.Password)
 	if err != nil {
 		return Result{}, fmt.Errorf("bootstrap: hash first administrator password: %w", err)

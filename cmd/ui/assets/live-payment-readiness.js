@@ -4,9 +4,37 @@
   var payload = null;
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
+  var livePage = window.NetCoreLivePage;
 
   function currentPage() {
-    return window.location.hash.slice(1) || "overview";
+    return livePage.current();
+  }
+
+  function showState(state, retry) {
+    if (currentPage() !== "billing") return;
+    var content = document.querySelector("#page-content");
+    var split = content && content.querySelector(".split-grid");
+    if (!split) return;
+    var existing = content.querySelector("#payment-readiness");
+    if (existing) existing.remove();
+    var panel = document.createElement("section");
+    var message = document.createElement("p");
+    panel.id = "payment-readiness";
+    panel.className = "panel payment-readiness";
+    panel.setAttribute("data-live-state", state);
+    message.className = "description";
+    message.setAttribute("role", "status");
+    message.textContent = state === "loading" ? "Loading payment readiness…" : state === "empty" ? "No payment readiness details are available." : "Payment readiness could not be loaded. Please try again.";
+    panel.appendChild(message);
+    if (state === "error") {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "button";
+      button.textContent = "Retry";
+      button.addEventListener("click", retry);
+      panel.appendChild(button);
+    }
+    content.insertBefore(panel, split);
   }
 
   function toneClass(tone) {
@@ -24,9 +52,14 @@
     if (existing) existing.remove();
 
     var view = window.NetCorePaymentReadiness.toDisplay(payload);
+    if (!Array.isArray(view.rows) || view.rows.length === 0) {
+      showState("empty");
+      return;
+    }
     var panel = document.createElement("section");
     panel.id = "payment-readiness";
     panel.className = "panel payment-readiness";
+    panel.setAttribute("data-live-state", "records");
 
     var header = document.createElement("div");
     header.className = "panel-header";
@@ -56,24 +89,47 @@
     content.insertBefore(panel, split);
   }
 
-  function requestReadiness() {
-    if (payload || requestInFlight) return;
+  function showRefreshError() {
+    var panel = document.querySelector("#payment-readiness");
+    if (!panel) return;
+    var existing = panel.querySelector(".live-refresh-error");
+    if (existing) existing.remove();
+    var message = document.createElement("p");
+    var button = document.createElement("button");
+    message.className = "description live-refresh-error";
+    message.setAttribute("role", "status");
+    message.textContent = "Payment readiness could not be refreshed. Verified details are still shown.";
+    button.type = "button";
+    button.className = "button live-refresh-error";
+    button.textContent = "Retry";
+    button.addEventListener("click", function () { requestReadiness(true); });
+    panel.append(message, button);
+  }
+
+  function requestReadiness(force) {
+    if ((payload && !force) || requestInFlight) return;
     requestInFlight = true;
+    showState("loading");
     fetch(apiBase + "/api/v1/payments/readiness", {
       credentials: "include",
       cache: "no-store"
     })
       .then(function (response) {
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error("Payment readiness request failed");
         return response.json();
       })
       .then(function (body) {
-        if (!body || typeof body.provider !== "string" || typeof body.checkout_status !== "string") return;
+        if (!body || typeof body.provider !== "string" || typeof body.checkout_status !== "string") throw new Error("Payment readiness response was invalid");
         payload = body;
         displayReadiness();
       })
       .catch(function () {
-        // A failed or unauthorised request never turns into an invented status.
+        // Last verified records remain visible when a refresh fails; no status is invented.
+        if (payload) {
+          displayReadiness();
+          showRefreshError();
+        }
+        else showState("error", function () { requestReadiness(true); });
       })
       .finally(function () {
         requestInFlight = false;
@@ -82,10 +138,10 @@
 
   function onPageRendered(event) {
     if (event.detail !== "billing") return;
-    if (payload) displayReadiness();
+    if (payload) requestReadiness(true);
     else requestReadiness();
   }
 
-  window.addEventListener("netcore:page-rendered", onPageRendered);
+  livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
   if (currentPage() === "billing") onPageRendered({ detail: "billing" });
 }());

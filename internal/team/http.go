@@ -19,9 +19,11 @@ const maxSearchLength = 120
 
 // HTTP exposes staff-only team membership read endpoints.
 type HTTP struct {
-	store           Store
-	defaultPageSize int
-	maxPageSize     int
+	store             Store
+	defaultPageSize   int
+	maxPageSize       int
+	invitations       *Service
+	invitationLimiter auth.LoginLimiter
 }
 
 func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
@@ -48,6 +50,7 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"GET /api/v1/team/members",
 		sessions.RequireAuth(auth.RequirePermission("team.read", http.HandlerFunc(h.list))),
 	)
+	h.invitationRoutes(mux, sessions)
 	return nil
 }
 

@@ -154,6 +154,7 @@ func TestLoad_ProductionAzureIntegrationCryptoUsesOnlySafeKeyIdentifier(t *testi
 	m := baseProd()
 	m["NETCORE_INTEGRATION_CRYPTO_BACKEND"] = "azure-key-vault"
 	m["NETCORE_INTEGRATION_KEK_ID"] = "https://netcore-integrations.vault.azure.net/keys/netcore-integrations-kek/0123456789abcdef"
+	m["NETCORE_STAFF_INVITE_URL"] = "https://portal.example.com/staff-invite.html"
 	c, err := Load(env(m))
 	if err != nil {
 		t.Fatalf("Azure Key Vault integration configuration rejected: %v", err)
@@ -165,6 +166,44 @@ func TestLoad_ProductionAzureIntegrationCryptoUsesOnlySafeKeyIdentifier(t *testi
 	m["NETCORE_INTEGRATION_KEK_ID"] = "https://vault.example/keys/key/version"
 	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "NETCORE_INTEGRATION_KEK_ID") {
 		t.Fatalf("non-Key-Vault KEK identifier was accepted: %v", err)
+	}
+}
+
+func TestProductionRejectsUnsafeStaffInviteURL(t *testing.T) {
+	// This fails if an invitation can send a staff member to an untrusted or
+	// mutable URL while Key Vault-backed staff enrollment is enabled.
+	for name, inviteURL := range map[string]string{
+		"missing":        "",
+		"HTTP":           "http://portal.example.com/staff-invite.html",
+		"foreign origin": "https://attacker.example/staff-invite.html",
+		"query":          "https://portal.example.com/staff-invite.html?next=https://attacker.example",
+		"fragment":       "https://portal.example.com/staff-invite.html#token=unsafe",
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := baseProd()
+			m["NETCORE_INTEGRATION_CRYPTO_BACKEND"] = "azure-key-vault"
+			m["NETCORE_INTEGRATION_KEK_ID"] = "https://netcore-integrations.vault.azure.net/keys/netcore-integrations-kek/0123456789abcdef"
+			m["NETCORE_STAFF_INVITE_URL"] = inviteURL
+			if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "NETCORE_STAFF_INVITE_URL") {
+				t.Fatalf("unsafe staff invite URL accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestProductionAcceptsStaffInviteURL(t *testing.T) {
+	m := baseProd()
+	m["NETCORE_ALLOWED_ORIGINS"] = "https://hotspot.durabledatahubs.com"
+	m["NETCORE_INTEGRATION_CRYPTO_BACKEND"] = "azure-key-vault"
+	m["NETCORE_INTEGRATION_KEK_ID"] = "https://netcore-integrations.vault.azure.net/keys/netcore-integrations-kek/0123456789abcdef"
+	m["NETCORE_STAFF_INVITE_URL"] = "https://hotspot.durabledatahubs.com/staff-invite.html"
+
+	c, err := Load(env(m))
+	if err != nil {
+		t.Fatalf("valid staff invite URL rejected: %v", err)
+	}
+	if c.Staff.InviteURL != m["NETCORE_STAFF_INVITE_URL"] {
+		t.Fatalf("staff invite URL = %q, want %q", c.Staff.InviteURL, m["NETCORE_STAFF_INVITE_URL"])
 	}
 }
 

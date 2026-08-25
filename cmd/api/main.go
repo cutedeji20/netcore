@@ -113,6 +113,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// The same Key Vault KEK protects every database-held envelope, including
+	// dynamic MFA. A disabled wrapper fails dynamic enrollment closed while the
+	// legacy secret-reference verification path stays available.
+	keyWrapper, err := configuredIntegrationKeyWrapper(cfg)
+	if err != nil {
+		return err
+	}
 	authService, err := auth.NewService(authStore, passwordHasher, cfg.Auth.SessionTTL)
 	if err != nil {
 		return err
@@ -122,7 +129,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("MFA SecretStore: %w", err)
 		}
-		mfaService, err := auth.NewMFAService(authStore, secretStore)
+		mfaService, err := auth.NewMFAService(authStore, secretStore, keyWrapper)
 		if err != nil {
 			return err
 		}
@@ -138,11 +145,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	integrationWrapper, err := configuredIntegrationKeyWrapper(cfg)
-	if err != nil {
-		return err
-	}
-	integrationCredentialResolver, err := integrations.NewCredentialResolver(integrationStore, integrationWrapper)
+	integrationCredentialResolver, err := integrations.NewCredentialResolver(integrationStore, keyWrapper)
 	if err != nil {
 		return err
 	}
@@ -150,7 +153,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	integrationService, err := integrations.NewService(integrationStore, integrationWrapper, authService, integrationValidator)
+	integrationService, err := integrations.NewService(integrationStore, keyWrapper, authService, integrationValidator)
 	if err != nil {
 		return err
 	}
@@ -224,6 +227,17 @@ func run() error {
 	}
 	teamHTTP, err := team.NewHTTP(teamStore, cfg.Limits.DefaultPageSize, cfg.Limits.MaxPageSize)
 	if err != nil {
+		return err
+	}
+	teamInvitationSender, err := notify.NewTenantInvitationSender(integrationCredentialResolver, nil)
+	if err != nil {
+		return err
+	}
+	teamService, err := team.NewService(teamStore, keyWrapper, authService, teamInvitationSender, passwordHasher, cfg.Staff.InviteURL)
+	if err != nil {
+		return err
+	}
+	if err := teamHTTP.ConfigureInvitations(teamService, redisClient); err != nil {
 		return err
 	}
 	activityStore, err := security.NewActivityPostgresStore(postgres)

@@ -4,9 +4,14 @@
   var loadedWorkflows = null;
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
+  var livePage = window.NetCoreLivePage;
 
   function currentPage() {
-    return window.location.hash.slice(1) || "overview";
+    return livePage.current();
+  }
+
+  function showState(state, options) {
+    livePage.showState("automations", state, options);
   }
 
   function safeText(value) {
@@ -81,12 +86,7 @@
     var body = table.querySelector("tbody");
     body.replaceChildren();
     if (loadedWorkflows.length === 0) {
-      var emptyRow = document.createElement("tr");
-      var emptyCell = document.createElement("td");
-      emptyCell.colSpan = 5;
-      emptyCell.textContent = "No automation workflows match this view.";
-      emptyRow.appendChild(emptyCell);
-      body.appendChild(emptyRow);
+      showState("empty", { message: "No automation workflows match this view." });
       return;
     }
     loadedWorkflows.forEach(function (workflow) {
@@ -98,26 +98,30 @@
       appendStatusCell(row, workflow.status);
       body.appendChild(row);
     });
+    showState("records");
   }
 
-  function requestWorkflows() {
-    if (loadedWorkflows || requestInFlight) return;
+  function requestWorkflows(force) {
+    if (requestInFlight || (loadedWorkflows && !force)) return;
     requestInFlight = true;
+    if (!loadedWorkflows) showState("loading");
     fetch(apiBase + "/api/v1/automations?limit=25", {
       credentials: "include",
       cache: "no-store"
     })
       .then(function (response) {
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error("Automations request failed");
         return response.json();
       })
       .then(function (payload) {
-        if (!payload || !Array.isArray(payload.data)) return;
+        if (!payload || !Array.isArray(payload.data)) throw new Error("Automations response was invalid");
         loadedWorkflows = payload.data;
         displayWorkflows();
       })
       .catch(function () {
-        // The authorised page remains empty when its API request fails.
+        // Last verified records remain visible when a refresh fails.
+        if (loadedWorkflows) displayWorkflows();
+        showState("error", { message: "Automations could not be loaded. Please try again.", preserve: Boolean(loadedWorkflows), retry: function () { requestWorkflows(true); } });
       })
       .finally(function () {
         requestInFlight = false;
@@ -126,10 +130,10 @@
 
   function onPageRendered(event) {
     if (event.detail !== "automations") return;
-    if (loadedWorkflows) displayWorkflows();
+    if (loadedWorkflows) requestWorkflows(true);
     else requestWorkflows();
   }
 
-  window.addEventListener("netcore:page-rendered", onPageRendered);
+  livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
   if (currentPage() === "automations") onPageRendered({ detail: "automations" });
 }());
