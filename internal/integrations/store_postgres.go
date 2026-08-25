@@ -24,6 +24,26 @@ func NewPostgresStore(db *database.Pool) (*PostgresStore, error) {
 	return &PostgresStore{db: db}, nil
 }
 
+// integrationSaveArgs keeps the positional query arguments aligned with the
+// integration_providers insert columns in Save.
+func integrationSaveArgs(record Record) []any {
+	return []any{
+		record.TenantID,
+		string(record.Provider),
+		record.Envelope.Ciphertext,
+		record.Envelope.Nonce,
+		record.Envelope.WrappedDEK,
+		record.Envelope.KEKKeyID,
+		record.SenderEmail,
+		record.PaystackMode,
+		record.ActivatedAt,
+		record.LastTestedAt,
+		record.LastTestSucceeded,
+		record.UpdatedAt,
+		record.UpdatedBy,
+	}
+}
+
 func (s *PostgresStore) Save(ctx context.Context, record Record) error {
 	if s == nil || s.db == nil || !validTenantID(record.TenantID) || !record.Provider.Valid() || record.Status != StatusActive || record.UpdatedBy == "" {
 		return ErrStoreUnavailable
@@ -33,6 +53,7 @@ func (s *PostgresStore) Save(ctx context.Context, record Record) error {
 	}
 	err := s.db.InTenantTx(ctx, record.TenantID, func(tx pgx.Tx) error {
 		var integrationID string
+		args := integrationSaveArgs(record)
 		err := tx.QueryRow(ctx, `
 INSERT INTO integration_providers (
     tenant_id, provider, status, credential_ciphertext, credential_nonce,
@@ -57,10 +78,7 @@ ON CONFLICT (tenant_id, provider) DO UPDATE
  WHERE integration_providers.tenant_id = $1
    AND integration_providers.provider = $2
 RETURNING id::text`,
-			record.TenantID, string(record.Provider), record.Envelope.Ciphertext,
-			record.Envelope.Nonce, record.Envelope.WrappedDEK, record.Envelope.KEKKeyID,
-			record.SenderEmail, record.PaystackMode, record.LastTestedAt, record.LastTestSucceeded,
-			record.ActivatedAt, record.UpdatedAt, record.UpdatedBy,
+			args...,
 		).Scan(&integrationID)
 		if err != nil {
 			return fmt.Errorf("save integration envelope: %w", err)
