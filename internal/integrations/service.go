@@ -3,6 +3,7 @@ package integrations
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/mail"
 	"strings"
 	"time"
@@ -11,9 +12,14 @@ import (
 )
 
 var (
-	ErrStepUpFailed     = errors.New("integrations: step-up verification failed")
-	ErrInvalidSettings  = errors.New("integrations: invalid provider settings")
-	ErrStoreUnavailable = errors.New("integrations: configuration store unavailable")
+	ErrStepUpFailed      = errors.New("integrations: step-up verification failed")
+	ErrInvalidSettings   = errors.New("integrations: invalid provider settings")
+	ErrStoreUnavailable  = errors.New("integrations: configuration store unavailable")
+	ErrStorePrecondition = errors.New("integrations: configuration record is incomplete")
+	ErrStoreUpsert       = errors.New("integrations: provider configuration write failed")
+	ErrStoreAudit        = errors.New("integrations: provider configuration audit write failed")
+	ErrStoreTxSetup      = errors.New("integrations: configuration transaction setup failed")
+	ErrStoreTxCommit     = errors.New("integrations: configuration transaction commit failed")
 )
 
 const (
@@ -141,7 +147,7 @@ func (s *Service) Configure(ctx context.Context, input ConfigureInput) error {
 		LastTestedAt: now, LastTestSucceeded: true, ActivatedAt: now, UpdatedAt: now, UpdatedBy: input.Principal.UserID,
 	}
 	if err := s.store.Save(ctx, record); err != nil {
-		return ErrStoreUnavailable
+		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
 	return nil
 }

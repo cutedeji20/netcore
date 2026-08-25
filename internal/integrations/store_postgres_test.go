@@ -1,9 +1,13 @@
 package integrations
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/netcore-isp/netcore/internal/database"
 )
 
 func TestIntegrationSaveArgsKeepTimestampAndResultColumnsAligned(t *testing.T) {
@@ -29,5 +33,45 @@ func TestIntegrationSaveArgsKeepTimestampAndResultColumnsAligned(t *testing.T) {
 	want := []any{activatedAt, testedAt, true, updatedAt, record.UpdatedBy}
 	if !reflect.DeepEqual(got[8:], want) {
 		t.Fatalf("save arguments $9-$13 = %#v, want %#v", got[8:], want)
+	}
+}
+
+func TestPostgresStoreSaveClassifiesMalformedRecordBeforeDatabaseAccess(t *testing.T) {
+	// This fails if any incomplete persistence record is reported as a database
+	// outage, which would send production investigation to the wrong layer.
+	valid := Record{
+		TenantID:  "tenant-a",
+		Provider:  ProviderResend,
+		Status:    StatusActive,
+		UpdatedBy: "staff-a",
+		Envelope: CredentialEnvelope{
+			Ciphertext: []byte("ciphertext"),
+			Nonce:      make([]byte, 12),
+			WrappedDEK: []byte("wrapped"),
+			KEKKeyID:   "https://vault.example/keys/integrations/1",
+		},
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Record)
+	}{
+		{name: "tenant", mutate: func(record *Record) { record.TenantID = "" }},
+		{name: "provider", mutate: func(record *Record) { record.Provider = Provider("unknown") }},
+		{name: "status", mutate: func(record *Record) { record.Status = StatusDisabled }},
+		{name: "actor", mutate: func(record *Record) { record.UpdatedBy = "" }},
+		{name: "envelope", mutate: func(record *Record) { record.Envelope = CredentialEnvelope{} }},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := valid
+			test.mutate(&record)
+
+			err := (&PostgresStore{db: &database.Pool{}}).Save(context.Background(), record)
+			if !errors.Is(err, ErrStorePrecondition) {
+				t.Fatalf("Save error = %v, want ErrStorePrecondition", err)
+			}
+		})
 	}
 }

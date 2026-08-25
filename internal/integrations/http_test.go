@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/netcore-isp/netcore/internal/auth"
+	"github.com/netcore-isp/netcore/internal/database"
 	"github.com/netcore-isp/netcore/internal/logger"
 )
 
@@ -144,7 +145,12 @@ func TestConfigureResendLogsPrivateFailureStagesWithoutSubmittedSecrets(t *testi
 		wantStage string
 	}{
 		{name: "key vault", wrapper: failingIntegrationKeyWrapper{}, wantStage: "key_vault_wrap"},
-		{name: "database", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: errors.New("database write failed"), wantStage: "database_save"},
+		{name: "store precondition", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: ErrStorePrecondition, wantStage: "store_precondition"},
+		{name: "database upsert", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: ErrStoreUpsert, wantStage: "database_upsert"},
+		{name: "audit write", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: ErrStoreAudit, wantStage: "audit_write"},
+		{name: "database transaction setup", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: ErrStoreTxSetup, wantStage: "database_transaction_setup"},
+		{name: "database transaction commit", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: ErrStoreTxCommit, wantStage: "database_transaction_commit"},
+		{name: "database fallback", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: errors.New("database write failed"), wantStage: "database_save"},
 	}
 
 	for _, tc := range cases {
@@ -195,6 +201,40 @@ func TestConfigureResendLogsPrivateFailureStagesWithoutSubmittedSecrets(t *testi
 				}
 			}
 		})
+	}
+}
+
+func TestConfigureResendLabelsTenantTransactionSetupFailure(t *testing.T) {
+	// This fails if the real PostgreSQL store collapses a transaction setup
+	// failure into the generic database_save diagnostic stage.
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(logger.New(&logs, logger.Options{ServiceName: "test", Env: "test"}))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	service, err := NewService(&PostgresStore{db: &database.Pool{}}, testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, &testStepUpVerifier{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewHTTP(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := integrationPrincipalRequest(http.MethodPut, "/api/v1/integrations/resend", []byte(`{"credential":"re_transaction_setup_test","sender_email":"access@example.test","password":"current","mfa_code":"123456"}`))
+	request = request.WithContext(logger.WithRequestID(request.Context(), "integration-transaction-setup-1"))
+	response := httptest.NewRecorder()
+	handler.configureResend(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+	var entry map[string]any
+	if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+		t.Fatalf("diagnostic log=%q: %v", logs.String(), err)
+	}
+	if entry["failure_stage"] != "database_transaction_setup" || entry["request_id"] != "integration-transaction-setup-1" {
+		t.Fatalf("diagnostic entry=%#v", entry)
 	}
 }
 

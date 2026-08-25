@@ -45,13 +45,15 @@ func integrationSaveArgs(record Record) []any {
 }
 
 func (s *PostgresStore) Save(ctx context.Context, record Record) error {
-	if s == nil || s.db == nil || !validTenantID(record.TenantID) || !record.Provider.Valid() || record.Status != StatusActive || record.UpdatedBy == "" {
+	if s == nil || s.db == nil {
 		return ErrStoreUnavailable
 	}
-	if len(record.Envelope.Ciphertext) == 0 || len(record.Envelope.Nonce) != 12 || len(record.Envelope.WrappedDEK) == 0 || record.Envelope.KEKKeyID == "" {
-		return ErrStoreUnavailable
+	if !validTenantID(record.TenantID) || !record.Provider.Valid() || record.Status != StatusActive || record.UpdatedBy == "" || len(record.Envelope.Ciphertext) == 0 || len(record.Envelope.Nonce) != 12 || len(record.Envelope.WrappedDEK) == 0 || record.Envelope.KEKKeyID == "" {
+		return ErrStorePrecondition
 	}
+	phase := "setup"
 	err := s.db.InTenantTx(ctx, record.TenantID, func(tx pgx.Tx) error {
+		phase = "upsert"
 		var integrationID string
 		args := integrationSaveArgs(record)
 		err := tx.QueryRow(ctx, `
@@ -81,11 +83,22 @@ RETURNING id::text`,
 			args...,
 		).Scan(&integrationID)
 		if err != nil {
-			return fmt.Errorf("save integration envelope: %w", err)
+			return fmt.Errorf("%w: %w", ErrStoreUpsert, err)
 		}
-		return writeAudit(ctx, tx, record.TenantID, record.UpdatedBy, "INTEGRATION_CONFIGURED", integrationID, record.Provider)
+		phase = "audit"
+		if err := writeAudit(ctx, tx, record.TenantID, record.UpdatedBy, "INTEGRATION_CONFIGURED", integrationID, record.Provider); err != nil {
+			return fmt.Errorf("%w: %w", ErrStoreAudit, err)
+		}
+		phase = "commit"
+		return nil
 	})
 	if err != nil {
+		switch phase {
+		case "setup":
+			return fmt.Errorf("%w: %w", ErrStoreTxSetup, err)
+		case "commit":
+			return fmt.Errorf("%w: %w", ErrStoreTxCommit, err)
+		}
 		return fmt.Errorf("integrations: save record: %w", err)
 	}
 	return nil
