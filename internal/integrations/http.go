@@ -143,6 +143,10 @@ func (h *HTTP) writeConfigureError(w http.ResponseWriter, r *http.Request, err e
 		stage = "database_upsert"
 	case errors.Is(err, ErrStoreAudit):
 		stage = "audit_write"
+	case errors.Is(err, ErrStoreTxSetup):
+		stage = "database_transaction_setup"
+	case errors.Is(err, ErrStoreTxCommit):
+		stage = "database_transaction_commit"
 	case errors.Is(err, ErrStoreUnavailable):
 		stage = "database_save"
 	}
