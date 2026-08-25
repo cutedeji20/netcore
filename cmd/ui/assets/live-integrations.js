@@ -6,6 +6,11 @@
   var livePage = window.NetCoreLivePage;
   var activePage = livePage.current();
 
+  function insertPanel(content, panel) {
+    var splitGrid = content.querySelector(".split-grid");
+    content.insertBefore(panel, splitGrid && splitGrid.parentNode === content ? splitGrid : null);
+  }
+
   function renderState(state, retry) {
     if (activePage !== "settings") return;
     var content = document.querySelector("#page-content");
@@ -15,7 +20,7 @@
     var panel = element("section"); panel.id = "integration-settings"; panel.className = "panel"; panel.setAttribute("data-live-state", state);
     var message = element("p", state === "loading" ? "Loading integrations…" : state === "empty" ? "No integrations are available for this workspace." : "Integrations could not be loaded. Please try again."); message.className = "description"; message.setAttribute("role", "status"); panel.appendChild(message);
     if (state === "error") { var button = element("button", "Retry"); button.type = "button"; button.className = "button"; button.addEventListener("click", retry); panel.appendChild(button); }
-    content.insertBefore(panel, content.querySelector(".table") || null);
+    insertPanel(content, panel);
   }
 
   function appendFailure() {
@@ -59,7 +64,7 @@
       item.append(copy, state, action); cards.appendChild(item);
 	  if (card.status === "Active") { var disable = element("button", "Disable"); disable.type = "button"; disable.className = "button"; disable.addEventListener("click", function () { openConfirmation(card.provider, "disable"); }); var disconnect = element("button", "Disconnect"); disconnect.type = "button"; disconnect.className = "button"; disconnect.addEventListener("click", function () { openConfirmation(card.provider, "disconnect"); }); item.append(disable, disconnect); }
     });
-    panel.appendChild(cards); content.insertBefore(panel, content.querySelector(".table") || null);
+    panel.appendChild(cards); insertPanel(content, panel);
   }
   function openForm(provider) {
     var overlay = element("div"); overlay.className = "integration-dialog";

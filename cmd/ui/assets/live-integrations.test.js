@@ -34,6 +34,7 @@ class Element {
   }
 
   insertBefore(node, before) {
+    if (before && before.parentNode !== this) throw new Error("NotFoundError: reference node is not a child of this element");
     node.parentNode = this;
     const index = before ? this.children.indexOf(before) : -1;
     if (index === -1) this.children.push(node);
@@ -131,6 +132,50 @@ test("renders the Settings integrations panel when routing reports Settings with
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.ok(content.querySelector("#integration-settings"), "Settings must show the provider connection panel");
+});
+
+test("renders the Settings integrations panel beside a nested live table", async () => {
+  const body = new Element("body");
+  const content = new Element("main");
+  content.id = "page-content";
+  const splitGrid = new Element("section");
+  splitGrid.className = "split-grid";
+  const table = new Element("section");
+  table.className = "panel table";
+  splitGrid.appendChild(table);
+  content.appendChild(splitGrid);
+  body.appendChild(content);
+  const listeners = {};
+  const window = {
+    location: { origin: "https://hotspot.example.test", hash: "" },
+    NETCORE_API_URL: "https://hotspot.example.test",
+    NetCoreIntegrationDisplay: {
+      toCards: () => [{ provider: "resend", name: "Resend", status: "Disconnected", detail: "Email verification", action: "Connect" }]
+    },
+    NetCoreLivePage: {
+      current: () => "overview",
+      subscribe: (listener) => { listeners["netcore:page-rendered"] = listener; }
+    },
+    addEventListener: (name, listener) => { listeners[name] = listener; }
+  };
+  const document = {
+    body,
+    createElement: (name) => new Element(name),
+    querySelector: (selector) => body.querySelector(selector)
+  };
+  const source = fs.readFileSync(path.join(__dirname, "live-integrations.js"), "utf8");
+  vm.runInNewContext(source, {
+    window,
+    document,
+    fetch: async () => ({ ok: true, json: async () => ({ integrations: [] }) })
+  });
+
+  listeners["netcore:page-rendered"]("settings");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const panel = content.querySelector("#integration-settings");
+  assert.ok(panel, "Settings must render the provider connection panel when its records table is nested");
+  assert.equal(panel.parentNode, content, "integration panel must be a direct Settings child");
 });
 
 test("refetches integration cards after a successful save", async () => {
