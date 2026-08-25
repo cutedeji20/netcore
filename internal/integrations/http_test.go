@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/netcore-isp/netcore/internal/auth"
 	"github.com/netcore-isp/netcore/internal/database"
@@ -143,11 +146,17 @@ func TestConfigureResendLogsPrivateFailureStagesWithoutSubmittedSecrets(t *testi
 		wrapper   KeyWrapper
 		storeErr  error
 		wantStage string
+		wantCause string
+		forbidden string
 	}{
 		{name: "key vault", wrapper: failingIntegrationKeyWrapper{}, wantStage: "key_vault_wrap"},
 		{name: "store precondition", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: ErrStorePrecondition, wantStage: "store_precondition"},
 		{name: "database upsert", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: ErrStoreUpsert, wantStage: "database_upsert"},
-		{name: "audit write", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: ErrStoreAudit, wantStage: "audit_write"},
+		{name: "audit context cancellation", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: fmt.Errorf("%w: %w", ErrStoreAudit, context.Canceled), wantStage: "audit_write", wantCause: "context_cancelled"},
+		{name: "audit context deadline", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: fmt.Errorf("%w: %w", ErrStoreAudit, context.DeadlineExceeded), wantStage: "audit_write", wantCause: "context_deadline"},
+		{name: "audit PostgreSQL", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: fmt.Errorf("%w: %w", ErrStoreAudit, &pgconn.PgError{Code: "23514", Message: "private PostgreSQL diagnostic"}), wantStage: "audit_write", wantCause: "postgres_sqlstate_23514", forbidden: "private PostgreSQL diagnostic"},
+		{name: "audit malformed PostgreSQL code", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: fmt.Errorf("%w: %w", ErrStoreAudit, &pgconn.PgError{Code: "23514 private diagnostic", Message: "private PostgreSQL diagnostic"}), wantStage: "audit_write", wantCause: "driver_or_transport", forbidden: "private PostgreSQL diagnostic"},
+		{name: "audit driver", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: fmt.Errorf("%w: %w", ErrStoreAudit, errors.New("private driver diagnostic")), wantStage: "audit_write", wantCause: "driver_or_transport", forbidden: "private driver diagnostic"},
 		{name: "database transaction setup", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: ErrStoreTxSetup, wantStage: "database_transaction_setup"},
 		{name: "database transaction commit", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: ErrStoreTxCommit, wantStage: "database_transaction_commit"},
 		{name: "database fallback", wrapper: testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, storeErr: errors.New("database write failed"), wantStage: "database_save"},
@@ -195,7 +204,14 @@ func TestConfigureResendLogsPrivateFailureStagesWithoutSubmittedSecrets(t *testi
 			if entry["msg"] != "integration configuration failed" || entry["failure_stage"] != tc.wantStage || entry["request_id"] != "integration-diagnostic-1" {
 				t.Fatalf("diagnostic entry=%#v", entry)
 			}
-			for _, forbidden := range []string{credential, password, mfaCode, "database write failed"} {
+			if tc.wantCause != "" && entry["failure_cause"] != tc.wantCause {
+				t.Fatalf("failure_cause=%#v want %q; entry=%#v", entry["failure_cause"], tc.wantCause, entry)
+			}
+			forbiddenValues := []string{credential, password, mfaCode, "database write failed"}
+			if tc.forbidden != "" {
+				forbiddenValues = append(forbiddenValues, tc.forbidden)
+			}
+			for _, forbidden := range forbiddenValues {
 				if strings.Contains(logs.String(), forbidden) {
 					t.Fatalf("diagnostic log exposed %q: %s", forbidden, logs.String())
 				}

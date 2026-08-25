@@ -1,11 +1,14 @@
 package integrations
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/netcore-isp/netcore/internal/auth"
 	"github.com/netcore-isp/netcore/internal/logger"
@@ -150,8 +153,40 @@ func (h *HTTP) writeConfigureError(w http.ResponseWriter, r *http.Request, err e
 	case errors.Is(err, ErrStoreUnavailable):
 		stage = "database_save"
 	}
-	logger.FromContext(r.Context(), slog.Default()).Error("integration configuration failed", slog.String("failure_stage", stage))
+	attributes := []any{slog.String("failure_stage", stage)}
+	if stage == "audit_write" {
+		attributes = append(attributes, slog.String("failure_cause", auditFailureCause(err)))
+	}
+	logger.FromContext(r.Context(), slog.Default()).Error("integration configuration failed", attributes...)
 	security.WriteError(w, r, http.StatusServiceUnavailable, "INTEGRATIONS_UNAVAILABLE", "Integration settings are temporarily unavailable.")
+	return true
+}
+
+// auditFailureCause emits only a fixed diagnostic category. It deliberately
+// excludes PostgreSQL messages, constraints, driver details, and request data.
+func auditFailureCause(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "context_cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "context_deadline"
+	}
+	var databaseError *pgconn.PgError
+	if errors.As(err, &databaseError) && validSQLState(databaseError.Code) {
+		return "postgres_sqlstate_" + databaseError.Code
+	}
+	return "driver_or_transport"
+}
+
+func validSQLState(code string) bool {
+	if len(code) != 5 {
+		return false
+	}
+	for _, character := range code {
+		if !((character >= '0' && character <= '9') || (character >= 'A' && character <= 'Z')) {
+			return false
+		}
+	}
 	return true
 }
 
