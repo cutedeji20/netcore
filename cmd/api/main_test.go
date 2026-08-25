@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/netcore-isp/netcore/internal/config"
+)
 
 func TestHealthURL(t *testing.T) {
 	tests := []struct {
@@ -29,5 +34,17 @@ func TestHealthURL(t *testing.T) {
 func TestHealthURLRejectsAddressWithoutPort(t *testing.T) {
 	if _, err := healthURL("localhost"); err == nil {
 		t.Fatal("healthURL accepted an address without a port")
+	}
+}
+
+func TestDisabledKeyWrapperFailsClosed(t *testing.T) {
+	// This fails if a deployment without its Key Vault KEK can enroll dynamic
+	// MFA or integration secrets through a local fallback.
+	wrapper, err := configuredIntegrationKeyWrapper(&config.Config{IntegrationCrypto: config.IntegrationCrypto{Backend: "disabled"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wrapper.Wrap(context.Background(), make([]byte, 32)); err == nil {
+		t.Fatal("disabled key wrapper accepted a data encryption key")
 	}
 }

@@ -4,13 +4,18 @@
   var loadedTransactions = null;
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
+  var livePage = window.NetCoreLivePage;
   var currencyExponents = {
     JPY: 0, KRW: 0, VND: 0, CLP: 0, ISK: 0, XAF: 0, XOF: 0,
     BHD: 3, KWD: 3, OMR: 3, TND: 3, JOD: 3
   };
 
   function currentPage() {
-    return window.location.hash.slice(1) || "overview";
+    return livePage.current();
+  }
+
+  function showState(state, options) {
+    livePage.showState("billing", state, options);
   }
 
   function safeText(value) {
@@ -132,12 +137,7 @@
     var body = table.querySelector("tbody");
     body.replaceChildren();
     if (loadedTransactions.length === 0) {
-      var emptyRow = document.createElement("tr");
-      var emptyCell = document.createElement("td");
-      emptyCell.colSpan = 5;
-      emptyCell.textContent = "No billing transactions match this view.";
-      emptyRow.appendChild(emptyCell);
-      body.appendChild(emptyRow);
+      showState("empty", { message: "No billing transactions match this view." });
       return;
     }
 
@@ -150,26 +150,30 @@
       appendStatusCell(row, item);
       body.appendChild(row);
     });
+    showState("records");
   }
 
-  function requestTransactions() {
-    if (loadedTransactions || requestInFlight) return;
+  function requestTransactions(force) {
+    if (requestInFlight || (loadedTransactions && !force)) return;
     requestInFlight = true;
+    if (!loadedTransactions) showState("loading");
     fetch(apiBase + "/api/v1/billing/transactions?limit=25", {
       credentials: "include",
       cache: "no-store"
     })
       .then(function (response) {
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error("Billing request failed");
         return response.json();
       })
       .then(function (payload) {
-        if (!payload || !Array.isArray(payload.data)) return;
+        if (!payload || !Array.isArray(payload.data)) throw new Error("Billing response was invalid");
         loadedTransactions = payload.data;
         displayTransactions();
       })
       .catch(function () {
-        // The authorised page remains empty when its API request fails.
+        // Last verified records remain visible when a refresh fails.
+        if (loadedTransactions) displayTransactions();
+        showState("error", { message: "Billing data could not be loaded. Please try again.", preserve: Boolean(loadedTransactions), retry: function () { requestTransactions(true); } });
       })
       .finally(function () {
         requestInFlight = false;
@@ -178,10 +182,10 @@
 
   function onPageRendered(event) {
     if (event.detail !== "billing") return;
-    if (loadedTransactions) displayTransactions();
+    if (loadedTransactions) requestTransactions(true);
     else requestTransactions();
   }
 
-  window.addEventListener("netcore:page-rendered", onPageRendered);
+  livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
   if (currentPage() === "billing") onPageRendered({ detail: "billing" });
 }());

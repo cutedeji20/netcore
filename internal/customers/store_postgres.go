@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/netcore-isp/netcore/internal/database"
 )
@@ -15,6 +16,30 @@ import (
 // boundary. The explicit tenant predicate remains present in every query as a
 // second guard against accidental cross-tenant access.
 type PostgresStore struct{ db *database.Pool }
+
+const customerCreateSQL = `
+INSERT INTO customers (tenant_id, customer_number, status, first_name, last_name, email, phone)
+VALUES ($1, 'CUS-' || upper(replace(gen_random_uuid()::text, '-', '')), 'ACTIVE', $2, $3, $4, NULLIF($5, ''))
+RETURNING id::text, customer_number, status, COALESCE(first_name, ''),
+          COALESCE(last_name, ''), COALESCE(phone, ''), COALESCE(email::text, ''), created_at, updated_at`
+
+const customerUpdateSQL = `
+UPDATE customers
+   SET first_name = $3, last_name = $4, email = $5, phone = NULLIF($6, ''), updated_at = now()
+ WHERE tenant_id = $1 AND id = $2::uuid
+RETURNING id::text, customer_number, status, COALESCE(first_name, ''),
+          COALESCE(last_name, ''), COALESCE(phone, ''), COALESCE(email::text, ''), created_at, updated_at`
+
+const customerDeactivateSQL = `
+UPDATE customers
+   SET status = 'SUSPENDED', updated_at = now()
+ WHERE tenant_id = $1 AND id = $2::uuid
+RETURNING id::text, customer_number, status, COALESCE(first_name, ''),
+          COALESCE(last_name, ''), COALESCE(phone, ''), COALESCE(email::text, ''), created_at, updated_at`
+
+const customerAuditSQL = `
+INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id, ip_address, user_agent, metadata)
+VALUES ($1, 'USER', $2, $3, 'customers', $4, NULLIF($5, '')::inet, NULLIF($6, ''), '{}'::jsonb)`
 
 func NewPostgresStore(db *database.Pool) (*PostgresStore, error) {
 	if db == nil {
@@ -115,4 +140,93 @@ func nullableCursorID(cursor Cursor) any {
 		return nil
 	}
 	return cursor.ID
+}
+
+func (s *PostgresStore) Create(ctx context.Context, tenantID string, actor MutationActor, input WriteInput) (customer Customer, err error) {
+	if tenantID == "" || actor.UserID == "" || input.NormalizeAndValidate() != nil {
+		return Customer{}, ErrInvalidInput
+	}
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, customerCreateSQL,
+			tenantID, input.FirstName, input.LastName, input.Email, input.Phone,
+		)
+		if err := scanCustomer(row, &customer); err != nil {
+			return customerWriteError("insert customer", err)
+		}
+		return writeCustomerAudit(ctx, tx, tenantID, actor, "CUSTOMER_CREATED", customer.ID)
+	})
+	if err != nil {
+		return Customer{}, err
+	}
+	return customer, nil
+}
+
+func (s *PostgresStore) Update(ctx context.Context, tenantID, customerID string, actor MutationActor, input WriteInput) (customer Customer, err error) {
+	if tenantID == "" || !validUUID(customerID) || actor.UserID == "" || input.NormalizeAndValidate() != nil {
+		return Customer{}, ErrInvalidInput
+	}
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, customerUpdateSQL,
+			tenantID, customerID, input.FirstName, input.LastName, input.Email, input.Phone,
+		)
+		if err := scanCustomer(row, &customer); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return customerWriteError("update customer", err)
+		}
+		return writeCustomerAudit(ctx, tx, tenantID, actor, "CUSTOMER_UPDATED", customer.ID)
+	})
+	if err != nil {
+		return Customer{}, err
+	}
+	return customer, nil
+}
+
+// Deactivate intentionally changes only the customer lifecycle state. It
+// neither destroys data nor cascades into subscriptions, router sessions, or
+// any portal identity state.
+func (s *PostgresStore) Deactivate(ctx context.Context, tenantID, customerID string, actor MutationActor) (customer Customer, err error) {
+	if tenantID == "" || !validUUID(customerID) || actor.UserID == "" {
+		return Customer{}, ErrInvalidInput
+	}
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, customerDeactivateSQL, tenantID, customerID)
+		if err := scanCustomer(row, &customer); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("deactivate customer: %w", err)
+		}
+		return writeCustomerAudit(ctx, tx, tenantID, actor, "CUSTOMER_DEACTIVATED", customer.ID)
+	})
+	if err != nil {
+		return Customer{}, err
+	}
+	return customer, nil
+}
+
+func scanCustomer(row pgx.Row, customer *Customer) error {
+	return row.Scan(
+		&customer.ID, &customer.CustomerNumber, &customer.Status, &customer.FirstName,
+		&customer.LastName, &customer.Phone, &customer.Email, &customer.CreatedAt, &customer.UpdatedAt,
+	)
+}
+
+func writeCustomerAudit(ctx context.Context, tx pgx.Tx, tenantID string, actor MutationActor, action, customerID string) error {
+	_, err := tx.Exec(ctx, customerAuditSQL,
+		tenantID, actor.UserID, action, customerID, actor.IP, actor.UserAgent,
+	)
+	if err != nil {
+		return fmt.Errorf("write customer audit record: %w", err)
+	}
+	return nil
+}
+
+func customerWriteError(operation string, err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "customers_tenant_email_key" {
+		return ErrDuplicateEmail
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }

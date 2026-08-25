@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ type HTTP struct {
 	store           Store
 	defaultPageSize int
 	maxPageSize     int
+	clientIP        func(*http.Request) string
 }
 
 func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
@@ -49,6 +51,19 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"GET /api/v1/customers",
 		sessions.RequireAuth(auth.RequirePermission("customer.read", http.HandlerFunc(h.list))),
 	)
+	mux.Handle(
+		"POST /api/v1/customers",
+		sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("customer.write", http.HandlerFunc(h.create)))),
+	)
+	mux.Handle(
+		"PUT /api/v1/customers/{id}",
+		sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("customer.write", http.HandlerFunc(h.update)))),
+	)
+	mux.Handle(
+		"POST /api/v1/customers/{id}/deactivate",
+		sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("customer.write", http.HandlerFunc(h.deactivate)))),
+	)
+	h.clientIP = sessions.ClientIP
 	return nil
 }
 
@@ -85,6 +100,123 @@ func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {
 		response.Meta.NextCursor = encodeCursor(page.Next)
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *HTTP) create(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	input, err := decodeWriteInput(r)
+	if err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_CUSTOMER", "Customer details are invalid.")
+		return
+	}
+	customer, err := h.store.Create(r.Context(), principal.TenantID, h.mutationActor(r, principal.UserID), input)
+	if errors.Is(err, ErrDuplicateEmail) {
+		security.WriteError(w, r, http.StatusConflict, "CUSTOMER_EMAIL_EXISTS", "A customer with this e-mail already exists.")
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "CUSTOMERS_UNAVAILABLE", "Customer data is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusCreated, responseCustomer(customer))
+}
+
+func (h *HTTP) update(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	customerID := r.PathValue("id")
+	if !validUUID(customerID) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_CUSTOMER", "Customer details are invalid.")
+		return
+	}
+	input, err := decodeWriteInput(r)
+	if err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_CUSTOMER", "Customer details are invalid.")
+		return
+	}
+	customer, err := h.store.Update(r.Context(), principal.TenantID, customerID, h.mutationActor(r, principal.UserID), input)
+	if h.writeMutationError(w, r, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, responseCustomer(customer))
+}
+
+func (h *HTTP) deactivate(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	customerID := r.PathValue("id")
+	if !validUUID(customerID) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_CUSTOMER", "Customer details are invalid.")
+		return
+	}
+	customer, err := h.store.Deactivate(r.Context(), principal.TenantID, customerID, h.mutationActor(r, principal.UserID))
+	if h.writeMutationError(w, r, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, responseCustomer(customer))
+}
+
+func (h *HTTP) writeMutationError(w http.ResponseWriter, r *http.Request, err error) bool {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		security.WriteError(w, r, http.StatusNotFound, "CUSTOMER_NOT_FOUND", "The customer was not found.")
+	case errors.Is(err, ErrDuplicateEmail):
+		security.WriteError(w, r, http.StatusConflict, "CUSTOMER_EMAIL_EXISTS", "A customer with this e-mail already exists.")
+	case err != nil:
+		security.WriteError(w, r, http.StatusServiceUnavailable, "CUSTOMERS_UNAVAILABLE", "Customer data is temporarily unavailable.")
+	default:
+		return false
+	}
+	return true
+}
+
+type customerWriteRequest struct {
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Email     string `json:"email"`
+	Phone     string `json:"phone"`
+}
+
+func decodeWriteInput(r *http.Request) (WriteInput, error) {
+	var request customerWriteRequest
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 32<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return WriteInput{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return WriteInput{}, errors.New("additional JSON values")
+	}
+	input := WriteInput{FirstName: request.FirstName, LastName: request.LastName, Email: request.Email, Phone: request.Phone}
+	if err := input.NormalizeAndValidate(); err != nil {
+		return WriteInput{}, err
+	}
+	return input, nil
+}
+
+func (h *HTTP) mutationActor(r *http.Request, userID string) MutationActor {
+	return MutationActor{UserID: userID, IP: h.requestIP(r), UserAgent: r.UserAgent()}
+}
+
+func (h *HTTP) requestIP(r *http.Request) string {
+	if h.clientIP != nil {
+		return h.clientIP(r)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return ""
+	}
+	return host
 }
 
 func (h *HTTP) listOptions(r *http.Request) (ListOptions, error) {

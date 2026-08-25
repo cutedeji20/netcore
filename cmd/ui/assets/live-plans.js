@@ -4,9 +4,12 @@
   var loadedPlans = null;
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
+  var livePage = window.NetCoreLivePage;
   var currencyExponents = { JPY: 0, KRW: 0, VND: 0, CLP: 0, ISK: 0, XAF: 0, XOF: 0, BHD: 3, KWD: 3, OMR: 3, TND: 3, JOD: 3 };
 
-  function currentPage() { return window.location.hash.slice(1) || "overview"; }
+  function currentPage() { return livePage.current(); }
+
+  function showState(state, options) { livePage.showState("plans", state, options); }
 
   function canWritePlans() {
     var permissions = window.NETCORE_PRINCIPAL && window.NETCORE_PRINCIPAL.permissions;
@@ -122,12 +125,7 @@
     var body = table.querySelector("tbody");
     body.replaceChildren();
     if (loadedPlans.length === 0) {
-      var emptyRow = document.createElement("tr");
-      var emptyCell = document.createElement("td");
-      emptyCell.colSpan = canWritePlans() ? 7 : 6;
-      emptyCell.textContent = canWritePlans() ? "No plans yet. Create your first published plan." : "No plans match this view.";
-      emptyRow.appendChild(emptyCell);
-      body.appendChild(emptyRow);
+      showState("empty", { message: canWritePlans() ? "No plans yet. Create your first published plan." : "No plans match this view." });
       return;
     }
     loadedPlans.forEach(function (plan) {
@@ -141,20 +139,26 @@
       if (canWritePlans()) appendEditCell(row, plan);
       body.appendChild(row);
     });
+    showState("records");
   }
 
   function requestPlans(force) {
     if (requestInFlight || (loadedPlans && !force)) return;
     requestInFlight = true;
+    if (!loadedPlans) showState("loading");
     fetch(apiBase + "/api/v1/plans?limit=100", {
       credentials: "include", cache: "no-store", headers: { "Accept": "application/json" }
     }).then(function (response) {
       if (!response.ok) throw new Error("Plans could not be loaded.");
       return response.json();
     }).then(function (payload) {
-      loadedPlans = payload && Array.isArray(payload.data) ? payload.data : [];
+      if (!payload || !Array.isArray(payload.data)) throw new Error("Plans response was invalid");
+      loadedPlans = payload.data;
       displayPlans();
     }).catch(function (error) {
+      // Last verified records remain visible when a refresh fails.
+      if (loadedPlans) displayPlans();
+      showState("error", { message: "Plans could not be loaded. Please try again.", preserve: Boolean(loadedPlans), retry: function () { requestPlans(true); } });
       showPlanMessage(error && error.message ? error.message : "Plans could not be loaded.", true);
     }).finally(function () { requestInFlight = false; });
   }
@@ -331,9 +335,9 @@
 
   function onPageRendered(event) {
     if (event.detail !== "plans") return;
-    if (loadedPlans) displayPlans(); else requestPlans(false);
+    if (loadedPlans) requestPlans(true); else requestPlans(false);
   }
 
-  window.addEventListener("netcore:page-rendered", onPageRendered);
+  livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
   if (currentPage() === "plans") onPageRendered({ detail: "plans" });
 }());

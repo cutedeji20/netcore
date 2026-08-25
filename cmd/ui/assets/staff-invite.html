@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>Complete staff invitation · NetCore</title>
+    <link rel="stylesheet" href="/app.css" />
+    <script src="/staff-invite.js" defer></script>
+  </head>
+  <body class="staff-invite-page">
+    <main class="staff-invite-card" aria-live="polite">
+      <p class="kicker">NetCore team access</p>
+      <h1>Complete your invitation</h1>
+      <p id="staff-invite-message" class="description">Checking your invitation…</p>
+      <section id="staff-mfa-setup" hidden>
+        <p>Save this authenticator setup information before continuing.</p>
+        <label>Manual setup key<textarea id="staff-mfa-key" readonly></textarea></label>
+        <label>Authenticator URI<textarea id="staff-mfa-uri" readonly></textarea></label>
+      </section>
+      <form id="staff-invite-form" hidden>
+        <label>New password<input name="password" type="password" autocomplete="new-password" required /></label>
+        <label>Authenticator code<input name="mfa_code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label>
+        <p id="staff-invite-error" class="staff-invite-error" role="alert"></p>
+        <button class="button primary" type="submit">Complete invitation</button>
+      </form>
+    </main>
+  </body>
+</html>

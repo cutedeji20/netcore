@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/netcore-isp/netcore/internal/database"
 )
@@ -16,6 +17,24 @@ import (
 // boundary. Every tenant-owned query includes both a tenant predicate and the
 // transaction-local RLS setting: neither protection is relied upon alone.
 type PostgresStore struct{ db *database.Pool }
+
+const customerProfileForUpdateSQL = `
+SELECT id::text, user_id::text
+  FROM customers
+ WHERE tenant_id = $1 AND email = $2
+ FOR UPDATE`
+
+const linkExistingCustomerSQL = `
+UPDATE customers
+   SET user_id = $3::uuid, updated_at = now()
+ WHERE tenant_id = $1 AND id = $2::uuid AND user_id IS NULL`
+
+const createDefaultCustomerSQL = `
+INSERT INTO customers (tenant_id, user_id, customer_number, status, email)
+VALUES ($1, $2, 'CUS-' || replace(gen_random_uuid()::text, '-', ''), 'ACTIVE', $3)
+ON CONFLICT (tenant_id, user_id) WHERE user_id IS NOT NULL
+DO UPDATE SET email = EXCLUDED.email, updated_at = now()
+RETURNING id::text`
 
 func NewPostgresStore(db *database.Pool) (*PostgresStore, error) {
 	if db == nil {
@@ -210,54 +229,96 @@ DO UPDATE SET password_hash = EXCLUDED.password_hash,
 // one tenant transaction. Customer linking is idempotent and the unique index
 // introduced with this workflow prevents duplicate profiles during retries.
 func (s *PostgresStore) VerifyEmailAndEnsureCustomer(ctx context.Context, tenantID, email string) error {
+	email = NormalizeLoginIdentifier(email)
 	if tenantID == "" || email == "" {
 		return ErrInvalidAccountInput
 	}
 	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		var userID string
-		transitioned := false
-		err := tx.QueryRow(ctx, `
+		return verifyEmailAndEnsureCustomerTx(ctx, tx, tenantID, email)
+	})
+}
+
+// verifyEmailAndEnsureCustomerTx contains the complete verification/linking
+// workflow so its transaction ordering can be exercised without a database
+// harness. The public entry point above always calls it inside InTenantTx.
+func verifyEmailAndEnsureCustomerTx(ctx context.Context, tx pgx.Tx, tenantID, email string) error {
+	var userID string
+	transitioned := false
+	err := tx.QueryRow(ctx, `
 UPDATE users
    SET email_verified_at = now(), updated_at = now()
  WHERE tenant_id = $1
    AND email = $2
    AND email_verified_at IS NULL
 RETURNING id::text`, tenantID, email).Scan(&userID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			err = tx.QueryRow(ctx, `
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = tx.QueryRow(ctx, `
 SELECT id::text
   FROM users
  WHERE tenant_id = $1
-   AND email = $2
-   AND email_verified_at IS NOT NULL`, tenantID, email).Scan(&userID)
-		} else if err == nil {
-			transitioned = true
-		}
-		if errors.Is(err, pgx.ErrNoRows) {
-			return errors.New("verified e-mail registration user was not found")
-		}
-		if err != nil {
-			return fmt.Errorf("mark e-mail verified: %w", err)
-		}
+  AND email = $2
+  AND email_verified_at IS NOT NULL`, tenantID, email).Scan(&userID)
+	} else if err == nil {
+		transitioned = true
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("verified e-mail registration user was not found")
+	}
+	if err != nil {
+		return fmt.Errorf("mark e-mail verified: %w", err)
+	}
 
-		var customerID string
-		if err := tx.QueryRow(ctx, `
-INSERT INTO customers (tenant_id, user_id, customer_number, status, email)
-VALUES ($1, $2, 'CUS-' || replace(gen_random_uuid()::text, '-', ''), 'ACTIVE', $3)
-ON CONFLICT (tenant_id, user_id) WHERE user_id IS NOT NULL
-DO UPDATE SET email = EXCLUDED.email, updated_at = now()
-RETURNING id::text`, tenantID, userID, email).Scan(&customerID); err != nil {
+	// A profile made by staff is linked before the public-registration
+	// fallback is considered. The row lock keeps retries idempotent and
+	// prevents a duplicate profile for the same canonical e-mail.
+	var customerID string
+	var linkedUserID pgtype.Text
+	err = tx.QueryRow(ctx, customerProfileForUpdateSQL, tenantID, email).Scan(&customerID, &linkedUserID)
+	linkAction, linkErr := selectCustomerLinkAction(err, linkedUserID, userID)
+	if linkErr != nil {
+		return linkErr
+	}
+	switch linkAction {
+	case linkExistingCustomer:
+		if _, err := tx.Exec(ctx, linkExistingCustomerSQL, tenantID, customerID, userID); err != nil {
+			return fmt.Errorf("link existing customer profile: %w", err)
+		}
+	case createDefaultCustomer:
+		if err := tx.QueryRow(ctx, createDefaultCustomerSQL, tenantID, userID, email).Scan(&customerID); err != nil {
 			return fmt.Errorf("ensure customer profile: %w", err)
 		}
-		if transitioned {
-			if _, err := tx.Exec(ctx, `
+	}
+	if transitioned {
+		if _, err := tx.Exec(ctx, `
 INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id)
 VALUES ($1, 'USER', $2, 'CUSTOMER_EMAIL_VERIFIED', 'customers', $3)`, tenantID, userID, customerID); err != nil {
-				return fmt.Errorf("write e-mail verification audit record: %w", err)
-			}
+			return fmt.Errorf("write e-mail verification audit record: %w", err)
 		}
-		return nil
-	})
+	}
+	return nil
+}
+
+type customerLinkAction uint8
+
+const (
+	preserveExistingCustomer customerLinkAction = iota
+	linkExistingCustomer
+	createDefaultCustomer
+)
+
+func selectCustomerLinkAction(findErr error, linkedUserID pgtype.Text, verifiedUserID string) (customerLinkAction, error) {
+	switch {
+	case errors.Is(findErr, pgx.ErrNoRows):
+		return createDefaultCustomer, nil
+	case findErr != nil:
+		return preserveExistingCustomer, fmt.Errorf("find matching customer profile: %w", findErr)
+	case !linkedUserID.Valid:
+		return linkExistingCustomer, nil
+	case linkedUserID.String == verifiedUserID:
+		return preserveExistingCustomer, nil
+	default:
+		return preserveExistingCustomer, errors.New("customer profile is already linked to another user")
+	}
 }
 
 // ResetVerifiedPassword is intentionally a no-op for an unknown or
@@ -299,24 +360,35 @@ VALUES ($1, 'USER', $2, 'CUSTOMER_PASSWORD_RESET', 'users', $2)`, tenantID, user
 	})
 }
 
-// ActiveTOTPDevice returns the user's active MFA metadata. secret_ref is only
-// passed to the configured secret resolver; it is never returned by HTTP code.
+// ActiveTOTPDevice returns either a complete encrypted TOTP envelope or a
+// legacy secret reference. Neither form is returned by HTTP code.
 func (s *PostgresStore) ActiveTOTPDevice(ctx context.Context, tenantID, userID string) (device TOTPDevice, found bool, err error) {
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
-SELECT id::text, tenant_id::text, user_id::text, secret_ref, last_used_counter
+SELECT id::text, tenant_id::text, user_id::text, COALESCE(secret_ref, ''),
+       secret_ciphertext, secret_nonce, wrapped_dek, COALESCE(kek_key_id, ''),
+       last_used_counter
   FROM user_mfa_totp
  WHERE tenant_id = $1
    AND user_id = $2
    AND status = 'ACTIVE'
  LIMIT 1`, tenantID, userID).Scan(
-			&device.ID, &device.TenantID, &device.UserID, &device.SecretRef, &device.LastUsedCounter,
+			&device.ID, &device.TenantID, &device.UserID, &device.SecretRef,
+			&device.Envelope.Ciphertext, &device.Envelope.Nonce, &device.Envelope.WrappedDEK, &device.Envelope.KEKKeyID,
+			&device.LastUsedCounter,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("query active TOTP device: %w", err)
+		}
+		if device.Envelope.present() {
+			if !device.Envelope.complete() || device.SecretRef != "" {
+				return errors.New("invalid active TOTP device representation")
+			}
+		} else if device.SecretRef == "" {
+			return errors.New("invalid active TOTP device representation")
 		}
 		found = true
 		return nil

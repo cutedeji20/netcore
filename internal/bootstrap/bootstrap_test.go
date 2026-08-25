@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/netcore-isp/netcore/internal/team"
 	"github.com/netcore-isp/netcore/pkg/crypto/argon2id"
 	"github.com/netcore-isp/netcore/pkg/crypto/totp"
 )
@@ -67,6 +68,12 @@ func TestRunCreatesOnlyMFAVerifiedFirstAdministrator(t *testing.T) {
 	}
 	if store.record.Currency != "NGN" || store.record.Email != "admin@example.com" {
 		t.Fatalf("record was not normalised: %+v", store.record)
+	}
+	if len(store.record.InitialRoles) != 4 {
+		t.Fatalf("initial roles = %v, want four fixed roles", store.record.InitialRoles)
+	}
+	if len(store.record.InitialRoleAssignments) != 1 || store.record.InitialRoleAssignments[0] != team.RoleAdministrator {
+		t.Fatalf("initial role assignments = %v, want only Administrator", store.record.InitialRoleAssignments)
 	}
 }
 

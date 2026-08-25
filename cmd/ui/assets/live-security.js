@@ -4,9 +4,14 @@
   var loadedEvents = null;
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
+  var livePage = window.NetCoreLivePage;
 
   function currentPage() {
-    return window.location.hash.slice(1) || "overview";
+    return livePage.current();
+  }
+
+  function showState(state, options) {
+    livePage.showState("security", state, options);
   }
 
   function safeText(value) {
@@ -65,12 +70,7 @@
     var body = table.querySelector("tbody");
     body.replaceChildren();
     if (loadedEvents.length === 0) {
-      var emptyRow = document.createElement("tr");
-      var emptyCell = document.createElement("td");
-      emptyCell.colSpan = 4;
-      emptyCell.textContent = "No recorded security activity matches this view.";
-      emptyRow.appendChild(emptyCell);
-      body.appendChild(emptyRow);
+      showState("empty", { message: "No recorded security activity matches this view." });
       return;
     }
 
@@ -82,26 +82,30 @@
       appendTextCell(row, event.resource_type);
       body.appendChild(row);
     });
+    showState("records");
   }
 
-  function requestEvents() {
-    if (loadedEvents || requestInFlight) return;
+  function requestEvents(force) {
+    if (requestInFlight || (loadedEvents && !force)) return;
     requestInFlight = true;
+    if (!loadedEvents) showState("loading");
     fetch(apiBase + "/api/v1/security/events?limit=25", {
       credentials: "include",
       cache: "no-store"
     })
       .then(function (response) {
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error("Security events request failed");
         return response.json();
       })
       .then(function (payload) {
-        if (!payload || !Array.isArray(payload.data)) return;
+        if (!payload || !Array.isArray(payload.data)) throw new Error("Security events response was invalid");
         loadedEvents = payload.data;
         displayEvents();
       })
       .catch(function () {
-        // The authorised page remains empty when its API request fails.
+        // Last verified records remain visible when a refresh fails.
+        if (loadedEvents) displayEvents();
+        showState("error", { message: "Security activity could not be loaded. Please try again.", preserve: Boolean(loadedEvents), retry: function () { requestEvents(true); } });
       })
       .finally(function () {
         requestInFlight = false;
@@ -110,10 +114,10 @@
 
   function onPageRendered(event) {
     if (event.detail !== "security") return;
-    if (loadedEvents) displayEvents();
+    if (loadedEvents) requestEvents(true);
     else requestEvents();
   }
 
-  window.addEventListener("netcore:page-rendered", onPageRendered);
+  livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
   if (currentPage() === "security") onPageRendered({ detail: "security" });
 }());

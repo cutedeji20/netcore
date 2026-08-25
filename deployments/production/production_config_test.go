@@ -145,6 +145,42 @@ func TestWorkerUsesKeyVaultIntegrationConfigurationWithoutProviderKeys(t *testin
 	requireNotContains(t, worker, "NETCORE_PAYSTACK_SECRET:")
 }
 
+func TestAPIAndWorkerLeaveStaffInviteURLOptionalUntilKeyVaultCryptoNeedsIt(t *testing.T) {
+	// This fails if Compose rejects a disabled-crypto deployment before
+	// config.Validate can apply its conditional production requirement.
+	compose, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	composeText := string(compose)
+	apiStart := strings.Index(composeText, "  api:")
+	workerStart := strings.Index(composeText, "  worker:")
+	radiusStart := strings.Index(composeText, "  radius-spool-init:")
+	if apiStart == -1 || workerStart == -1 || radiusStart == -1 || workerStart <= apiStart || radiusStart <= workerStart {
+		t.Fatal("API or worker section is not bounded by the expected services")
+	}
+
+	for name, service := range map[string]string{
+		"api":    composeText[apiStart:workerStart],
+		"worker": composeText[workerStart:radiusStart],
+	} {
+		t.Run(name, func(t *testing.T) {
+			requireContains(t, service, "NETCORE_STAFF_INVITE_URL: ${NETCORE_STAFF_INVITE_URL:-}")
+			requireNotContains(t, service, "NETCORE_STAFF_INVITE_URL:?set")
+		})
+	}
+}
+
+func TestProductionComposeDocumentsStaffInviteURL(t *testing.T) {
+	source, err := os.ReadFile(".env.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), "NETCORE_STAFF_INVITE_URL=") {
+		t.Fatal("invite URL omitted")
+	}
+}
+
 func TestReceiptOutboxMigrationScopesGlobalWorkerOperations(t *testing.T) {
 	migration, err := os.ReadFile("../../db/migrations/0033_receipt_outbox_delivery.up.sql")
 	if err != nil {

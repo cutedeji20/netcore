@@ -9,6 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/netcore-isp/netcore/pkg/crypto/argon2id"
 )
 
@@ -119,6 +123,140 @@ func TestAccountServiceVerifiesEmailBeforeCreatingCustomer(t *testing.T) {
 	}
 }
 
+func TestVerifyEmailLinksExistingUnlinkedCustomer(t *testing.T) {
+	action, err := selectCustomerLinkAction(nil, pgtype.Text{}, "33333333-3333-4333-8333-333333333333")
+	if err != nil || action != linkExistingCustomer {
+		t.Fatalf("action=%v err=%v, want link existing customer", action, err)
+	}
+}
+
+func TestVerifyEmailPreservesSameCustomerLinkOnRetry(t *testing.T) {
+	userID := "33333333-3333-4333-8333-333333333333"
+	action, err := selectCustomerLinkAction(nil, pgtype.Text{String: userID, Valid: true}, userID)
+	if err != nil || action != preserveExistingCustomer {
+		t.Fatalf("action=%v err=%v, want preserve existing customer", action, err)
+	}
+}
+
+func TestVerifyEmailCustomerLinkQueriesAreTenantScopedAndAtomic(t *testing.T) {
+	if !strings.Contains(customerProfileForUpdateSQL, "WHERE tenant_id = $1 AND email = $2") || !strings.Contains(customerProfileForUpdateSQL, "FOR UPDATE") {
+		t.Fatalf("profile lookup must lock the canonical tenant match: %s", customerProfileForUpdateSQL)
+	}
+	if !strings.Contains(linkExistingCustomerSQL, "WHERE tenant_id = $1 AND id = $2::uuid AND user_id IS NULL") || !strings.Contains(linkExistingCustomerSQL, "SET user_id = $3::uuid") {
+		t.Fatalf("unlinked profile update is not guarded: %s", linkExistingCustomerSQL)
+	}
+	if !strings.Contains(createDefaultCustomerSQL, "ON CONFLICT (tenant_id, user_id)") || strings.Contains(createDefaultCustomerSQL, "ON CONFLICT (tenant_id, email)") {
+		t.Fatalf("default profile fallback is not idempotent: %s", createDefaultCustomerSQL)
+	}
+}
+
+func TestVerifyEmailAndEnsureCustomerTxLinksExistingOrCreatesOnlyWhenMissing(t *testing.T) {
+	const userID = "33333333-3333-4333-8333-333333333333"
+	tests := []struct {
+		name        string
+		rows        []pgx.Row
+		wantLink    bool
+		wantDefault bool
+		wantAudit   bool
+	}{
+		{
+			name: "links unlinked profile",
+			rows: []pgx.Row{
+				customerLinkRow{values: []any{userID}},
+				customerLinkRow{values: []any{"44444444-4444-4444-8444-444444444444", pgtype.Text{}}},
+			},
+			wantLink: true, wantAudit: true,
+		},
+		{
+			name: "preserves matching profile link",
+			rows: []pgx.Row{
+				customerLinkRow{values: []any{userID}},
+				customerLinkRow{values: []any{"44444444-4444-4444-8444-444444444444", pgtype.Text{String: userID, Valid: true}}},
+			},
+			wantAudit: true,
+		},
+		{
+			name: "creates default only when no profile matches",
+			rows: []pgx.Row{
+				customerLinkRow{values: []any{userID}},
+				customerLinkRow{err: pgx.ErrNoRows},
+				customerLinkRow{values: []any{"55555555-5555-4555-8555-555555555555"}},
+			},
+			wantDefault: true, wantAudit: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tx := &customerLinkTx{rows: test.rows}
+			if err := verifyEmailAndEnsureCustomerTx(context.Background(), tx, testTenantID, "customer@example.com"); err != nil {
+				t.Fatal(err)
+			}
+			if len(tx.queries) < 2 || tx.queries[1] != customerProfileForUpdateSQL {
+				t.Fatalf("customer profile was not selected with the production lock query: %v", tx.queries)
+			}
+			if got := containsSQL(tx.execs, linkExistingCustomerSQL); got != test.wantLink {
+				t.Fatalf("link existing query called=%t want=%t execs=%v", got, test.wantLink, tx.execs)
+			}
+			if got := containsSQL(tx.queries, createDefaultCustomerSQL); got != test.wantDefault {
+				t.Fatalf("default profile query called=%t want=%t queries=%v", got, test.wantDefault, tx.queries)
+			}
+			if got := containsSQL(tx.execs, "INSERT INTO audit_logs"); got != test.wantAudit {
+				t.Fatalf("verification audit called=%t want=%t execs=%v", got, test.wantAudit, tx.execs)
+			}
+		})
+	}
+}
+
+type customerLinkTx struct {
+	pgx.Tx
+	rows    []pgx.Row
+	queries []string
+	execs   []string
+}
+
+func (tx *customerLinkTx) QueryRow(_ context.Context, query string, _ ...any) pgx.Row {
+	tx.queries = append(tx.queries, query)
+	row := tx.rows[0]
+	tx.rows = tx.rows[1:]
+	return row
+}
+
+func (tx *customerLinkTx) Exec(_ context.Context, query string, _ ...any) (pgconn.CommandTag, error) {
+	tx.execs = append(tx.execs, query)
+	return pgconn.NewCommandTag("UPDATE 1"), nil
+}
+
+type customerLinkRow struct {
+	values []any
+	err    error
+}
+
+func (row customerLinkRow) Scan(destinations ...any) error {
+	if row.err != nil {
+		return row.err
+	}
+	for index, destination := range destinations {
+		switch destination := destination.(type) {
+		case *string:
+			*destination = row.values[index].(string)
+		case *pgtype.Text:
+			*destination = row.values[index].(pgtype.Text)
+		default:
+			panic("unexpected scan destination")
+		}
+	}
+	return nil
+}
+
+func containsSQL(queries []string, want string) bool {
+	for _, query := range queries {
+		if query == want || strings.Contains(query, want) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAccountServiceDoesNotVerifyEmailWhenCodeIsWrong(t *testing.T) {
 	service, store, _ := newTestAccountService(t)
 	issued, err := service.BeginRegistration(context.Background(), RegistrationInput{
@@ -187,6 +325,27 @@ func TestAccountHTTPRejectsBrowserTenantSelector(t *testing.T) {
 
 	if response.Code != http.StatusBadRequest || store.preparedEmail != "" {
 		t.Fatalf("status=%d prepared=%q body=%s", response.Code, store.preparedEmail, response.Body)
+	}
+}
+
+func TestAccountHTTPDoesNotExposeCustomerLinkConflict(t *testing.T) {
+	handler, store, notifier := newTestAccountHTTP(t)
+	issued, err := handler.service.BeginRegistration(context.Background(), RegistrationInput{
+		TenantSlug: "example", Email: "customer@example.com", Password: "correct customer password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.verifyErr = errors.New("customer profile is already linked to another user")
+	mux := http.NewServeMux()
+	handler.Routes(mux)
+	request := httptest.NewRequest(http.MethodPost, "/portal/auth/verify-email", strings.NewReader(`{"email":"customer@example.com","challenge_id":"`+issued.ChallengeID+`","code":"`+notifier.code+`"}`))
+	response := httptest.NewRecorder()
+
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "AUTH_UNAVAILABLE") || strings.Contains(response.Body.String(), "linked to another user") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
 	}
 }
 

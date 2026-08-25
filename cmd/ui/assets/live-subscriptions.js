@@ -4,9 +4,14 @@
   var loadedSubscriptions = null;
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
+  var livePage = window.NetCoreLivePage;
 
   function currentPage() {
-    return window.location.hash.slice(1) || "overview";
+    return livePage.current();
+  }
+
+  function showState(state, options) {
+    livePage.showState("subscriptions", state, options);
   }
 
   function safeText(value) {
@@ -94,12 +99,7 @@
     var body = table.querySelector("tbody");
     body.replaceChildren();
     if (loadedSubscriptions.length === 0) {
-      var emptyRow = document.createElement("tr");
-      var emptyCell = document.createElement("td");
-      emptyCell.colSpan = 6;
-      emptyCell.textContent = "No subscriptions match this view.";
-      emptyRow.appendChild(emptyCell);
-      body.appendChild(emptyRow);
+      showState("empty", { message: "No subscriptions match this view." });
       return;
     }
 
@@ -113,26 +113,30 @@
       appendStatusCell(row, subscription.status);
       body.appendChild(row);
     });
+    showState("records");
   }
 
-  function requestSubscriptions() {
-    if (loadedSubscriptions || requestInFlight) return;
+  function requestSubscriptions(force) {
+    if (requestInFlight || (loadedSubscriptions && !force)) return;
     requestInFlight = true;
+    if (!loadedSubscriptions) showState("loading");
     fetch(apiBase + "/api/v1/subscriptions?limit=25", {
       credentials: "include",
       cache: "no-store"
     })
       .then(function (response) {
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error("Subscriptions request failed");
         return response.json();
       })
       .then(function (payload) {
-        if (!payload || !Array.isArray(payload.data)) return;
+        if (!payload || !Array.isArray(payload.data)) throw new Error("Subscriptions response was invalid");
         loadedSubscriptions = payload.data;
         displaySubscriptions();
       })
       .catch(function () {
-        // The authorised page remains empty when its API request fails.
+        // Last verified records remain visible when a refresh fails.
+        if (loadedSubscriptions) displaySubscriptions();
+        showState("error", { message: "Subscriptions could not be loaded. Please try again.", preserve: Boolean(loadedSubscriptions), retry: function () { requestSubscriptions(true); } });
       })
       .finally(function () {
         requestInFlight = false;
@@ -141,10 +145,10 @@
 
   function onPageRendered(event) {
     if (event.detail !== "subscriptions") return;
-    if (loadedSubscriptions) displaySubscriptions();
+    if (loadedSubscriptions) requestSubscriptions(true);
     else requestSubscriptions();
   }
 
-  window.addEventListener("netcore:page-rendered", onPageRendered);
+  livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
   if (currentPage() === "subscriptions") onPageRendered({ detail: "subscriptions" });
 }());

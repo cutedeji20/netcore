@@ -13,8 +13,15 @@ class Element {
     this.parentNode = null;
     this.id = "";
     this.className = "";
-    this.textContent = "";
+    this._textContent = "";
+    this.attributes = {};
+    this.listeners = {};
+    this.value = "";
   }
+
+  get textContent() { return this._textContent + this.children.map((child) => child.textContent).join(""); }
+
+  set textContent(value) { this._textContent = String(value); this.children = []; }
 
   append(...nodes) {
     nodes.forEach((node) => this.appendChild(node));
@@ -43,12 +50,27 @@ class Element {
 
   addEventListener() {}
 
-  setAttribute() {}
+  addEventListener(name, listener) {
+    (this.listeners[name] ||= []).push(listener);
+  }
+
+  dispatch(name, event = { preventDefault() {} }) {
+    (this.listeners[name] || []).forEach((listener) => listener(event));
+  }
+
+  click() { this.dispatch("click"); }
+
+  focus() {}
+
+  reset() {}
+
+  setAttribute(name, value) { this.attributes[name] = String(value); }
 
   querySelector(selector) {
     const matches = (node) => (selector.startsWith("#")
       ? node.id === selector.slice(1)
-      : selector.startsWith(".") && node.className.split(/\s+/).includes(selector.slice(1)));
+      : selector.startsWith(".") ? node.className.split(/\s+/).includes(selector.slice(1))
+        : node.name === selector);
     const visit = (node) => {
       for (const child of node.children) {
         if (matches(child)) return child;
@@ -59,14 +81,27 @@ class Element {
     };
     return visit(this);
   }
+
+  querySelectorAll(selector) {
+    const found = [];
+    const visit = (node) => {
+      node.children.forEach((child) => {
+        if ((selector.startsWith("#") && child.id === selector.slice(1)) || (selector.startsWith(".") && child.className.split(/\s+/).includes(selector.slice(1))) || (!selector.startsWith("#") && !selector.startsWith(".") && child.name === selector)) found.push(child);
+        visit(child);
+      });
+    };
+    visit(this);
+    return found;
+  }
 }
 
 test("renders the Settings integrations panel when routing reports Settings without a URL fragment", async () => {
+  const body = new Element("body");
   const content = new Element("main");
   content.id = "page-content";
   const table = new Element("section");
   table.className = "panel table";
-  content.appendChild(table);
+  content.appendChild(table); body.appendChild(content);
   const listeners = {};
   const window = {
     location: { origin: "https://hotspot.example.test", hash: "" },
@@ -74,12 +109,16 @@ test("renders the Settings integrations panel when routing reports Settings with
     NetCoreIntegrationDisplay: {
       toCards: () => [{ provider: "resend", name: "Resend", status: "Disconnected", detail: "Email verification", action: "Connect" }]
     },
+    NetCoreLivePage: {
+      current: () => "overview",
+      subscribe: (listener) => { listeners["netcore:page-rendered"] = listener; }
+    },
     addEventListener: (name, listener) => { listeners[name] = listener; }
   };
   const document = {
-    body: new Element("body"),
+    body,
     createElement: (name) => new Element(name),
-    querySelector: (selector) => selector === "#page-content" ? content : null
+    querySelector: (selector) => body.querySelector(selector)
   };
   const source = fs.readFileSync(path.join(__dirname, "live-integrations.js"), "utf8");
   vm.runInNewContext(source, {
@@ -88,8 +127,73 @@ test("renders the Settings integrations panel when routing reports Settings with
     fetch: async () => ({ ok: true, json: async () => ({ integrations: [] }) })
   });
 
-  listeners["netcore:page-rendered"]({ detail: "settings" });
+  listeners["netcore:page-rendered"]("settings");
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.ok(content.querySelector("#integration-settings"), "Settings must show the provider connection panel");
+});
+
+test("refetches integration cards after a successful save", async () => {
+  const body = new Element("body");
+  const content = new Element("main"); content.id = "page-content"; body.appendChild(content);
+  const table = new Element("section"); table.className = "panel table"; content.appendChild(table);
+  const listeners = {};
+  const window = {
+    location: { origin: "https://hotspot.example.test", hash: "" },
+    NETCORE_API_URL: "https://hotspot.example.test",
+    NetCoreIntegrationDisplay: {
+      toCards: (integrations) => integrations.map((item) => ({ provider: item.provider, name: item.provider, status: item.status, detail: item.status, action: "Connect" }))
+    },
+    NetCoreLivePage: { current: () => "overview", subscribe: (listener) => { listeners.rendered = listener; } }
+  };
+  const responses = [
+    { ok: true, json: async () => ({ integrations: [{ provider: "resend", status: "Disconnected" }] }) },
+    { ok: true },
+    { ok: true, json: async () => ({ integrations: [{ provider: "resend", status: "Active" }] }) }
+  ];
+  const requests = [];
+  const document = { body, createElement: (name) => new Element(name), querySelector: (selector) => body.querySelector(selector) };
+  const source = fs.readFileSync(path.join(__dirname, "live-integrations.js"), "utf8");
+  vm.runInNewContext(source, { window, document, fetch: async (url, options) => { requests.push({ url, options }); return responses.shift(); }, Promise });
+
+  listeners.rendered("settings");
+  await new Promise((resolve) => setImmediate(resolve));
+  content.querySelectorAll("button").find((button) => button.textContent === "Connect").click();
+  body.querySelector("form").dispatch("submit");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(requests.length, 3, "saving must refetch integration cards instead of reusing stale payload");
+  assert.match(content.textContent, /Active/);
+});
+
+test("refetches integration cards after a successful disable", async () => {
+  const body = new Element("body");
+  const content = new Element("main"); content.id = "page-content"; body.appendChild(content);
+  const table = new Element("section"); table.className = "panel table"; content.appendChild(table);
+  const listeners = {};
+  const window = {
+    location: { origin: "https://hotspot.example.test", hash: "" },
+    NETCORE_API_URL: "https://hotspot.example.test",
+    NetCoreIntegrationDisplay: { toCards: (integrations) => integrations.map((item) => ({ provider: item.provider, name: item.provider, status: item.status, detail: item.status, action: "Configure" })) },
+    NetCoreLivePage: { current: () => "overview", subscribe: (listener) => { listeners.rendered = listener; } }
+  };
+  const responses = [
+    { ok: true, json: async () => ({ integrations: [{ provider: "resend", status: "Active" }] }) },
+    { ok: true },
+    { ok: true, json: async () => ({ integrations: [{ provider: "resend", status: "Disabled" }] }) }
+  ];
+  const requests = [];
+  const document = { body, createElement: (name) => new Element(name), querySelector: (selector) => body.querySelector(selector) };
+  const source = fs.readFileSync(path.join(__dirname, "live-integrations.js"), "utf8");
+  vm.runInNewContext(source, { window, document, fetch: async (url, options) => { requests.push({ url, options }); return responses.shift(); }, Promise });
+
+  listeners.rendered("settings");
+  await new Promise((resolve) => setImmediate(resolve));
+  content.querySelectorAll("button").find((button) => button.textContent === "Disable").click();
+  body.querySelector("form").dispatch("submit");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(requests.length, 3, "disabling must refetch integration cards instead of reusing stale payload");
+  assert.equal(requests[1].options.method, "POST");
+  assert.match(content.textContent, /Disabled/);
 });

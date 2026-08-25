@@ -58,4 +58,7 @@ type Page struct {
 // Store is the customer persistence boundary.
 type Store interface {
 	List(ctx context.Context, tenantID string, options ListOptions) (Page, error)
+	Create(ctx context.Context, tenantID string, actor MutationActor, input WriteInput) (Customer, error)
+	Update(ctx context.Context, tenantID, customerID string, actor MutationActor, input WriteInput) (Customer, error)
+	Deactivate(ctx context.Context, tenantID, customerID string, actor MutationActor) (Customer, error)
 }
