@@ -137,6 +137,12 @@ func (h *HTTP) writeConfigureError(w http.ResponseWriter, r *http.Request, err e
 	switch {
 	case errors.Is(err, ErrKeyUnavailable):
 		stage = "key_vault_wrap"
+	case errors.Is(err, ErrStorePrecondition):
+		stage = "store_precondition"
+	case errors.Is(err, ErrStoreUpsert):
+		stage = "database_upsert"
+	case errors.Is(err, ErrStoreAudit):
+		stage = "audit_write"
 	case errors.Is(err, ErrStoreUnavailable):
 		stage = "database_save"
 	}
