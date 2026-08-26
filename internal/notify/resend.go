@@ -23,7 +23,7 @@ import (
 	"github.com/netcore-isp/netcore/pkg/money"
 )
 
-const resendEmailsURL = "https://api.resend.com/emails"
+const resendAPIBaseURL = "https://api.resend.com"
 
 // SecretResolver is satisfied by the deployment secret store. The resolved
 // value is used only for the outbound provider request and is never retained.
@@ -112,7 +112,7 @@ func NewTenantResendNotifier(resolver TenantResendCredentialResolver, tenantID s
 	if client.Timeout <= 0 {
 		return nil, errors.New("notify: Resend HTTP client requires a timeout")
 	}
-	return &TenantResendNotifier{resolver: resolver, tenantID: strings.TrimSpace(tenantID), client: client, baseURL: resendEmailsURL}, nil
+	return &TenantResendNotifier{resolver: resolver, tenantID: strings.TrimSpace(tenantID), client: client, baseURL: resendAPIBaseURL}, nil
 }
 
 func NewResendNotifier(secrets SecretResolver, secretRef, from string, client *http.Client) (*ResendNotifier, error) {
@@ -129,7 +129,7 @@ func NewResendNotifier(secrets SecretResolver, secretRef, from string, client *h
 		return nil, errors.New("notify: Resend HTTP client requires a timeout")
 	}
 	return &ResendNotifier{
-		secrets: secrets, secretRef: strings.TrimSpace(secretRef), from: strings.TrimSpace(from), client: client, baseURL: resendEmailsURL,
+		secrets: secrets, secretRef: strings.TrimSpace(secretRef), from: strings.TrimSpace(from), client: client, baseURL: resendAPIBaseURL,
 	}, nil
 }
 

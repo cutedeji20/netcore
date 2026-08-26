@@ -1,8 +1,10 @@
 package notify
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +18,20 @@ import (
 type testTenantResendResolver struct {
 	tenantID string
 	provider integrations.Provider
+}
+
+type recordingTransport struct {
+	request *http.Request
+}
+
+func (t *recordingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	t.request = request.Clone(request.Context())
+	return &http.Response{
+		StatusCode: http.StatusAccepted,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(nil)),
+		Request:    request,
+	}, nil
 }
 
 func (r *testTenantResendResolver) Resolve(_ context.Context, tenantID string, provider integrations.Provider) ([]byte, integrations.CredentialMetadata, error) {
@@ -57,6 +73,29 @@ func TestTenantResendNotifierLoadsDashboardCredentialForItsTenant(t *testing.T) 
 	}
 	if request.From != "DataHub <hotspot@example.test>" {
 		t.Fatalf("sender = %q", request.From)
+	}
+}
+
+func TestTenantResendNotifierPostsOTPToResendEmailsEndpoint(t *testing.T) {
+	// This fails if the notifier treats the /emails endpoint as its base URL
+	// and appends /emails again, which makes public account verification fail.
+	transport := &recordingTransport{}
+	notifier, err := NewTenantResendNotifier(&testTenantResendResolver{}, "tenant-data-hub", &http.Client{Transport: transport, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := notifier.SendOTP(context.Background(), auth.OTPEmailVerification, "customer@example.com", "482913", time.Now().Add(10*time.Minute)); err != nil {
+		t.Fatalf("SendOTP: %v", err)
+	}
+	if transport.request == nil {
+		t.Fatal("Resend request was not made")
+	}
+	if got, want := transport.request.Method, http.MethodPost; got != want {
+		t.Fatalf("Resend OTP method = %q, want %q", got, want)
+	}
+	if got, want := transport.request.URL.String(), "https://api.resend.com/emails"; got != want {
+		t.Fatalf("Resend OTP URL = %q, want %q", got, want)
 	}
 }
 
