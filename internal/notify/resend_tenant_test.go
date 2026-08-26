@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +25,18 @@ type testTenantResendResolver struct {
 
 type recordingTransport struct {
 	request *http.Request
+}
+
+type failingTenantResendResolver struct{}
+
+func (failingTenantResendResolver) Resolve(context.Context, string, integrations.Provider) ([]byte, integrations.CredentialMetadata, error) {
+	return nil, integrations.CredentialMetadata{}, errors.New("key vault unwrap failed")
+}
+
+type failingTransport struct{}
+
+func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("outbound connection failed")
 }
 
 func (t *recordingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -96,6 +111,93 @@ func TestTenantResendNotifierPostsOTPToResendEmailsEndpoint(t *testing.T) {
 	}
 	if got, want := transport.request.URL.String(), "https://api.resend.com/emails"; got != want {
 		t.Fatalf("Resend OTP URL = %q, want %q", got, want)
+	}
+}
+
+func TestTenantResendNotifierLogsSafeDeliveryFailureStages(t *testing.T) {
+	testCases := []struct {
+		name       string
+		notifier   func(*testing.T) *TenantResendNotifier
+		wantStage  string
+		wantStatus string
+	}{
+		{
+			name: "credential resolution",
+			notifier: func(t *testing.T) *TenantResendNotifier {
+				notifier, err := NewTenantResendNotifier(failingTenantResendResolver{}, "tenant-data-hub", &http.Client{Timeout: time.Second})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return notifier
+			},
+			wantStage: "credential_resolution",
+		},
+		{
+			name: "request creation",
+			notifier: func(t *testing.T) *TenantResendNotifier {
+				notifier, err := NewTenantResendNotifier(&testTenantResendResolver{}, "tenant-data-hub", &http.Client{Timeout: time.Second})
+				if err != nil {
+					t.Fatal(err)
+				}
+				notifier.baseURL = "://invalid"
+				return notifier
+			},
+			wantStage: "request_creation",
+		},
+		{
+			name: "transport",
+			notifier: func(t *testing.T) *TenantResendNotifier {
+				notifier, err := NewTenantResendNotifier(&testTenantResendResolver{}, "tenant-data-hub", &http.Client{Transport: failingTransport{}, Timeout: time.Second})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return notifier
+			},
+			wantStage: "transport_unavailable",
+		},
+		{
+			name: "provider rejection",
+			notifier: func(t *testing.T) *TenantResendNotifier {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Error(w, "credential and customer data must not appear in logs", http.StatusForbidden)
+				}))
+				t.Cleanup(server.Close)
+				client := server.Client()
+				client.Timeout = time.Second
+				notifier, err := NewTenantResendNotifier(&testTenantResendResolver{}, "tenant-data-hub", client)
+				if err != nil {
+					t.Fatal(err)
+				}
+				notifier.baseURL = server.URL
+				return notifier
+			},
+			wantStage:  "provider_rejected",
+			wantStatus: `"provider_status":403`,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var output bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+
+			notifier := testCase.notifier(t)
+			if err := notifier.SendOTP(context.Background(), auth.OTPEmailVerification, "customer@example.com", "482913", time.Now().Add(10*time.Minute)); err == nil {
+				t.Fatal("SendOTP succeeded")
+			}
+
+			entry := output.String()
+			if !strings.Contains(entry, `"failure_stage":"`+testCase.wantStage+`"`) || (testCase.wantStatus != "" && !strings.Contains(entry, testCase.wantStatus)) {
+				t.Fatalf("diagnostic log = %s", entry)
+			}
+			for _, secret := range []string{"customer@example.com", "482913", "re_dashboard_managed_key", "credential and customer data"} {
+				if strings.Contains(entry, secret) {
+					t.Fatalf("diagnostic log contains protected value %q: %s", secret, entry)
+				}
+			}
+		})
 	}
 }
 

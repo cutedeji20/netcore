@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -254,6 +255,7 @@ func (n *TenantResendNotifier) SendOTP(ctx context.Context, purpose auth.OTPPurp
 	}
 	key, metadata, err := n.resolver.Resolve(ctx, n.tenantID, integrations.ProviderResend)
 	if err != nil || len(key) == 0 || !validResendSender(metadata.SenderEmail) {
+		logTenantResendDeliveryFailure("credential_resolution", 0)
 		return errors.New("notify: Resend credential is unavailable")
 	}
 	defer clearCredential(key)
@@ -385,6 +387,7 @@ func (n *TenantResendNotifier) SendPaymentReceipt(ctx context.Context, receipt p
 func (n *TenantResendNotifier) send(ctx context.Context, key, payload []byte, idempotencyKey string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.baseURL+"/emails", bytes.NewReader(payload))
 	if err != nil {
+		logTenantResendDeliveryFailure("request_creation", 0)
 		return errors.New("notify: Resend request is invalid")
 	}
 	req.Header.Set("Authorization", "Bearer "+string(key))
@@ -395,13 +398,26 @@ func (n *TenantResendNotifier) send(ctx context.Context, key, payload []byte, id
 	req.Header.Set("User-Agent", "netcore-notifier/1.0")
 	response, err := n.client.Do(req)
 	if err != nil {
+		logTenantResendDeliveryFailure("transport_unavailable", 0)
 		return errors.New("notify: Resend delivery is unavailable")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		logTenantResendDeliveryFailure("provider_rejected", response.StatusCode)
 		return errors.New("notify: Resend delivery was rejected")
 	}
 	return nil
+}
+
+// logTenantResendDeliveryFailure exposes only the operational boundary needed
+// to diagnose delivery. It deliberately excludes recipients, OTPs, provider
+// credentials, response bodies, and tenant identifiers.
+func logTenantResendDeliveryFailure(stage string, providerStatus int) {
+	attributes := []any{slog.String("failure_stage", stage)}
+	if providerStatus > 0 {
+		attributes = append(attributes, slog.Int("provider_status", providerStatus))
+	}
+	slog.Warn("tenant Resend delivery failed", attributes...)
 }
 
 func validResendSender(sender string) bool {
