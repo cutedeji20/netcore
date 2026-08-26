@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/netcore-isp/netcore/internal/database"
 )
@@ -74,4 +78,34 @@ func TestPostgresStoreSaveClassifiesMalformedRecordBeforeDatabaseAccess(t *testi
 			}
 		})
 	}
+}
+
+func TestWriteAuditEmitsTypedProviderParameter(t *testing.T) {
+	// This is a query-boundary test. PostgreSQL cannot infer an untyped
+	// prepared value used as a jsonb_build_object argument (SQLSTATE 42P18),
+	// so writeAudit must send its provider parameter with an explicit type.
+	err := writeAudit(
+		context.Background(),
+		typedProviderAuditTx{},
+		"477004db-72a6-4741-aa3f-bcfaedb50c9e",
+		"8204791d-3745-43fc-99c4-570c68c8fda3",
+		"INTEGRATION_CONFIGURED",
+		"65017477-c0c2-4b42-9fe7-65f322c1c357",
+		ProviderResend,
+	)
+	if err != nil {
+		t.Fatalf("writeAudit error = %v, want typed provider parameter", err)
+	}
+}
+
+// typedProviderAuditTx models the type requirement PostgreSQL enforces at the
+// SQL boundary. Embedding pgx.Tx supplies unused pgx methods while Exec
+// examines the statement writeAudit sends to PostgreSQL.
+type typedProviderAuditTx struct{ pgx.Tx }
+
+func (typedProviderAuditTx) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	if !strings.Contains(sql, "$5::text") {
+		return pgconn.CommandTag{}, &pgconn.PgError{Code: "42P18"}
+	}
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }

@@ -222,7 +222,7 @@ func writeAudit(ctx context.Context, tx pgx.Tx, tenantID, actorID, action, integ
 	if _, err := tx.Exec(ctx, `
 INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id, metadata)
 VALUES ($1, 'USER', $2::uuid, $3, 'integration_provider', $4::uuid,
-        jsonb_build_object('provider', $5))`, tenantID, actorID, action, integrationID, string(provider)); err != nil {
+        jsonb_build_object('provider', $5::text))`, tenantID, actorID, action, integrationID, string(provider)); err != nil {
 		return fmt.Errorf("write integration audit record: %w", err)
 	}
 	return nil
