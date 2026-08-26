@@ -11,6 +11,7 @@
   var checkoutStorage = window.NetCorePortalCheckout || null;
   var accountPresentation = window.NetCorePortalAccount || null;
   var recovery = window.NetCorePortalRecovery || null;
+  var postLoginNavigation = window.NetCorePortalNavigation || null;
   var connection = readConnectionContext();
   var storedPaymentReturn = checkoutStorage ? checkoutStorage.readPaymentReturn(window.sessionStorage) : null;
   if (!connection && storedPaymentReturn) connection = storedPaymentReturn.connection;
@@ -534,13 +535,19 @@
         throw new Error(humanError(login.body, "We could not sign you in. Please try again."));
       }
       customerAuthenticated = true;
-      if (returningPaymentReference) {
+      var destination = postLoginNavigation ? postLoginNavigation.destinationAfterSignIn({
+        hasConnection: !!connection,
+        hasReturningPayment: !!returningPaymentReference,
+        hasSelectedPlan: !!selectedPlanID,
+        accountRequested: accountRequested
+      }) : (returningPaymentReference ? "payment" : (selectedPlanID ? "checkout" : (accountRequested || !connection ? "account" : "handoff")));
+      if (destination === "payment") {
         return confirmReturnedPayment();
       }
-      if (selectedPlanID) {
+      if (destination === "checkout") {
         return beginCheckout();
       }
-      if (accountRequested) {
+      if (destination === "account") {
         showView("account");
         return loadCustomerAccount();
       }
