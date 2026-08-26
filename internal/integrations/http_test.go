@@ -122,6 +122,58 @@ func TestConfigurePaystackHTTPPersistsTestModeWithoutReturningCredential(t *test
 	}
 }
 
+func TestConfigureResendReturnsInvalidRequestWhenProviderValidationRejectsSetup(t *testing.T) {
+	// This fails if a rejected provider key or sender is reported as a generic
+	// platform outage, which hides the action the administrator must take.
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(logger.New(&logs, logger.Options{ServiceName: "test", Env: "test"}))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	service, err := NewService(
+		&memoryIntegrationStore{},
+		testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"},
+		&testStepUpVerifier{},
+		rejectingProviderValidator{err: errors.New("provider response must remain private")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewHTTP(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const credential = "re_rejected_provider_credential"
+	const password = "private-admin-password"
+	const mfaCode = "654321"
+	response := httptest.NewRecorder()
+	request := integrationPrincipalRequest(http.MethodPut, "/api/v1/integrations/resend", []byte(`{"credential":"`+credential+`","sender_email":"NetCore <access@example.test>","password":"`+password+`","mfa_code":"`+mfaCode+`"}`))
+	handler.configureResend(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+	responseText := response.Body.String()
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(responseText), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != "INVALID_REQUEST" || body.Error.Message != "A valid Resend configuration is required." {
+		t.Fatalf("error response=%#v", body.Error)
+	}
+	for _, forbidden := range []string{credential, password, mfaCode, "provider response must remain private"} {
+		if strings.Contains(responseText, forbidden) || strings.Contains(logs.String(), forbidden) {
+			t.Fatalf("provider validation details escaped the private boundary: response=%s logs=%s", responseText, logs.String())
+		}
+	}
+}
+
 func TestDisconnectHTTPClearsCredentialAfterStepUp(t *testing.T) {
 	// This fails if the HTTP endpoint can report a disconnect without clearing
 	// the stored encrypted provider material.

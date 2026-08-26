@@ -131,7 +131,7 @@ func (h *HTTP) writeConfigureError(w http.ResponseWriter, r *http.Request, err e
 		security.WriteError(w, r, http.StatusUnauthorized, "STEP_UP_FAILED", "Password or authenticator code was not accepted.")
 		return true
 	}
-	if errors.Is(err, ErrInvalidSettings) || errors.Is(err, ErrInvalidCredential) {
+	if errors.Is(err, ErrInvalidSettings) || errors.Is(err, ErrInvalidCredential) || errors.Is(err, ErrCredentialInvalid) {
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", invalidMessage)
 		return true
 	}
