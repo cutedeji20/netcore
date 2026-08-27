@@ -5,6 +5,13 @@
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
   var livePage = window.NetCoreLivePage;
+  var listConfig = window.NetCoreLiveListConfig.get("vouchers");
+  var listState = window.NetCoreLiveListControls.createState(listConfig.filters, listConfig.initialFilter, listConfig.filterParam);
+  var loadedBatchesMeta = {};
+  var searchTimer = 0;
+  var pendingQuery = "";
+  var criteriaPending = false;
+  var requestVersion = 0;
 
   function currentPage() {
     return livePage.current();
@@ -122,11 +129,36 @@
     showState("records");
   }
 
+  function renderControls() {
+    if (currentPage() !== "vouchers") return;
+    livePage.renderListControls("vouchers", {
+      query: criteriaPending ? pendingQuery : listState.query, busy: requestInFlight,
+      hasPrevious: listState.previousCursors.length > 0, hasNext: listState.hasMore,
+      searchPlaceholder: "Search voucher batches", searchLabel: "Search voucher batches",
+      onSearch: function (query) {
+        clearTimeout(searchTimer);
+        pendingQuery = query;
+        criteriaPending = true;
+        requestVersion += 1;
+        window.NetCoreLiveListControls.applyCriteria(listState, query, "");
+        searchTimer = setTimeout(function () { criteriaPending = false; requestVersion += 1; requestBatches(true); }, 250);
+      },
+      onNext: function () { if (criteriaPending) return; if (window.NetCoreLiveListControls.nextPage(listState)) requestBatches(true); else renderControls(); },
+      onPrevious: function () { if (criteriaPending) return; if (listState.previousCursors.length) { window.NetCoreLiveListControls.previousPage(listState); requestBatches(true); } else renderControls(); }
+    });
+  }
+
+  function applyCriteria(query) {
+    if (window.NetCoreLiveListControls.applyCriteria(listState, query, "")) requestBatches(true);
+  }
+
   function requestBatches(force) {
     if (requestInFlight || (loadedBatches && !force)) return;
     requestInFlight = true;
+    var requestVersionAtStart = requestVersion;
+    renderControls();
     if (!loadedBatches) showState("loading");
-    fetch(apiBase + "/api/v1/vouchers/batches?limit=25", {
+    fetch(window.NetCoreLiveListControls.requestURL(apiBase, listConfig.endpoint, listState, 25), {
       credentials: "include",
       cache: "no-store"
     })
@@ -136,25 +168,31 @@
       })
       .then(function (payload) {
         if (!payload || !Array.isArray(payload.data)) throw new Error("Vouchers response was invalid");
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         loadedBatches = payload.data;
+        loadedBatchesMeta = payload.meta || {};
+        window.NetCoreLiveListControls.applyResponseMeta(listState, loadedBatchesMeta);
         displayBatches();
       })
       .catch(function () {
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         // Last verified records remain visible when a refresh fails.
         if (loadedBatches) displayBatches();
         showState("error", { message: "Vouchers could not be loaded. Please try again.", preserve: Boolean(loadedBatches), retry: function () { requestBatches(true); } });
       })
       .finally(function () {
         requestInFlight = false;
+        renderControls();
+        if (!criteriaPending && requestVersionAtStart !== requestVersion) requestBatches(true);
       });
   }
 
   function onPageRendered(event) {
     if (event.detail !== "vouchers") return;
+    renderControls();
     if (loadedBatches) requestBatches(true);
     else requestBatches();
   }
 
   livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
-  if (currentPage() === "vouchers") onPageRendered({ detail: "vouchers" });
 }());

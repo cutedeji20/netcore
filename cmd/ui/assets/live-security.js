@@ -5,6 +5,13 @@
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
   var livePage = window.NetCoreLivePage;
+  var listConfig = window.NetCoreLiveListConfig.get("security");
+  var listState = window.NetCoreLiveListControls.createState(listConfig.filters, listConfig.initialFilter, listConfig.filterParam);
+  var loadedEventsMeta = {};
+  var searchTimer = 0;
+  var pendingQuery = "";
+  var criteriaPending = false;
+  var requestVersion = 0;
 
   function currentPage() {
     return livePage.current();
@@ -85,11 +92,36 @@
     showState("records");
   }
 
+  function renderControls() {
+    if (currentPage() !== "security") return;
+    livePage.renderListControls("security", {
+      query: criteriaPending ? pendingQuery : listState.query, filter: listState.filter, filters: [], busy: requestInFlight,
+      hasPrevious: listState.previousCursors.length > 0, hasNext: listState.hasMore,
+      searchPlaceholder: "Search security activity", searchLabel: "Search security activity",
+      onSearch: function (query) {
+        clearTimeout(searchTimer);
+        pendingQuery = query;
+        criteriaPending = true;
+        requestVersion += 1;
+        window.NetCoreLiveListControls.applyCriteria(listState, query, listState.filter);
+        searchTimer = setTimeout(function () { criteriaPending = false; requestVersion += 1; requestEvents(true); }, 250);
+      },
+      onNext: function () { if (criteriaPending) return; if (window.NetCoreLiveListControls.nextPage(listState)) requestEvents(true); else renderControls(); },
+      onPrevious: function () { if (criteriaPending) return; if (listState.previousCursors.length) { window.NetCoreLiveListControls.previousPage(listState); requestEvents(true); } else renderControls(); }
+    });
+  }
+
+  function applyCriteria(query) {
+    if (window.NetCoreLiveListControls.applyCriteria(listState, query, listState.filter)) requestEvents(true);
+  }
+
   function requestEvents(force) {
     if (requestInFlight || (loadedEvents && !force)) return;
     requestInFlight = true;
+    var requestVersionAtStart = requestVersion;
+    renderControls();
     if (!loadedEvents) showState("loading");
-    fetch(apiBase + "/api/v1/security/events?limit=25", {
+    fetch(window.NetCoreLiveListControls.requestURL(apiBase, listConfig.endpoint, listState, 25), {
       credentials: "include",
       cache: "no-store"
     })
@@ -99,25 +131,31 @@
       })
       .then(function (payload) {
         if (!payload || !Array.isArray(payload.data)) throw new Error("Security events response was invalid");
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         loadedEvents = payload.data;
+        loadedEventsMeta = payload.meta || {};
+        window.NetCoreLiveListControls.applyResponseMeta(listState, loadedEventsMeta);
         displayEvents();
       })
       .catch(function () {
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         // Last verified records remain visible when a refresh fails.
         if (loadedEvents) displayEvents();
         showState("error", { message: "Security activity could not be loaded. Please try again.", preserve: Boolean(loadedEvents), retry: function () { requestEvents(true); } });
       })
       .finally(function () {
         requestInFlight = false;
+        renderControls();
+        if (!criteriaPending && requestVersionAtStart !== requestVersion) requestEvents(true);
       });
   }
 
   function onPageRendered(event) {
     if (event.detail !== "security") return;
+    renderControls();
     if (loadedEvents) requestEvents(true);
     else requestEvents();
   }
 
   livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
-  if (currentPage() === "security") onPageRendered({ detail: "security" });
 }());

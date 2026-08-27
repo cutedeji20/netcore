@@ -169,19 +169,69 @@ func TestPreviewHiddenCommandPaletteIsNotRendered(t *testing.T) {
 	}
 }
 
-func TestPreviewServesAutomationAdapter(t *testing.T) {
+func TestPreviewServesRefactoredAdaptersWithNamedSharedConfiguration(t *testing.T) {
+	handler, err := newHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, adapter := range []struct {
+		path string
+		page string
+	}{
+		{path: "/live-automations.js", page: "automations"},
+		{path: "/live-security.js", page: "security"},
+		{path: "/live-vouchers.js", page: "vouchers"},
+		{path: "/live-network.js", page: "network"},
+		{path: "/live-billing.js", page: "billing"},
+		{path: "/live-sessions.js", page: "sessions"},
+		{path: "/live-subscriptions.js", page: "subscriptions"},
+	} {
+		t.Run(adapter.page, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, adapter.path, nil))
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d", response.Code)
+			}
+			if !strings.Contains(response.Body.String(), `NetCoreLiveListConfig.get("`+adapter.page+`")`) {
+				t.Fatalf("adapter does not consume the %q shared list configuration", adapter.page)
+			}
+		})
+	}
+}
+
+func TestPreviewServesLiveListConfigPublicHelper(t *testing.T) {
 	handler, err := newHandler()
 	if err != nil {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/live-automations.js", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/live-list-config.js", nil))
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
-	if !strings.Contains(response.Body.String(), "/api/v1/automations") {
-		t.Fatal("automation API adapter was not served")
+	body := response.Body.String()
+	if !strings.Contains(body, "NetCoreLiveListConfig = api") || !strings.Contains(body, "return { get: get }") {
+		t.Fatal("live list configuration helper was not served")
+	}
+}
+
+func TestPreviewServesLiveListControlsPublicHelpers(t *testing.T) {
+	handler, err := newHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/live-list-controls.js", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "NetCoreLiveListControls = api") || !strings.Contains(body, "requestURL: requestURL") {
+		t.Fatal("live list controls helpers were not served")
 	}
 }
 
@@ -198,22 +248,6 @@ func TestPreviewServesWorkspaceAdapter(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "/api/v1/workspace/settings") {
 		t.Fatal("workspace API adapter was not served")
-	}
-}
-
-func TestPreviewServesSecurityAdapter(t *testing.T) {
-	handler, err := newHandler()
-	if err != nil {
-		t.Fatal(err)
-	}
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/live-security.js", nil))
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d", response.Code)
-	}
-	if !strings.Contains(response.Body.String(), "/api/v1/security/events") {
-		t.Fatal("security API adapter was not served")
 	}
 }
 
@@ -305,70 +339,6 @@ func TestPreviewServesTeamAdapter(t *testing.T) {
 	}
 }
 
-func TestPreviewServesVoucherAdapter(t *testing.T) {
-	handler, err := newHandler()
-	if err != nil {
-		t.Fatal(err)
-	}
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/live-vouchers.js", nil))
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d", response.Code)
-	}
-	if !strings.Contains(response.Body.String(), "/api/v1/vouchers/batches") {
-		t.Fatal("voucher API adapter was not served")
-	}
-}
-
-func TestPreviewServesNetworkAdapter(t *testing.T) {
-	handler, err := newHandler()
-	if err != nil {
-		t.Fatal(err)
-	}
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/live-network.js", nil))
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d", response.Code)
-	}
-	if !strings.Contains(response.Body.String(), "/api/v1/network/routers") {
-		t.Fatal("network API adapter was not served")
-	}
-}
-
-func TestPreviewServesBillingAdapter(t *testing.T) {
-	handler, err := newHandler()
-	if err != nil {
-		t.Fatal(err)
-	}
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/live-billing.js", nil))
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d", response.Code)
-	}
-	if !strings.Contains(response.Body.String(), "/api/v1/billing/transactions") {
-		t.Fatal("billing API adapter was not served")
-	}
-}
-
-func TestPreviewServesSessionAdapter(t *testing.T) {
-	handler, err := newHandler()
-	if err != nil {
-		t.Fatal(err)
-	}
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/live-sessions.js", nil))
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d", response.Code)
-	}
-	if !strings.Contains(response.Body.String(), "/api/v1/sessions") {
-		t.Fatal("session API adapter was not served")
-	}
-}
-
 func TestPreviewServesPlanAdapter(t *testing.T) {
 	handler, err := newHandler()
 	if err != nil {
@@ -382,21 +352,5 @@ func TestPreviewServesPlanAdapter(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "/api/v1/plans") {
 		t.Fatal("plan API adapter was not served")
-	}
-}
-
-func TestPreviewServesSubscriptionAdapter(t *testing.T) {
-	handler, err := newHandler()
-	if err != nil {
-		t.Fatal(err)
-	}
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/live-subscriptions.js", nil))
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d", response.Code)
-	}
-	if !strings.Contains(response.Body.String(), "/api/v1/subscriptions") {
-		t.Fatal("subscription API adapter was not served")
 	}
 }

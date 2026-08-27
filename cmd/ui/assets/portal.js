@@ -12,6 +12,7 @@
   var accountPresentation = window.NetCorePortalAccount || null;
   var recovery = window.NetCorePortalRecovery || null;
   var postLoginNavigation = window.NetCorePortalNavigation || null;
+  var registration = window.NetCorePortalRegistration || null;
   var connection = readConnectionContext();
   var storedPaymentReturn = checkoutStorage ? checkoutStorage.readPaymentReturn(window.sessionStorage) : null;
   if (!connection && storedPaymentReturn) connection = storedPaymentReturn.connection;
@@ -117,19 +118,21 @@
       return;
     }
     var fields = new FormData(registerForm);
+    var email = String(fields.get("email") || "");
     var password = String(fields.get("password") || "");
-    if (password !== String(fields.get("confirm_password") || "")) {
-      registerStatus.textContent = "The password confirmation does not match.";
+    var registrationMessage = registration ? registration.validate(email, password, String(fields.get("confirm_password") || "")) : "Account setup is temporarily unavailable. Please try again shortly.";
+    if (registrationMessage) {
+      registerStatus.textContent = registrationMessage;
       return;
     }
     setFormSubmitting(registerForm, true);
     registerStatus.textContent = "Sending your verification code…";
-    postJSON("/portal/auth/register", { email: fields.get("email"), password: password }).then(function (result) {
+    postJSON("/portal/auth/register", { email: email, password: password }).then(function (result) {
       if (!result.response.ok || !result.body.challenge_id) {
         throw new Error(humanError(result.body, "We could not send a verification code. Please try again."));
       }
       pendingRegistration = {
-        email: String(fields.get("email") || ""),
+        email: email,
         password: password,
         challengeID: String(result.body.challenge_id)
       };

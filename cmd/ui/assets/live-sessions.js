@@ -5,6 +5,13 @@
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
   var livePage = window.NetCoreLivePage;
+  var listConfig = window.NetCoreLiveListConfig.get("sessions");
+  var listState = window.NetCoreLiveListControls.createState(listConfig.filters, listConfig.initialFilter, listConfig.filterParam);
+  var loadedSessionsMeta = {};
+  var searchTimer = 0;
+  var pendingQuery = "";
+  var criteriaPending = false;
+  var requestVersion = 0;
 
   function currentPage() {
     return livePage.current();
@@ -133,7 +140,7 @@
     var body = table.querySelector("tbody");
     body.replaceChildren();
     if (loadedSessions.length === 0) {
-      showState("empty", { message: "No active sessions match this view." });
+      showState("empty", { message: "No sessions match this view." });
       return;
     }
 
@@ -149,11 +156,41 @@
     showState("records");
   }
 
+  function filterOptions() {
+    return listConfig.filters.map(function (filter) { return { value: filter, label: filter || "All" }; });
+  }
+
+  function renderControls() {
+    if (currentPage() !== "sessions") return;
+    livePage.renderListControls("sessions", {
+      query: criteriaPending ? pendingQuery : listState.query, filter: listState.filter, filters: filterOptions(), busy: requestInFlight,
+      hasPrevious: listState.previousCursors.length > 0, hasNext: listState.hasMore,
+      searchPlaceholder: "Search sessions", searchLabel: "Search sessions", filterLabel: "Filter sessions",
+      onSearch: function (query) {
+        clearTimeout(searchTimer);
+        pendingQuery = query;
+        criteriaPending = true;
+        requestVersion += 1;
+        window.NetCoreLiveListControls.applyCriteria(listState, query, listState.filter);
+        searchTimer = setTimeout(function () { criteriaPending = false; requestVersion += 1; requestSessions(true); }, 250);
+      },
+      onFilter: function (filter) { applyCriteria(listState.query, filter); },
+      onNext: function () { if (criteriaPending) return; if (window.NetCoreLiveListControls.nextPage(listState)) requestSessions(true); else renderControls(); },
+      onPrevious: function () { if (criteriaPending) return; if (listState.previousCursors.length) { window.NetCoreLiveListControls.previousPage(listState); requestSessions(true); } else renderControls(); }
+    });
+  }
+
+  function applyCriteria(query, filter) {
+    if (window.NetCoreLiveListControls.applyCriteria(listState, query, filter)) requestSessions(true);
+  }
+
   function requestSessions(force) {
     if (requestInFlight || (loadedSessions && !force)) return;
     requestInFlight = true;
+    var requestVersionAtStart = requestVersion;
+    renderControls();
     if (!loadedSessions) showState("loading");
-    fetch(apiBase + "/api/v1/sessions?limit=25&status=ACTIVE", {
+    fetch(window.NetCoreLiveListControls.requestURL(apiBase, listConfig.endpoint, listState, 25), {
       credentials: "include",
       cache: "no-store"
     })
@@ -163,25 +200,31 @@
       })
       .then(function (payload) {
         if (!payload || !Array.isArray(payload.data)) throw new Error("Sessions response was invalid");
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         loadedSessions = payload.data;
+        loadedSessionsMeta = payload.meta || {};
+        window.NetCoreLiveListControls.applyResponseMeta(listState, loadedSessionsMeta);
         displaySessions();
       })
       .catch(function () {
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         // Last verified records remain visible when a refresh fails.
         if (loadedSessions) displaySessions();
         showState("error", { message: "Sessions could not be loaded. Please try again.", preserve: Boolean(loadedSessions), retry: function () { requestSessions(true); } });
       })
       .finally(function () {
         requestInFlight = false;
+        renderControls();
+        if (!criteriaPending && requestVersionAtStart !== requestVersion) requestSessions(true);
       });
   }
 
   function onPageRendered(event) {
     if (event.detail !== "sessions") return;
+    renderControls();
     if (loadedSessions) requestSessions(true);
     else requestSessions();
   }
 
   livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
-  if (currentPage() === "sessions") onPageRendered({ detail: "sessions" });
 }());

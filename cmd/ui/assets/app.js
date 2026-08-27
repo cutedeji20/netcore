@@ -27,6 +27,8 @@ const logoutButton = document.querySelector("#logout-button");
 const adminConfig = window.NETCORE_ADMIN_CONFIG || {};
 const liveAdapterPaths = [
   "/live-page.js",
+  "/live-list-config.js",
+  "/live-list-controls.js",
   "/live-customers.js", "/live-subscriptions.js", "/live-plans.js", "/live-sessions.js",
   "/live-billing.js", "/live-network.js", "/live-vouchers.js", "/live-team.js",
   "/live-security.js", "/live-automations.js", "/live-workspace.js", "/live-payment-readiness.js", "/integration-display.js", "/live-integrations.js", "/session-expiry.js"
@@ -35,6 +37,7 @@ const hasLiveConfig = adminConfig.mode === "live" && /^[a-z0-9](?:[a-z0-9-]{0,61
 let adminState = { authorised: false, adaptersLoaded: false, identity: null };
 let cancelSessionExpiry = () => {};
 let toastTimer;
+const readOnlyOperationalPages = new Set(["subscriptions", "sessions", "vouchers", "network", "billing", "security", "automations", "settings"]);
 
 const tag = (item) => {
   const [label, type = "gray"] = item.split("|");
@@ -45,10 +48,9 @@ const entity = (item) => {
   return `<div class="entity"><span class="entity-mark">${initials}</span><span><strong>${name}</strong><small>${detail}</small></span></div>`;
 };
 const isTag = (value) => value.includes("|") && ["green","indigo","amber","red","gray"].includes(value.split("|")[1]);
-const heading = (page) => {
-  const managedByLiveAdapter = page === pages.team || page === pages.customers;
-  const action = managedByLiveAdapter ? "" : `<button class="button primary" type="button" data-toast="${page.action} is ready for the live-data phase.">＋ ${page.action}</button>`;
-  return `<div class="page-heading"><div><p class="kicker">${page.kicker}</p><h1>${page.title}</h1><p class="description">${page.description}</p></div><div class="heading-actions"><button class="button" type="button" data-toast="Filters will appear here.">Filter</button>${action}</div></div>`;
+const heading = (page, id) => {
+  const status = id === "settings" ? "Operational controls appear below" : readOnlyOperationalPages.has(id) ? "Read-only operational view" : "";
+  return `<div class="page-heading"><div><p class="kicker">${page.kicker}</p><h1>${page.title}</h1><p class="description">${page.description}</p></div><div class="heading-actions">${status ? `<p class="description" role="status">${status}</p>` : ""}</div></div>`;
 };
 const metrics = (items) => `<section class="metric-grid">${items.map(([name, value], index) => `<article class="metric"><p class="metric-label">${name}</p><p class="metric-value">${value}</p><span class="metric-change ${index === 2 ? "warn" : ""}">${index === 0 ? "↑ Healthy trend" : index === 1 ? "Updated today" : index === 2 ? "Needs attention" : "In current view"}</span></article>`).join("")}</section>`;
 const table = (page) => `<section class="panel table"><div class="toolbar"><input aria-label="Search ${page.title}" placeholder="Search ${page.title.toLowerCase()}" /><button class="button" type="button" data-toast="Filters will appear here.">All records ▾</button></div><table class="data-table"><thead><tr>${page.cols.map((column) => `<th>${column}</th>`).join("")}</tr></thead><tbody>${page.rows.map((row) => `<tr>${row.map((cell, index) => `<td>${index === 0 && cell.split("|").length === 3 ? entity(cell) : isTag(cell) ? tag(cell) : cell}</td>`).join("")}</tr>`).join("")}</tbody></table></section>`;
@@ -71,7 +73,7 @@ function standardPage(id) {
 }
 
 function accessHeading(title, description) {
-  return `<div class="page-heading"><div><p class="kicker">Secure control dashboard</p><h1>${title}</h1><p class="description">${description}</p></div></div>`;
+  return `<div class="page-heading"><div><p class="kicker">Secure control dashboard</p><h1>${title}</h1><p class="description">${description}</p></div><div class="heading-actions"></div></div>`;
 }
 
 function dashboard() {
@@ -86,8 +88,8 @@ function standardPage(id) {
   const page = pages[id];
   const neutralPage = { ...page, rows: [], side: page.side.map(([label]) => [label, "—"]) };
   const emptyTable = `<tr><td colspan="${page.cols.length}" class="empty-cell">Loading authorised live data. If this remains empty, your role may not have permission or this endpoint is not yet enabled.</td></tr>`;
-  const liveTable = `<section class="panel table"><div class="toolbar"><input aria-label="Search ${page.title}" placeholder="Search ${page.title.toLowerCase()}" disabled /><button class="button" type="button" disabled>Live records</button></div><table class="data-table"><thead><tr>${page.cols.map((column) => `<th>${column}</th>`).join("")}</tr></thead><tbody>${emptyTable}</tbody></table></section>`;
-  return `${accessHeading(page.title, page.description)}<div class="status"><i></i><strong>Authorised data only</strong><span>This view stays empty until its server-side data source responds.</span><span class="updated">Secure session</span></div>${metrics(neutralPage.side)}<section class="split-grid">${liveTable}<aside class="panel"><div class="panel-header"><div><h2>${id === "settings" ? "Environment" : "At a glance"}</h2><p>Verified values only</p></div></div><ul class="detail-list">${neutralPage.side.map(([label, value]) => `<li><span>${label}</span><strong>${value}</strong></li>`).join("")}</ul></aside></section>`;
+  const liveTable = `<section class="panel table"><div class="toolbar"><div class="live-list-controls" data-live-list-controls="${id}"></div><nav class="live-list-pagination" data-live-list-pagination="${id}" aria-label="${page.title} pages"></nav></div><table class="data-table"><thead><tr>${page.cols.map((column) => `<th>${column}</th>`).join("")}</tr></thead><tbody>${emptyTable}</tbody></table></section>`;
+  return `${heading(page, id)}<div class="status"><i></i><strong>Authorised data only</strong><span>This view stays empty until its server-side data source responds.</span><span class="updated">Secure session</span></div>${metrics(neutralPage.side)}<section class="split-grid">${liveTable}<aside class="panel"><div class="panel-header"><div><h2>${id === "settings" ? "Environment" : "At a glance"}</h2><p>Verified values only</p></div></div><ul class="detail-list">${neutralPage.side.map(([label, value]) => `<li><span>${label}</span><strong>${value}</strong></li>`).join("")}</ul></aside></section>`;
 }
 
 function render(id) {

@@ -14,6 +14,57 @@
     return document.querySelector("#page-content .data-table");
   }
 
+  function listMount(page) {
+    if (active !== page) return null;
+    return document.querySelector('[data-live-list-controls="' + page + '"]');
+  }
+
+  function renderListControls(page, options) {
+    options = options || {};
+    var mount = listMount(page);
+    if (!mount) return null;
+    var pagination = document.querySelector('[data-live-list-pagination="' + page + '"]');
+    mount.replaceChildren();
+    if (pagination) pagination.replaceChildren();
+    var search = document.createElement("input");
+    search.type = "search";
+    search.value = options.query || "";
+    search.placeholder = options.searchPlaceholder || "Search records";
+    search.setAttribute("aria-label", options.searchLabel || "Search records");
+    search.disabled = !!options.busy;
+    search.addEventListener("input", function () { if (!options.busy && typeof options.onSearch === "function") options.onSearch(search.value); });
+    mount.appendChild(search);
+    if (Array.isArray(options.filters) && options.filters.length) {
+      var select = document.createElement("select");
+      select.setAttribute("aria-label", options.filterLabel || "Filter records");
+      select.disabled = !!options.busy;
+      options.filters.forEach(function (filter) {
+        var option = document.createElement("option");
+        option.value = filter.value == null ? "" : String(filter.value);
+        option.textContent = filter.label == null ? option.value : String(filter.label);
+        option.selected = option.value === String(options.filter || "");
+        select.appendChild(option);
+      });
+      select.addEventListener("change", function () { if (!options.busy && typeof options.onFilter === "function") options.onFilter(select.value); });
+      mount.appendChild(select);
+    }
+    if (!pagination) return mount;
+    var previous = document.createElement("button");
+    previous.type = "button";
+    previous.className = "button";
+    previous.textContent = "Previous";
+    previous.disabled = !!options.busy || !options.hasPrevious;
+    previous.addEventListener("click", function () { if (!options.busy && typeof options.onPrevious === "function") options.onPrevious(); });
+    var next = document.createElement("button");
+    next.type = "button";
+    next.className = "button";
+    next.textContent = "Next";
+    next.disabled = !!options.busy || !options.hasNext;
+    next.addEventListener("click", function () { if (!options.busy && typeof options.onNext === "function") options.onNext(); });
+    pagination.append(previous, next);
+    return mount;
+  }
+
   function liveState(table) {
     var state = table.parentNode.querySelector(".live-data-state");
     if (state) return state;
@@ -75,6 +126,8 @@
     subscribe: function (fn) {
       if (typeof fn === "function") subscribers.push(fn);
     },
-    showState: showState
+    showState: showState,
+    listMount: listMount,
+    renderListControls: renderListControls
   };
 }());

@@ -5,6 +5,13 @@
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
   var livePage = window.NetCoreLivePage;
+  var listConfig = window.NetCoreLiveListConfig.get("billing");
+  var listState = window.NetCoreLiveListControls.createState(listConfig.filters, listConfig.initialFilter, listConfig.filterParam);
+  var loadedTransactionsMeta = {};
+  var searchTimer = 0;
+  var pendingQuery = "";
+  var criteriaPending = false;
+  var requestVersion = 0;
   var currencyExponents = {
     JPY: 0, KRW: 0, VND: 0, CLP: 0, ISK: 0, XAF: 0, XOF: 0,
     BHD: 3, KWD: 3, OMR: 3, TND: 3, JOD: 3
@@ -153,11 +160,41 @@
     showState("records");
   }
 
+  function filterOptions() {
+    return listConfig.filters.map(function (filter) { return { value: filter, label: filter || "All" }; });
+  }
+
+  function renderControls() {
+    if (currentPage() !== "billing") return;
+    livePage.renderListControls("billing", {
+      query: criteriaPending ? pendingQuery : listState.query, filter: listState.filter, filters: filterOptions(), busy: requestInFlight,
+      hasPrevious: listState.previousCursors.length > 0, hasNext: listState.hasMore,
+      searchPlaceholder: "Search billing", searchLabel: "Search billing", filterLabel: "Filter billing",
+      onSearch: function (query) {
+        clearTimeout(searchTimer);
+        pendingQuery = query;
+        criteriaPending = true;
+        requestVersion += 1;
+        window.NetCoreLiveListControls.applyCriteria(listState, query, listState.filter);
+        searchTimer = setTimeout(function () { criteriaPending = false; requestVersion += 1; requestTransactions(true); }, 250);
+      },
+      onFilter: function (filter) { applyCriteria(listState.query, filter); },
+      onNext: function () { if (criteriaPending) return; if (window.NetCoreLiveListControls.nextPage(listState)) requestTransactions(true); else renderControls(); },
+      onPrevious: function () { if (criteriaPending) return; if (listState.previousCursors.length) { window.NetCoreLiveListControls.previousPage(listState); requestTransactions(true); } else renderControls(); }
+    });
+  }
+
+  function applyCriteria(query, filter) {
+    if (window.NetCoreLiveListControls.applyCriteria(listState, query, filter)) requestTransactions(true);
+  }
+
   function requestTransactions(force) {
     if (requestInFlight || (loadedTransactions && !force)) return;
     requestInFlight = true;
+    var requestVersionAtStart = requestVersion;
+    renderControls();
     if (!loadedTransactions) showState("loading");
-    fetch(apiBase + "/api/v1/billing/transactions?limit=25", {
+    fetch(window.NetCoreLiveListControls.requestURL(apiBase, listConfig.endpoint, listState, 25), {
       credentials: "include",
       cache: "no-store"
     })
@@ -167,25 +204,31 @@
       })
       .then(function (payload) {
         if (!payload || !Array.isArray(payload.data)) throw new Error("Billing response was invalid");
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         loadedTransactions = payload.data;
+        loadedTransactionsMeta = payload.meta || {};
+        window.NetCoreLiveListControls.applyResponseMeta(listState, loadedTransactionsMeta);
         displayTransactions();
       })
       .catch(function () {
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         // Last verified records remain visible when a refresh fails.
         if (loadedTransactions) displayTransactions();
         showState("error", { message: "Billing data could not be loaded. Please try again.", preserve: Boolean(loadedTransactions), retry: function () { requestTransactions(true); } });
       })
       .finally(function () {
         requestInFlight = false;
+        renderControls();
+        if (!criteriaPending && requestVersionAtStart !== requestVersion) requestTransactions(true);
       });
   }
 
   function onPageRendered(event) {
     if (event.detail !== "billing") return;
+    renderControls();
     if (loadedTransactions) requestTransactions(true);
     else requestTransactions();
   }
 
   livePage.subscribe(function (page) { onPageRendered({ detail: page }); });
-  if (currentPage() === "billing") onPageRendered({ detail: "billing" });
 }());

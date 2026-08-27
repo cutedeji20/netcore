@@ -22,7 +22,10 @@ class Element {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   querySelectorAll(selector) {
     const parts = selector.trim().split(/\s+/);
-    const matches = (node, part) => part.startsWith("#") ? node.id === part.slice(1) : part.startsWith(".") ? node.className.split(/\s+/).includes(part.slice(1)) : node.name === part;
+    const matches = (node, part) => {
+      const attribute = /^\[([^=]+)="?([^\]"]+)"?\]$/.exec(part);
+      return attribute ? node.getAttribute(attribute[1]) === attribute[2] : part.startsWith("#") ? node.id === part.slice(1) : part.startsWith(".") ? node.className.split(/\s+/).includes(part.slice(1)) : node.name === part;
+    };
     const descendants = (node) => node.children.flatMap((child) => [child, ...descendants(child)]);
     let candidates = [this];
     for (const part of parts) candidates = candidates.flatMap(descendants).filter((node) => matches(node, part));
@@ -49,26 +52,52 @@ const adapterSpecs = [
 function response(payload) { return { ok: true, json: async () => payload }; }
 async function settled() { await new Promise((resolve) => setImmediate(resolve)); await new Promise((resolve) => setImmediate(resolve)); }
 
-function environment(file, responses) {
+function environment(file, responses, initialHash) {
   const body = new Element("body"); const content = new Element("main"); content.id = "page-content";
   const heading = new Element("div"); heading.className = "page-heading"; const split = new Element("section"); split.className = "split-grid";
   const panel = new Element("section"); panel.className = "panel table"; const table = new Element("table"); table.className = "data-table";
   const head = new Element("thead"); const row = new Element("tr"); head.appendChild(row); for (let index = 0; index < 7; index++) row.appendChild(new Element("th"));
   const tableBody = new Element("tbody"); table.append(head, tableBody); panel.appendChild(table); split.appendChild(panel); content.append(heading, split); body.appendChild(content);
+  ["subscriptions", "sessions", "vouchers", "network", "billing", "security", "automations"].forEach((page) => {
+    const controls = new Element("div"); controls.setAttribute("data-live-list-controls", page);
+    const pagination = new Element("div"); pagination.setAttribute("data-live-list-pagination", page);
+    heading.append(controls, pagination);
+  });
   const listeners = {};
   const window = {
-    location: { origin: "https://hotspot.example.test", hash: "#overview" }, NETCORE_API_URL: "https://hotspot.example.test", NETCORE_PRINCIPAL: { permissions: [] },
+    location: { origin: "https://hotspot.example.test", hash: initialHash || "#overview" }, NETCORE_API_URL: "https://hotspot.example.test", NETCORE_PRINCIPAL: { permissions: [] },
     NetCorePaymentReadiness: { toDisplay: (payload) => ({ tone: "ready", title: payload.checkout_status, rows: payload.checkout_status === "empty" ? [] : [["Provider", payload.provider]] }) },
     NetCoreIntegrationDisplay: { toCards: (items) => items.map((item) => ({ provider: item.provider || "resend", name: "Resend", status: "Active", detail: "Configured", action: "Configure" })) },
     addEventListener(name, listener) { (listeners[name] ||= []).push(listener); }
   };
   const document = { body, createElement: (name) => new Element(name), createTextNode: (text) => { const node = new Element("#text"); node.textContent = text; return node; }, querySelector: (selector) => body.querySelector(selector), querySelectorAll: (selector) => body.querySelectorAll(selector) };
-  const source = (name) => fs.readFileSync(path.join(__dirname, name), "utf8"); let request = 0;
-  const fetch = () => { const next = responses[request++]; return next instanceof Error ? Promise.reject(next) : Promise.resolve(next); };
+  const source = (name) => fs.readFileSync(path.join(__dirname, name), "utf8"); let request = 0; const requests = [];
+  const fetch = (url) => { const next = responses[request++]; requests.push(url); return typeof next === "function" ? next(url) : next instanceof Error ? Promise.reject(next) : Promise.resolve(next); };
   vm.runInNewContext(source("live-page.js"), { window, document });
-  vm.runInNewContext(source(file), { window, document, fetch, Promise, Date, Number });
-  return { content, table, tableBody, window, render(page) { (listeners["netcore:page-rendered"] || []).forEach((listener) => listener({ detail: page })); }, state(kind) { return kind === "payment" ? content.querySelector("#payment-readiness") : kind === "integrations" ? content.querySelector("#integration-settings") : table; } };
+  vm.runInNewContext(source("live-list-config.js"), { window });
+  vm.runInNewContext(source("live-list-controls.js"), { window, URL });
+  vm.runInNewContext(source(file), { window, document, fetch, Promise, Date, Number, setTimeout, clearTimeout });
+  return { content, table, tableBody, window, requests, render(page) { (listeners["netcore:page-rendered"] || []).forEach((listener) => listener({ detail: page })); }, state(kind) { return kind === "payment" ? content.querySelector("#payment-readiness") : kind === "integrations" ? content.querySelector("#integration-settings") : table; } };
 }
+
+test("adapter harness exposes shared live-list dependencies before adapters run", () => {
+  const loaded = environment("live-subscriptions.js", []);
+  assert.equal(typeof loaded.window.NetCoreLiveListConfig.get, "function");
+  assert.equal(typeof loaded.window.NetCoreLiveListControls.createState, "function");
+});
+
+test("list adapters wait for their first rendered-page event before loading a hash-matched page", async () => {
+  for (const [file, page] of [
+    ["live-subscriptions.js", "subscriptions"], ["live-sessions.js", "sessions"], ["live-vouchers.js", "vouchers"],
+    ["live-network.js", "network"], ["live-billing.js", "billing"], ["live-security.js", "security"], ["live-automations.js", "automations"]
+  ]) {
+    const loaded = environment(file, [response({ data: [] })], "#" + page);
+    assert.equal(loaded.requests.length, 0, `${file} must stay idle before the authenticated rendered-page event`);
+    loaded.render(page);
+    assert.equal(loaded.requests.length, 1, `${file} must load once after its first matching rendered-page event`);
+    await settled();
+  }
+});
 
 test("every named adapter follows rendered routes and shows loading, records, and empty results", async () => {
   for (const [file, page, recordPayload, emptyPayload, kind] of adapterSpecs) {
@@ -101,5 +130,38 @@ test("every named adapter exposes a retryable error and preserves verified recor
       assert.equal(preserved.state(kind).getAttribute("data-live-state"), "error", `${file} must expose a refresh failure`);
     }
     assert.equal(preserved.tableBody.children.length, rowsBeforeFailure, `${file} must retain verified rows when its refresh fails`);
+  }
+});
+
+test("list adapters do not paginate or render stale responses while new criteria debounce", async () => {
+  for (const [file, page] of [
+    ["live-subscriptions.js", "subscriptions"], ["live-sessions.js", "sessions"], ["live-vouchers.js", "vouchers"],
+    ["live-network.js", "network"], ["live-billing.js", "billing"], ["live-security.js", "security"], ["live-automations.js", "automations"]
+  ]) {
+    let resolveOld;
+    let resolveCurrent;
+    const loaded = environment(file, [
+      response({ data: [{}], meta: { has_more: true, next_cursor: "next-page" } }),
+      () => new Promise((resolve) => { resolveOld = resolve; }),
+      () => new Promise((resolve) => { resolveCurrent = resolve; })
+    ]);
+    loaded.render(page); await settled();
+    const input = loaded.content.querySelector('[data-live-list-controls="' + page + '"] input');
+    const next = loaded.content.querySelectorAll('[data-live-list-pagination="' + page + '"] button')[1];
+    input.value = "current query";
+    input.listeners.input[0]();
+    next.click();
+    assert.equal(loaded.requests.length, 1, `${file} must not paginate while criteria are pending`);
+    loaded.render(page);
+    assert.equal(loaded.requests.length, 2, `${file} must keep the refresh request separate from pagination`);
+    resolveOld(response({ data: [], meta: { has_more: false } }));
+    await settled();
+    assert.equal(loaded.state().getAttribute("data-live-state"), "records", `${file} must not render the stale response`);
+    assert.equal(loaded.requests.length, 2, `${file} must keep the criteria network refresh debounced`);
+    await new Promise((resolve) => setTimeout(resolve, 275));
+    assert.equal(loaded.requests.length, 3, `${file} must request the debounced criteria after discarding stale data`);
+    assert.match(loaded.requests[2], /q=current\+query/, `${file} must request the typed criteria`);
+    resolveCurrent(response({ data: [{}], meta: { has_more: false } }));
+    await settled();
   }
 });
