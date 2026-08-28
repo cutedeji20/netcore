@@ -262,29 +262,153 @@ VALUES ($1, 'USER', $2, $3, 'plans', $4, NULLIF($5, '')::inet, NULLIF($6, ''))`,
 	return plan, nil
 }
 
+// Retire removes a plan from the public catalogue without changing the plan
+// terms used by existing subscriptions. Active customers retain their normal
+// entitlement until that subscription expires, is cancelled, or is suspended.
+func (s *PostgresStore) Retire(ctx context.Context, tenantID, planID string, actor MutationActor) (Plan, error) {
+	return s.changePublication(ctx, tenantID, planID, actor, StatusRetired)
+}
+
+// Restore makes a retired plan available for new purchases without modifying
+// any historical subscription data.
+func (s *PostgresStore) Restore(ctx context.Context, tenantID, planID string, actor MutationActor) (Plan, error) {
+	return s.changePublication(ctx, tenantID, planID, actor, StatusActive)
+}
+
+func (s *PostgresStore) changePublication(ctx context.Context, tenantID, planID string, actor MutationActor, status Status) (plan Plan, err error) {
+	if tenantID == "" || !validUUID(planID) || actor.UserID == "" || !IsValidStatus(status) {
+		return Plan{}, ErrInvalidInput
+	}
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		previous, err := loadPlanForUpdate(ctx, tx, tenantID, planID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("load plan for publication change: %w", err)
+		}
+		if previous.Status == status {
+			plan = previous
+			return nil
+		}
+
+		row := tx.QueryRow(ctx, `
+UPDATE plans
+   SET status = $3,
+       updated_at = now()
+ WHERE tenant_id = $1 AND id = $2::uuid
+RETURNING id::text, name, COALESCE(description, ''), price_minor, currency,
+          duration_seconds, download_bps, upload_bps, max_devices,
+          max_concurrent_sessions, quota_bytes, quota_reset_policy, status,
+          created_at, updated_at`, tenantID, planID, string(status))
+		if err := scanPlan(row, &plan); err != nil {
+			return fmt.Errorf("change plan publication: %w", err)
+		}
+		action := "PLAN_RETIRED"
+		if status == StatusActive {
+			action = "PLAN_RESTORED"
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id, ip_address, user_agent)
+VALUES ($1, 'USER', $2, $3, 'plans', $4, NULLIF($5, '')::inet, NULLIF($6, ''))`,
+			tenantID, actor.UserID, action, plan.ID, actor.IP, actor.UserAgent,
+		); err != nil {
+			return fmt.Errorf("write plan publication audit record: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return Plan{}, err
+	}
+	return plan, nil
+}
+
+// Delete permanently removes only a plan that has never been sold or issued
+// as a voucher. The row lock is intentional: it prevents a concurrent
+// subscription or voucher from being attached between the history check and
+// the deletion.
+func (s *PostgresStore) Delete(ctx context.Context, tenantID, planID string, actor MutationActor) error {
+	if tenantID == "" || !validUUID(planID) || actor.UserID == "" {
+		return ErrInvalidInput
+	}
+	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		plan, err := loadPlanForUpdate(ctx, tx, tenantID, planID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("load plan for deletion: %w", err)
+		}
+
+		var hasHistory bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM subscriptions WHERE tenant_id = $1 AND plan_id = $2::uuid
+    UNION ALL
+    SELECT 1 FROM vouchers WHERE tenant_id = $1 AND plan_id = $2::uuid
+)`, tenantID, planID).Scan(&hasHistory); err != nil {
+			return fmt.Errorf("check plan deletion history: %w", err)
+		}
+		if hasHistory {
+			return ErrDeleteBlocked
+		}
+		result, err := tx.Exec(ctx, `DELETE FROM plans WHERE tenant_id = $1 AND id = $2::uuid`, tenantID, planID)
+		if err != nil {
+			return fmt.Errorf("delete plan: %w", err)
+		}
+		if result.RowsAffected() != 1 {
+			return ErrNotFound
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id, metadata, ip_address, user_agent)
+VALUES ($1, 'USER', $2, 'PLAN_DELETED', 'plans', $3, jsonb_build_object('name', $4, 'status', $5), NULLIF($6, '')::inet, NULLIF($7, ''))`,
+			tenantID, actor.UserID, plan.ID, plan.Name, string(plan.Status), actor.IP, actor.UserAgent,
+		); err != nil {
+			return fmt.Errorf("write plan deletion audit record: %w", err)
+		}
+		return nil
+	})
+}
+
 func loadPlanForUpdate(ctx context.Context, tx pgx.Tx, tenantID, planID string) (plan Plan, err error) {
-	var quotaBytes pgtype.Int8
-	err = tx.QueryRow(ctx, `
+	row := tx.QueryRow(ctx, `
 SELECT id::text, name, COALESCE(description, ''), price_minor, currency,
        duration_seconds, download_bps, upload_bps, max_devices,
        max_concurrent_sessions, quota_bytes, quota_reset_policy, status,
        created_at, updated_at
   FROM plans
  WHERE tenant_id = $1 AND id = $2::uuid
- FOR UPDATE`, tenantID, planID).Scan(
+ FOR UPDATE`, tenantID, planID)
+	if err := scanPlan(row, &plan); err != nil {
+		return Plan{}, err
+	}
+	return plan, nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanPlan(row rowScanner, plan *Plan) error {
+	var quotaBytes pgtype.Int8
+	return scanPlanWithQuota(row, plan, &quotaBytes)
+}
+
+func scanPlanWithQuota(row rowScanner, plan *Plan, quotaBytes *pgtype.Int8) error {
+	err := row.Scan(
 		&plan.ID, &plan.Name, &plan.Description, &plan.PriceMinor, &plan.Currency,
 		&plan.DurationSeconds, &plan.DownloadBPS, &plan.UploadBPS, &plan.MaxDevices,
-		&plan.MaxConcurrentSessions, &quotaBytes, &plan.QuotaResetPolicy, &plan.Status,
+		&plan.MaxConcurrentSessions, quotaBytes, &plan.QuotaResetPolicy, &plan.Status,
 		&plan.CreatedAt, &plan.UpdatedAt,
 	)
 	if err != nil {
-		return Plan{}, err
+		return err
 	}
 	if quotaBytes.Valid {
 		value := quotaBytes.Int64
 		plan.QuotaBytes = &value
 	}
-	return plan, nil
+	return nil
 }
 
 func sameTerms(plan Plan, input WriteInput) bool {

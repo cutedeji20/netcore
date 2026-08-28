@@ -31,6 +31,23 @@ type memoryStore struct {
 	updatedActor  MutationActor
 	updatedInput  WriteInput
 	updatedPlan   Plan
+
+	retiredTenant string
+	retiredPlanID string
+	retiredActor  MutationActor
+	retiredPlan   Plan
+	retiredErr    error
+
+	restoredTenant string
+	restoredPlanID string
+	restoredActor  MutationActor
+	restoredPlan   Plan
+	restoredErr    error
+
+	deletedTenant string
+	deletedPlanID string
+	deletedActor  MutationActor
+	deletedErr    error
 }
 
 func (s *memoryStore) List(_ context.Context, tenantID string, options ListOptions) (Page, error) {
@@ -52,6 +69,27 @@ func (s *memoryStore) Update(_ context.Context, tenantID, planID string, actor M
 	s.updatedActor = actor
 	s.updatedInput = input
 	return s.updatedPlan, s.err
+}
+
+func (s *memoryStore) Retire(_ context.Context, tenantID, planID string, actor MutationActor) (Plan, error) {
+	s.retiredTenant = tenantID
+	s.retiredPlanID = planID
+	s.retiredActor = actor
+	return s.retiredPlan, s.retiredErr
+}
+
+func (s *memoryStore) Restore(_ context.Context, tenantID, planID string, actor MutationActor) (Plan, error) {
+	s.restoredTenant = tenantID
+	s.restoredPlanID = planID
+	s.restoredActor = actor
+	return s.restoredPlan, s.restoredErr
+}
+
+func (s *memoryStore) Delete(_ context.Context, tenantID, planID string, actor MutationActor) error {
+	s.deletedTenant = tenantID
+	s.deletedPlanID = planID
+	s.deletedActor = actor
+	return s.deletedErr
 }
 
 func newTestHTTP(t *testing.T) (*HTTP, *memoryStore) {
@@ -218,6 +256,100 @@ func TestUpdateRetiresTheTenantPlan(t *testing.T) {
 	}
 	if store.updatedTenant != planTestTenantID || store.updatedPlanID != "55555555-5555-4555-8555-555555555555" || store.updatedInput.Status != StatusRetired {
 		t.Fatalf("update scope/input = tenant %q plan %q input %+v", store.updatedTenant, store.updatedPlanID, store.updatedInput)
+	}
+}
+
+func TestRetireUsesDedicatedTenantScopedLifecycleAction(t *testing.T) {
+	handler, store := newTestHTTP(t)
+	const planID = "55555555-5555-4555-8555-555555555555"
+	store.retiredPlan = Plan{ID: planID, Name: "Day Pass", Status: StatusRetired}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/plans/"+planID+"/retire", nil)
+	request.RemoteAddr = "192.0.2.44:8080"
+	request.SetPathValue("id", planID)
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{
+		TenantID: planTestTenantID,
+		UserID:   "66666666-6666-4666-8666-666666666666",
+	}))
+	response := httptest.NewRecorder()
+
+	handler.retire(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+	if store.retiredTenant != planTestTenantID || store.retiredPlanID != planID || store.retiredActor.UserID != "66666666-6666-4666-8666-666666666666" || store.retiredActor.IP != "192.0.2.44" {
+		t.Fatalf("retire scope/actor = tenant %q plan %q actor %+v", store.retiredTenant, store.retiredPlanID, store.retiredActor)
+	}
+	if !strings.Contains(response.Body.String(), `"status":"RETIRED"`) {
+		t.Fatalf("retire response = %s", response.Body.String())
+	}
+}
+
+func TestRestoreUsesDedicatedTenantScopedLifecycleAction(t *testing.T) {
+	handler, store := newTestHTTP(t)
+	const planID = "55555555-5555-4555-8555-555555555555"
+	store.restoredPlan = Plan{ID: planID, Name: "Day Pass", Status: StatusActive}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/plans/"+planID+"/restore", nil)
+	request.SetPathValue("id", planID)
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{
+		TenantID: planTestTenantID,
+		UserID:   "66666666-6666-4666-8666-666666666666",
+	}))
+	response := httptest.NewRecorder()
+
+	handler.restore(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+	if store.restoredTenant != planTestTenantID || store.restoredPlanID != planID || store.restoredActor.UserID != "66666666-6666-4666-8666-666666666666" {
+		t.Fatalf("restore scope/actor = tenant %q plan %q actor %+v", store.restoredTenant, store.restoredPlanID, store.restoredActor)
+	}
+	if !strings.Contains(response.Body.String(), `"status":"ACTIVE"`) {
+		t.Fatalf("restore response = %s", response.Body.String())
+	}
+}
+
+func TestDeleteRejectsPlansWithSubscriptionOrVoucherHistory(t *testing.T) {
+	handler, store := newTestHTTP(t)
+	const planID = "55555555-5555-4555-8555-555555555555"
+	store.deletedErr = ErrDeleteBlocked
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/plans/"+planID, nil)
+	request.SetPathValue("id", planID)
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{
+		TenantID: planTestTenantID,
+		UserID:   "66666666-6666-4666-8666-666666666666",
+	}))
+	response := httptest.NewRecorder()
+
+	handler.delete(response, request)
+
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "PLAN_DELETE_BLOCKED") {
+		t.Fatalf("delete response = %d %s", response.Code, response.Body.String())
+	}
+	if store.deletedTenant != planTestTenantID || store.deletedPlanID != planID || store.deletedActor.UserID != "66666666-6666-4666-8666-666666666666" {
+		t.Fatalf("delete scope/actor = tenant %q plan %q actor %+v", store.deletedTenant, store.deletedPlanID, store.deletedActor)
+	}
+}
+
+func TestDeletePristinePlanReturnsNoContent(t *testing.T) {
+	handler, store := newTestHTTP(t)
+	const planID = "55555555-5555-4555-8555-555555555555"
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/plans/"+planID, nil)
+	request.SetPathValue("id", planID)
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{
+		TenantID: planTestTenantID,
+		UserID:   "66666666-6666-4666-8666-666666666666",
+	}))
+	response := httptest.NewRecorder()
+
+	handler.delete(response, request)
+
+	if response.Code != http.StatusNoContent || response.Body.Len() != 0 || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("delete response = status %d body %q headers %+v", response.Code, response.Body.String(), response.Header())
+	}
+	if store.deletedTenant != planTestTenantID || store.deletedPlanID != planID {
+		t.Fatalf("delete scope = tenant %q plan %q", store.deletedTenant, store.deletedPlanID)
 	}
 }
 

@@ -16,6 +16,10 @@ var (
 	ErrInvalidInput = errors.New("plans: invalid plan input")
 	ErrNotFound     = errors.New("plans: plan not found")
 	ErrTermsLocked  = errors.New("plans: plan terms are locked by subscriptions")
+	// ErrDeleteBlocked deliberately covers every historical plan reference. A
+	// plan that has ever been sold or issued must be retained for audit and
+	// entitlement history; operators should retire it instead.
+	ErrDeleteBlocked = errors.New("plans: plan deletion is blocked by history")
 )
 
 // Status is the publication state of a plan.
@@ -162,4 +166,7 @@ type Store interface {
 	List(ctx context.Context, tenantID string, options ListOptions) (Page, error)
 	Create(ctx context.Context, tenantID string, actor MutationActor, input WriteInput) (Plan, error)
 	Update(ctx context.Context, tenantID, planID string, actor MutationActor, input WriteInput) (Plan, error)
+	Retire(ctx context.Context, tenantID, planID string, actor MutationActor) (Plan, error)
+	Restore(ctx context.Context, tenantID, planID string, actor MutationActor) (Plan, error)
+	Delete(ctx context.Context, tenantID, planID string, actor MutationActor) error
 }

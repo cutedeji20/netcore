@@ -350,7 +350,13 @@ func TestPreviewServesPlanAdapter(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
-	if !strings.Contains(response.Body.String(), "/api/v1/plans") {
+	body := response.Body.String()
+	if !strings.Contains(body, "/api/v1/plans") {
 		t.Fatal("plan API adapter was not served")
+	}
+	for _, endpoint := range []string{"/retire", "/restore", "plan.delete"} {
+		if !strings.Contains(body, endpoint) {
+			t.Fatalf("plan lifecycle control %q was not served", endpoint)
+		}
 	}
 }

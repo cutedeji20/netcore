@@ -16,6 +16,13 @@
     return Array.isArray(permissions) && permissions.indexOf("plan.write") !== -1;
   }
 
+  function canDeletePlans() {
+    var permissions = window.NETCORE_PRINCIPAL && window.NETCORE_PRINCIPAL.permissions;
+    return Array.isArray(permissions) && permissions.indexOf("plan.delete") !== -1;
+  }
+
+  function canManagePlans() { return canWritePlans() || canDeletePlans(); }
+
   function safeText(value) { return value == null || value === "" ? "—" : String(value); }
 
   function formatRate(bps) {
@@ -79,20 +86,33 @@
     row.appendChild(cell);
   }
 
-  function appendEditCell(row, plan) {
+  function actionButton(label, className, listener) {
+    var button = document.createElement("button");
+    button.className = "button " + className;
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", listener);
+    return button;
+  }
+
+  function appendActionCell(row, plan) {
     var cell = document.createElement("td");
-    var edit = document.createElement("button");
-    edit.className = "button plan-edit";
-    edit.type = "button";
-    edit.textContent = "Edit";
-    edit.addEventListener("click", function () { openPlanDialog(plan); });
-    cell.appendChild(edit);
+    cell.className = "plan-actions";
+    if (canWritePlans()) {
+      cell.appendChild(actionButton("Edit", "plan-edit", function () { openPlanDialog(plan); }));
+      if (plan.status === "ACTIVE") {
+        cell.appendChild(actionButton("Retire", "plan-retire", function () { openPublicationDialog(plan, "RETIRED"); }));
+      } else {
+        cell.appendChild(actionButton("Restore", "plan-restore", function () { openPublicationDialog(plan, "ACTIVE"); }));
+      }
+    }
+    if (canDeletePlans()) cell.appendChild(actionButton("Delete", "plan-delete", function () { openDeletePlanDialog(plan); }));
     row.appendChild(cell);
   }
 
   function setHeadings(table) {
     var headings = ["Plan", "Speed", "Price", "Duration", "Subscribers", "Status"];
-    if (canWritePlans()) headings.push("Action");
+    if (canManagePlans()) headings.push("Action");
     var headingRow = table.querySelector("thead tr");
     headingRow.replaceChildren();
     headings.forEach(function (value) {
@@ -136,7 +156,7 @@
       appendTextCell(row, formatDuration(plan.duration_seconds));
       appendTextCell(row, plan.active_subscriptions);
       appendStatusCell(row, plan.status);
-      if (canWritePlans()) appendEditCell(row, plan);
+      if (canManagePlans()) appendActionCell(row, plan);
       body.appendChild(row);
     });
     showState("records");
@@ -220,7 +240,7 @@
     dialog.className = "plan-dialog";
     title.textContent = plan ? "Edit plan" : "Create plan";
     note.className = "plan-dialog-note";
-    note.textContent = hasSubscriptions ? "This plan has subscriptions. Its commercial terms are locked; you may only retire or publish it." : "Published plans become visible in the customer portal once checkout is enabled.";
+    note.textContent = hasSubscriptions ? "This plan has subscription history, so its commercial terms are locked. Use Retire or Restore outside this form to control future sales." : "Published plans become visible in the customer portal once checkout is enabled.";
     heading.append(title, note);
     form.className = "plan-form";
     form.noValidate = true;
@@ -233,8 +253,7 @@
       createInput("Upload speed (Mbps)", "upload_mbps", "number", numberString(current.upload_bps, 1000000), { min: 0.1, max: 10000, step: 0.1 }),
       createInput("Registered devices", "max_devices", "number", current.max_devices || 1, { min: 1, max: 100, step: 1 }),
       createInput("Concurrent sessions", "max_sessions", "number", current.max_concurrent_sessions || 1, { min: 1, max: 100, step: 1 }),
-      createInput("Data cap (GB, optional)", "quota_gb", "text", current.quota_bytes ? numberString(current.quota_bytes, 1000000000) : "", { required: false }),
-      createInput("Availability", "status", "select", current.status || "ACTIVE", { values: [{ value: "ACTIVE", label: "Published" }, { value: "RETIRED", label: "Retired" }] })
+      createInput("Data cap (GB, optional)", "quota_gb", "text", current.quota_bytes ? numberString(current.quota_bytes, 1000000000) : "", { required: false })
     );
     if (hasSubscriptions) {
       Array.prototype.forEach.call(form.elements, function (field) {
@@ -248,11 +267,12 @@
     cancel.textContent = "Cancel";
     cancel.addEventListener("click", closePlanDialog);
     submit.className = "button primary";
-    submit.type = "submit";
-    submit.textContent = plan ? "Save changes" : "Create plan";
+    submit.type = hasSubscriptions ? "button" : "submit";
+    submit.textContent = hasSubscriptions ? "Close" : (plan ? "Save changes" : "Create plan");
+    if (hasSubscriptions) submit.addEventListener("click", closePlanDialog);
     footer.append(cancel, submit);
     form.append(feedback, footer);
-    form.addEventListener("submit", function (event) {
+    if (!hasSubscriptions) form.addEventListener("submit", function (event) {
       event.preventDefault();
       submitPlan(plan, current, form, submit, feedback);
     });
@@ -290,10 +310,7 @@
     var devices = Number(values.get("max_devices"));
     var sessions = Number(values.get("max_sessions"));
     if (minor == null || !Number.isInteger(durationDays) || durationDays < 1 || durationDays > 1825 || !Number.isSafeInteger(download) || download < 100000 || !Number.isSafeInteger(upload) || upload < 100000 || !Number.isInteger(devices) || devices < 1 || devices > 100 || !Number.isInteger(sessions) || sessions < 1 || sessions > devices || quota === undefined) return null;
-    if (current && Number(current.active_subscriptions) > 0) {
-      return { name: current.name, description: current.description || "", price_minor: String(current.price_minor), currency: current.currency, duration_seconds: Number(current.duration_seconds), download_bps: Number(current.download_bps), upload_bps: Number(current.upload_bps), max_devices: Number(current.max_devices), max_concurrent_sessions: Number(current.max_concurrent_sessions), quota_bytes: current.quota_bytes == null ? null : Number(current.quota_bytes), quota_reset_policy: current.quota_reset_policy, status: values.get("status") };
-    }
-    return { name: String(values.get("name") || ""), description: String(values.get("description") || ""), price_minor: minor, currency: "NGN", duration_seconds: durationDays * 86400, download_bps: download, upload_bps: upload, max_devices: devices, max_concurrent_sessions: sessions, quota_bytes: quota, quota_reset_policy: quota == null ? "NONE" : "PER_SUBSCRIPTION", status: values.get("status") };
+    return { name: String(values.get("name") || ""), description: String(values.get("description") || ""), price_minor: minor, currency: "NGN", duration_seconds: durationDays * 86400, download_bps: download, upload_bps: upload, max_devices: devices, max_concurrent_sessions: sessions, quota_bytes: quota, quota_reset_policy: quota == null ? "NONE" : "PER_SUBSCRIPTION", status: current && current.status ? current.status : "ACTIVE" };
   }
 
   function submitPlan(plan, current, form, submit, feedback) {
@@ -317,6 +334,126 @@
     }).catch(function (error) {
       feedback.textContent = error && error.message ? error.message : "The plan could not be saved.";
     }).finally(function () { submit.disabled = false; });
+  }
+
+  function closePlanLifecycleDialog() {
+    var dialog = document.querySelector("#plan-lifecycle-dialog-backdrop");
+    if (dialog) dialog.remove();
+  }
+
+  function runPlanLifecycle(plan, endpoint, method, submit, feedback, success) {
+    submit.disabled = true;
+    feedback.textContent = "Saving…";
+    fetch(apiBase + "/api/v1/plans/" + encodeURIComponent(plan.id) + endpoint, {
+      method: method, credentials: "include", cache: "no-store", headers: { "Accept": "application/json" }
+    }).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (body) {
+        if (!response.ok) throw new Error(body && body.error && body.error.message ? body.error.message : "The plan could not be changed.");
+      });
+    }).then(function () {
+      closePlanLifecycleDialog();
+      showPlanMessage(success, false);
+      requestPlans(true);
+    }).catch(function (error) {
+      feedback.textContent = error && error.message ? error.message : "The plan could not be changed.";
+    }).finally(function () { submit.disabled = false; });
+  }
+
+  function lifecycleDialog(titleText, noteText, submitText, onSubmit) {
+    closePlanLifecycleDialog();
+    var backdrop = document.createElement("div");
+    var dialog = document.createElement("section");
+    var heading = document.createElement("header");
+    var title = document.createElement("h2");
+    var note = document.createElement("p");
+    var feedback = document.createElement("p");
+    var footer = document.createElement("footer");
+    var cancel = document.createElement("button");
+    var submit = document.createElement("button");
+    backdrop.className = "plan-dialog-backdrop";
+    backdrop.id = "plan-lifecycle-dialog-backdrop";
+    dialog.className = "plan-dialog plan-lifecycle-dialog";
+    title.textContent = titleText;
+    note.className = "plan-dialog-note";
+    note.textContent = noteText;
+    feedback.className = "plan-form-feedback";
+    feedback.setAttribute("role", "alert");
+    cancel.className = "button";
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", closePlanLifecycleDialog);
+    submit.className = "button primary";
+    submit.type = "button";
+    submit.textContent = submitText;
+    submit.addEventListener("click", function () { onSubmit(submit, feedback); });
+    heading.append(title, note);
+    footer.append(cancel, submit);
+    dialog.append(heading, feedback, footer);
+    backdrop.appendChild(dialog);
+    backdrop.addEventListener("click", function (event) { if (event.target === backdrop) closePlanLifecycleDialog(); });
+    document.body.appendChild(backdrop);
+  }
+
+  function openPublicationDialog(plan, targetStatus) {
+    if (!canWritePlans()) return;
+    var retiring = targetStatus === "RETIRED";
+    var action = retiring ? "Retire" : "Restore";
+    var note = retiring
+      ? "This removes “" + safeText(plan.name) + "” from new purchases. Existing active subscriptions keep access until their normal expiry, cancellation, or suspension."
+      : "This makes “" + safeText(plan.name) + "” available for new customer purchases again.";
+    lifecycleDialog(action + " plan?", note, action + " plan", function (submit, feedback) {
+      runPlanLifecycle(plan, retiring ? "/retire" : "/restore", "POST", submit, feedback, retiring ? "Plan retired. Existing subscriber access is unchanged." : "Plan restored for new purchases.");
+    });
+  }
+
+  function openDeletePlanDialog(plan) {
+    if (!canDeletePlans()) return;
+    closePlanLifecycleDialog();
+    var backdrop = document.createElement("div");
+    var dialog = document.createElement("section");
+    var heading = document.createElement("header");
+    var title = document.createElement("h2");
+    var note = document.createElement("p");
+    var field = document.createElement("label");
+    var input = document.createElement("input");
+    var feedback = document.createElement("p");
+    var footer = document.createElement("footer");
+    var cancel = document.createElement("button");
+    var submit = document.createElement("button");
+    backdrop.className = "plan-dialog-backdrop";
+    backdrop.id = "plan-lifecycle-dialog-backdrop";
+    dialog.className = "plan-dialog plan-lifecycle-dialog";
+    title.textContent = "Permanently delete plan?";
+    note.className = "plan-dialog-note";
+    note.textContent = "This cannot be undone. Deletion is allowed only when the plan has no subscriptions and no voucher codes. Type the exact plan name to confirm.";
+    field.className = "plan-field";
+    field.textContent = "Confirm plan name";
+    input.type = "text";
+    input.autocomplete = "off";
+    input.setAttribute("aria-label", "Confirm plan name");
+    field.appendChild(input);
+    feedback.className = "plan-form-feedback";
+    feedback.setAttribute("role", "alert");
+    cancel.className = "button";
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", closePlanLifecycleDialog);
+    submit.className = "button plan-delete";
+    submit.type = "button";
+    submit.textContent = "Delete permanently";
+    submit.disabled = true;
+    input.addEventListener("input", function () { submit.disabled = input.value !== plan.name; });
+    submit.addEventListener("click", function () {
+      if (input.value !== plan.name) return;
+      runPlanLifecycle(plan, "", "DELETE", submit, feedback, "Plan permanently deleted.");
+    });
+    heading.append(title, note);
+    footer.append(cancel, submit);
+    dialog.append(heading, field, feedback, footer);
+    backdrop.appendChild(dialog);
+    backdrop.addEventListener("click", function (event) { if (event.target === backdrop) closePlanLifecycleDialog(); });
+    document.body.appendChild(backdrop);
+    input.focus();
   }
 
   function closePlanDialog() {

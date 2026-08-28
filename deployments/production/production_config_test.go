@@ -196,3 +196,17 @@ func TestReceiptOutboxMigrationScopesGlobalWorkerOperations(t *testing.T) {
 		requireContains(t, text, want)
 	}
 }
+
+func TestPlanLifecycleMigrationKeepsRetiredPlanSubscribersAuthorised(t *testing.T) {
+	migration, err := os.ReadFile("../../db/migrations/0038_plan_lifecycle_safety.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(migration)
+	requireContains(t, text, "CREATE OR REPLACE FUNCTION radius_portal_access_policy")
+	requireContains(t, text, "AND s.status = 'ACTIVE'")
+	requireContains(t, text, "AND s.expires_at > p_at")
+	requireNotContains(t, text, "AND p.status = 'ACTIVE'")
+	requireContains(t, text, "'plan.delete'")
+	requireContains(t, text, "role.name = 'Administrator'")
+}

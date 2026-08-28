@@ -41,7 +41,8 @@ func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
 }
 
 // Routes installs the catalogue route behind authentication and its own
-// permission. Plan creation and retirement will require plan.write.
+// permission. Plan creation and lifecycle changes require plan.write; only a
+// separately granted plan.delete permission can permanently remove a plan.
 func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	if mux == nil || sessions == nil {
 		return errors.New("plans: mux and session authentication are required")
@@ -57,6 +58,18 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	mux.Handle(
 		"PUT /api/v1/plans/{id}",
 		sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("plan.write", http.HandlerFunc(h.update)))),
+	)
+	mux.Handle(
+		"POST /api/v1/plans/{id}/retire",
+		sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("plan.write", http.HandlerFunc(h.retire)))),
+	)
+	mux.Handle(
+		"POST /api/v1/plans/{id}/restore",
+		sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("plan.write", http.HandlerFunc(h.restore)))),
+	)
+	mux.Handle(
+		"DELETE /api/v1/plans/{id}",
+		sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("plan.delete", http.HandlerFunc(h.delete)))),
 	)
 	h.clientIP = sessions.ClientIP
 	return nil
@@ -153,6 +166,80 @@ func (h *HTTP) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, responsePlan(plan))
+}
+
+// retire removes a plan from future customer purchases. It intentionally does
+// not change any plan terms or its existing subscriptions.
+func (h *HTTP) retire(w http.ResponseWriter, r *http.Request) {
+	h.changePublication(w, r, StatusRetired)
+}
+
+// restore makes a previously retired plan available for future purchase again.
+func (h *HTTP) restore(w http.ResponseWriter, r *http.Request) {
+	h.changePublication(w, r, StatusActive)
+}
+
+func (h *HTTP) changePublication(w http.ResponseWriter, r *http.Request, status Status) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	planID := r.PathValue("id")
+	if !validUUID(planID) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_PLAN", "Plan details are invalid.")
+		return
+	}
+	actor := MutationActor{UserID: principal.UserID, IP: h.requestIP(r), UserAgent: r.UserAgent()}
+	var (
+		plan Plan
+		err  error
+	)
+	if status == StatusRetired {
+		plan, err = h.store.Retire(r.Context(), principal.TenantID, planID, actor)
+	} else {
+		plan, err = h.store.Restore(r.Context(), principal.TenantID, planID, actor)
+	}
+	switch {
+	case errors.Is(err, ErrNotFound):
+		security.WriteError(w, r, http.StatusNotFound, "PLAN_NOT_FOUND", "The plan was not found.")
+		return
+	case err != nil:
+		security.WriteError(w, r, http.StatusServiceUnavailable, "PLANS_UNAVAILABLE", "Plan data is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusOK, responsePlan(plan))
+}
+
+func (h *HTTP) delete(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	planID := r.PathValue("id")
+	if !validUUID(planID) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_PLAN", "Plan details are invalid.")
+		return
+	}
+	err := h.store.Delete(r.Context(), principal.TenantID, planID, MutationActor{
+		UserID:    principal.UserID,
+		IP:        h.requestIP(r),
+		UserAgent: r.UserAgent(),
+	})
+	switch {
+	case errors.Is(err, ErrNotFound):
+		security.WriteError(w, r, http.StatusNotFound, "PLAN_NOT_FOUND", "The plan was not found.")
+		return
+	case errors.Is(err, ErrDeleteBlocked):
+		security.WriteError(w, r, http.StatusConflict, "PLAN_DELETE_BLOCKED", "Plans with subscription or voucher history cannot be deleted. Retire the plan instead.")
+		return
+	case err != nil:
+		security.WriteError(w, r, http.StatusServiceUnavailable, "PLANS_UNAVAILABLE", "Plan data is temporarily unavailable.")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type writeRequest struct {
