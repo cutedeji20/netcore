@@ -37,7 +37,7 @@ const hasLiveConfig = adminConfig.mode === "live" && /^[a-z0-9](?:[a-z0-9-]{0,61
 let adminState = { authorised: false, adaptersLoaded: false, identity: null };
 let cancelSessionExpiry = () => {};
 let toastTimer;
-const readOnlyOperationalPages = new Set(["subscriptions", "sessions", "vouchers", "network", "billing", "security", "automations", "settings"]);
+const readOnlyOperationalPages = new Set(["subscriptions", "sessions", "vouchers", "billing", "security", "automations", "settings"]);
 
 const tag = (item) => {
   const [label, type = "gray"] = item.split("|");

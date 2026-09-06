@@ -54,6 +54,13 @@ test("read-only operational pages do not render unavailable primary actions", ()
   }
 });
 
+test("network page does not advertise the administrator workflow as read-only", () => {
+  const source = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
+  const match = source.match(/const readOnlyOperationalPages = new Set\(\[([^\]]*)\]\)/);
+  assert.ok(match, "read-only page list must be present");
+  assert.equal(match[1].includes('"network"'), false);
+});
+
 test("list mounts follow rendered page changes instead of a stale hash", () => {
   const source = fs.readFileSync(path.join(__dirname, "live-page.js"), "utf8");
   assert.match(source, /function listMount\(page\)/);

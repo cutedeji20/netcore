@@ -400,6 +400,7 @@
 
   function onPageRendered(event) {
     if (event.detail !== "network") return;
+    addCreateButton();
     renderControls();
     if (loadedRouters) requestRouters(true);
     else requestRouters();

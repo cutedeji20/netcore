@@ -17,6 +17,11 @@ test("network operations expose permission-gated router onboarding controls", ()
   assert.match(source, /Disable AAA/);
 });
 
+test("network page renders the administrator router onboarding control", () => {
+  assert.match(source, /function addCreateButton\(\)/);
+  assert.match(source, /\n\s*addCreateButton\(\);\s*\n/);
+});
+
 test("router setup export downloads a short-lived file without rendering or storing the secret", () => {
   assert.match(source, /response\.blob\(\)/);
   assert.match(source, /URL\.createObjectURL\(blob\)/);
