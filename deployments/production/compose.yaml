@@ -66,6 +66,9 @@ services:
       # versioned, non-exportable Key Vault key. No provider key is an env var.
       NETCORE_INTEGRATION_CRYPTO_BACKEND: ${NETCORE_INTEGRATION_CRYPTO_BACKEND:-disabled}
       NETCORE_INTEGRATION_KEK_ID: ${NETCORE_INTEGRATION_KEK_ID:-}
+      # Private VPN/control-plane address only. It is used when generating a
+      # one-time router AAA package and must never be the public VM address.
+      NETCORE_RADIUS_SERVER_ADDRESS: ${NETCORE_RADIUS_SERVER_ADDRESS:-}
     volumes:
       - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/app:/run/netcore/runtime:ro
       - postgres_tls:/run/netcore/postgres-tls:ro
@@ -164,8 +167,8 @@ services:
       NETCORE_RADIUS_SPOOL_MIN_FREE_BYTES: ${NETCORE_RADIUS_SPOOL_MIN_FREE_BYTES:-1073741824}
       NETCORE_RADIUS_SPOOL_CHECK_INTERVAL_SECONDS: "10"
     ports:
-      - "1812:1812/udp"
-      - "1813:1813/udp"
+      - "${NETCORE_RADIUS_SERVER_ADDRESS:?set NETCORE_RADIUS_SERVER_ADDRESS in deployments/production/.env}:1812:1812/udp"
+      - "${NETCORE_RADIUS_SERVER_ADDRESS:?set NETCORE_RADIUS_SERVER_ADDRESS in deployments/production/.env}:1813:1813/udp"
     volumes:
       - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/db_password:/run/netcore/runtime/radius_db_password:ro
       - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/clients.conf:/run/netcore/runtime/clients.conf:ro

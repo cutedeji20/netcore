@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,72 @@ type memoryStore struct {
 	options  ListOptions
 	page     Page
 	err      error
+}
+
+func TestExportReturnsNoStoreAttachmentWithoutSecretInErrors(t *testing.T) {
+	store := &lifecycleStoreStub{loaded: AAAConfiguration{RouterID: "22222222-2222-4222-8222-222222222222", NASID: "33333333-3333-4333-8333-333333333333", NASIPAddress: "172.16.0.4", RadiusSourceIP: "172.16.1.9", ShortName: "RB5009-LK-01"}}
+	service, err := NewService(store, credentialTestWrapper{keyID: "https://vault.example/keys/netcore-provider-kek/version"}, stepUpStub{}, "172.16.0.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _ := newTestHTTP(t)
+	handler.ConfigureLifecycle(service)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/network/routers/22222222-2222-4222-8222-222222222222/aaa/export", strings.NewReader(`{"password":"current","mfa_code":"123456"}`))
+	request.SetPathValue("routerID", "22222222-2222-4222-8222-222222222222")
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: networkTestTenantID, UserID: "44444444-4444-4444-8444-444444444444", Permissions: map[string]struct{}{"network.write": {}}}))
+	response := httptest.NewRecorder()
+
+	handler.export(response, request)
+
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || !strings.Contains(response.Header().Get("Content-Disposition"), "attachment") {
+		t.Fatalf("response status=%d headers=%v", response.Code, response.Header())
+	}
+}
+
+func TestAAAStatusOmitsSecretMaterial(t *testing.T) {
+	store := &lifecycleStoreStub{loaded: AAAConfiguration{RouterID: "22222222-2222-4222-8222-222222222222", NASID: "33333333-3333-4333-8333-333333333333", NASIPAddress: "172.16.0.4", RadiusSourceIP: "172.16.1.9", ShortName: "RB5009-LK-01", Status: NASStatusDisabled, Version: 2}}
+	service, _ := NewService(store, credentialTestWrapper{keyID: "https://vault.example/keys/netcore-provider-kek/version"}, stepUpStub{}, "172.16.0.4")
+	handler, _ := newTestHTTP(t)
+	handler.ConfigureLifecycle(service)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/network/routers/22222222-2222-4222-8222-222222222222/aaa", nil)
+	request.SetPathValue("routerID", "22222222-2222-4222-8222-222222222222")
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: networkTestTenantID, Permissions: map[string]struct{}{"network.read": {}}}))
+	response := httptest.NewRecorder()
+	handler.aaa(response, request)
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "secret") || !strings.Contains(response.Body.String(), `"status":"DISABLED"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+}
+
+func TestRouterMutationHandlersRejectTrailingJSON(t *testing.T) {
+	store := &lifecycleStoreStub{loaded: AAAConfiguration{RouterID: "22222222-2222-4222-8222-222222222222", NASID: "33333333-3333-4333-8333-333333333333", NASIPAddress: "172.16.0.4", RadiusSourceIP: "172.16.1.9", ShortName: "RB5009-LK-01"}}
+	service, err := NewService(store, credentialTestWrapper{keyID: "https://vault.example/keys/netcore-provider-kek/version"}, stepUpStub{}, "172.16.0.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _ := newTestHTTP(t)
+	handler.ConfigureLifecycle(service)
+	principal := auth.Principal{TenantID: networkTestTenantID, UserID: "44444444-4444-4444-8444-444444444444", Permissions: map[string]struct{}{"network.write": {}}}
+
+	for name, test := range map[string]struct {
+		target string
+		body   string
+		invoke func(http.ResponseWriter, *http.Request)
+	}{
+		"create": {"/api/v1/network/routers", `{"name":"RB5009","management_ip":"172.16.0.4","nas_ip_address":"172.16.0.4","radius_source_ip":"172.16.0.4","password":"current","mfa_code":"123456"}{}`, handler.createRouter},
+		"status": {"/api/v1/network/routers/22222222-2222-4222-8222-222222222222/aaa/activate", `{"password":"current","mfa_code":"123456"}{}`, handler.changeNASStatus(NASStatusActive)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, test.target, strings.NewReader(test.body))
+			request.SetPathValue("routerID", "22222222-2222-4222-8222-222222222222")
+			request = request.WithContext(auth.ContextWithPrincipal(request.Context(), principal))
+			response := httptest.NewRecorder()
+			test.invoke(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body)
+			}
+		})
+	}
 }
 
 func (s *memoryStore) List(_ context.Context, tenantID string, options ListOptions) (Page, error) {

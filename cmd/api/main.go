@@ -213,6 +213,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	networkService, err := network.NewService(networkStore, keyWrapper, authService, cfg.Radius.ServerAddress)
+	if err != nil {
+		return fmt.Errorf("network AAA service: %w", err)
+	}
+	networkHTTP.ConfigureLifecycle(networkService)
 	voucherStore, err := vouchers.NewPostgresStore(postgres)
 	if err != nil {
 		return err

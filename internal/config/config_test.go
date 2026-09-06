@@ -48,6 +48,24 @@ func TestLoad_MissingDSNFails(t *testing.T) {
 	}
 }
 
+func TestLoadRadiusServerAddressAcceptsOnlyPrivateIP(t *testing.T) {
+	valid := baseProd()
+	valid["NETCORE_RADIUS_SERVER_ADDRESS"] = "172.16.0.4"
+	config, err := Load(env(valid))
+	if err != nil {
+		t.Fatalf("Load valid private RADIUS address: %v", err)
+	}
+	if config.Radius.ServerAddress != "172.16.0.4" {
+		t.Fatalf("RADIUS address = %q", config.Radius.ServerAddress)
+	}
+
+	invalid := baseProd()
+	invalid["NETCORE_RADIUS_SERVER_ADDRESS"] = "40.123.254.20"
+	if _, err := Load(env(invalid)); err == nil || !strings.Contains(err.Error(), "must be a private IP address") {
+		t.Fatalf("public RADIUS address error = %v", err)
+	}
+}
+
 // §105 — the production safety invariants. Each of these is a real incident
 // that a presence-only check would have allowed to boot.
 func TestValidate_ProductionSafetyInvariants(t *testing.T) {

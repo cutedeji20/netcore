@@ -210,3 +210,52 @@ func TestPlanLifecycleMigrationKeepsRetiredPlanSubscribersAuthorised(t *testing.
 	requireContains(t, text, "'plan.delete'")
 	requireContains(t, text, "role.name = 'Administrator'")
 }
+
+func TestRouterSetupUsesAPrivateRadiusAddressOnlyInTheAPI(t *testing.T) {
+	compose, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	envExample, err := os.ReadFile(".env.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	composeText := string(compose)
+	apiStart := strings.Index(composeText, "  api:")
+	workerStart := strings.Index(composeText, "  worker:")
+	if apiStart == -1 || workerStart == -1 || workerStart <= apiStart {
+		t.Fatal("api section is not bounded by the worker section")
+	}
+	requireContains(t, composeText[apiStart:workerStart], "NETCORE_RADIUS_SERVER_ADDRESS: ${NETCORE_RADIUS_SERVER_ADDRESS:-}")
+	requireContains(t, composeText, "- \"${NETCORE_RADIUS_SERVER_ADDRESS:?set NETCORE_RADIUS_SERVER_ADDRESS in deployments/production/.env}:1812:1812/udp\"")
+	requireContains(t, composeText, "- \"${NETCORE_RADIUS_SERVER_ADDRESS:?set NETCORE_RADIUS_SERVER_ADDRESS in deployments/production/.env}:1813:1813/udp\"")
+	requireContains(t, string(envExample), "NETCORE_RADIUS_SERVER_ADDRESS=172.16.0.4")
+}
+
+func TestRouterNASMigrationProtectsEncryptedCredentials(t *testing.T) {
+	migration, err := os.ReadFile("../../db/migrations/0039_router_nas_onboarding.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(migration)
+
+	for _, want := range []string{
+		"ADD COLUMN radius_source_ip inet NOT NULL",
+		"CREATE TABLE router_radius_credentials",
+		"octet_length(secret_nonce) = 12",
+		"verified_at       timestamptz",
+		"verified_by       uuid",
+		"ALTER TABLE router_radius_credentials FORCE ROW LEVEL SECURITY",
+		"CREATE INDEX router_radius_credentials_tenant_idx",
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON router_radius_credentials TO netcore_app_rw",
+	} {
+		requireContains(t, text, want)
+	}
+	requireNotContains(t, text, "clients.conf")
+
+	compose, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireContains(t, string(compose), "/radius/clients.conf:/run/netcore/runtime/clients.conf:ro")
+}

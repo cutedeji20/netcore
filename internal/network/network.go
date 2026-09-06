@@ -12,6 +12,8 @@ import (
 var (
 	ErrInvalidPage = errors.New("network: invalid page request")
 	ErrUnavailable = errors.New("network: router data unavailable")
+	ErrNotFound    = errors.New("network: router not found")
+	ErrConflict    = errors.New("network: lifecycle state changed")
 )
 
 // RouterStatus is the router lifecycle state stored in PostgreSQL.
@@ -35,12 +37,13 @@ func IsValidRouterStatus(status RouterStatus) bool {
 
 // Router is a staff-safe network inventory record.
 type Router struct {
-	ID         string
-	Name       string
-	SiteName   string
-	Status     RouterStatus
-	AAAStatus  string
-	LastSeenAt *time.Time
+	ID          string
+	Name        string
+	SiteName    string
+	Status      RouterStatus
+	AAAStatus   string
+	AAAVerified bool
+	LastSeenAt  *time.Time
 }
 
 // ListOptions is a bounded alphabetic keyset-paginated router query. Router
@@ -65,4 +68,41 @@ type Page struct {
 // Store is the router persistence boundary.
 type Store interface {
 	List(ctx context.Context, tenantID string, options ListOptions) (Page, error)
+}
+
+// MutationActor identifies the staff member responsible for a network change.
+type MutationActor struct {
+	UserID    string
+	IP        string
+	UserAgent string
+}
+
+// NASStatus is the lifecycle state accepted by the RADIUS policy.
+type NASStatus string
+
+const (
+	NASStatusActive   NASStatus = "ACTIVE"
+	NASStatusDisabled NASStatus = "DISABLED"
+)
+
+// AAAConfiguration is safe to display to authorised staff. It deliberately
+// omits the shared secret, secret reference, and encrypted envelope bytes.
+type AAAConfiguration struct {
+	RouterID       string
+	NASID          string
+	NASIPAddress   string
+	RadiusSourceIP string
+	ShortName      string
+	Status         NASStatus
+	Version        int64
+	Verified       bool
+}
+
+// LifecycleStore is the network mutation boundary used by MFA-gated routes.
+type LifecycleStore interface {
+	CreateRouter(ctx context.Context, tenantID string, actor MutationActor, input RouterCreateInput) (AAAConfiguration, error)
+	LoadAAA(ctx context.Context, tenantID, routerID string) (AAAConfiguration, error)
+	SaveCredential(ctx context.Context, actor MutationActor, record RadiusCredentialRecord) error
+	MarkVerified(ctx context.Context, tenantID, routerID string, actor MutationActor) error
+	SetNASStatus(ctx context.Context, tenantID, routerID string, actor MutationActor, status NASStatus) error
 }

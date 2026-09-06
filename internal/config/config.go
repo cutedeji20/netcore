@@ -47,6 +47,7 @@ type Config struct {
 	Email    Email
 	Portal   Portal
 	Payments Payments
+	Radius   Radius
 	// Staff contains public browser-facing URLs used in staff workflows. It
 	// never contains invitation tokens or other secrets.
 	Staff Staff
@@ -147,6 +148,12 @@ type Payments struct {
 	PaystackCallbackURL string
 	WebhookPollInterval time.Duration
 	WebhookMaxAttempts  int
+}
+
+// Radius contains only private control-plane addressing used when rendering
+// operator setup material. It never contains a RADIUS shared secret.
+type Radius struct {
+	ServerAddress string
 }
 
 // Staff configures the fixed public entry point for staff invitations.
@@ -252,6 +259,7 @@ func Load(getenv func(string) string) (*Config, error) {
 			WebhookPollInterval: durDefault(getenv("NETCORE_WEBHOOK_POLL_INTERVAL"), time.Second),
 			WebhookMaxAttempts:  intDefault(getenv("NETCORE_WEBHOOK_MAX_ATTEMPTS"), 8),
 		},
+		Radius: Radius{ServerAddress: strings.TrimSpace(getenv("NETCORE_RADIUS_SERVER_ADDRESS"))},
 		Staff: Staff{
 			InviteURL: strings.TrimSpace(getenv("NETCORE_STAFF_INVITE_URL")),
 		},
@@ -423,6 +431,9 @@ func (c *Config) Validate() error {
 	if c.Portal.TenantSlug != "" && !validPortalTenantSlug(c.Portal.TenantSlug) {
 		p = append(p, "NETCORE_PORTAL_TENANT_SLUG must be a lowercase tenant slug when configured")
 	}
+	if c.Radius.ServerAddress != "" && !validPrivateAddress(c.Radius.ServerAddress) {
+		p = append(p, "NETCORE_RADIUS_SERVER_ADDRESS must be a private IP address when configured")
+	}
 
 	// ------------------------------------------------------------------
 	// Production safety invariants. These are the reason this function
@@ -500,6 +511,22 @@ func validTrustedProxy(value string) bool {
 	}
 	prefix, err := netip.ParsePrefix(value)
 	return err == nil && !prefix.Addr().IsUnspecified()
+}
+
+func validPrivateAddress(value string) bool {
+	address, err := netip.ParseAddr(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	for _, prefix := range []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("172.16.0.0/12"),
+		netip.MustParsePrefix("192.168.0.0/16"), netip.MustParsePrefix("fd00::/8"),
+	} {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
 }
 
 func validHTTPSURL(value string) bool {

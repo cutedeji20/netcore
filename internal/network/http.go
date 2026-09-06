@@ -20,9 +20,15 @@ const maxSearchLength = 120
 // HTTP exposes staff-only router inventory read endpoints.
 type HTTP struct {
 	store           Store
+	lifecycle       *Service
 	defaultPageSize int
 	maxPageSize     int
+	clientIP        func(*http.Request) string
 }
+
+// ConfigureLifecycle adds secret-bearing routes only after the API has a
+// configured Key Vault wrapper and private RADIUS address.
+func (h *HTTP) ConfigureLifecycle(service *Service) { h.lifecycle = service }
 
 func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
 	if store == nil {
@@ -48,7 +54,249 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"GET /api/v1/network/routers",
 		sessions.RequireAuth(auth.RequirePermission("network.read", http.HandlerFunc(h.list))),
 	)
+	mux.Handle("POST /api/v1/network/routers", sessions.RequireAuth(auth.RequirePermission("network.write", http.HandlerFunc(h.createRouter))))
+	mux.Handle("POST /api/v1/network/routers/{routerID}/aaa/export", sessions.RequireAuth(auth.RequirePermission("network.write", http.HandlerFunc(h.export))))
+	mux.Handle("GET /api/v1/network/routers/{routerID}/aaa", sessions.RequireAuth(auth.RequirePermission("network.read", http.HandlerFunc(h.aaa))))
+	mux.Handle("POST /api/v1/network/routers/{routerID}/aaa/verify", sessions.RequireAuth(auth.RequirePermission("network.write", http.HandlerFunc(h.verifyAAA))))
+	mux.Handle("POST /api/v1/network/routers/{routerID}/aaa/activate", sessions.RequireAuth(auth.RequirePermission("network.write", h.changeNASStatus(NASStatusActive))))
+	mux.Handle("POST /api/v1/network/routers/{routerID}/aaa/disable", sessions.RequireAuth(auth.RequirePermission("network.write", h.changeNASStatus(NASStatusDisabled))))
+	h.clientIP = sessions.ClientIP
 	return nil
+}
+
+func (h *HTTP) mutationActor(r *http.Request, userID string) MutationActor {
+	ip := ""
+	if h.clientIP != nil {
+		ip = h.clientIP(r)
+	}
+	return MutationActor{UserID: userID, IP: ip, UserAgent: r.UserAgent()}
+}
+
+func (h *HTTP) createRouter(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if !principal.HasPermission("network.write") {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "You do not have permission to manage network AAA.")
+		return
+	}
+	if h.lifecycle == nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_AAA_UNAVAILABLE", "Router onboarding is not configured.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8192)
+	defer r.Body.Close()
+	var input struct {
+		Name           string `json:"name"`
+		SiteID         string `json:"site_id"`
+		ManagementIP   string `json:"management_ip"`
+		NASIPAddress   string `json:"nas_ip_address"`
+		RadiusSourceIP string `json:"radius_source_ip"`
+		Password       string `json:"password"`
+		MFACode        string `json:"mfa_code"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Router details and administrator confirmation are required.")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
+		return
+	}
+	created, err := h.lifecycle.CreateRouter(r.Context(), principal, h.mutationActor(r, principal.UserID), input.Password, input.MFACode, RouterCreateInput{Name: input.Name, SiteID: input.SiteID, ManagementIP: input.ManagementIP, NASIPAddress: input.NASIPAddress, RadiusSourceIP: input.RadiusSourceIP})
+	if errors.Is(err, ErrStepUpFailed) {
+		security.WriteError(w, r, http.StatusUnauthorized, "STEP_UP_FAILED", "Password or authenticator code was not accepted.")
+		return
+	}
+	if errors.Is(err, ErrInvalidRouterInput) || errors.Is(err, ErrServiceUnavailable) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Router details are invalid.")
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_AAA_UNAVAILABLE", "Router onboarding is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusCreated, struct {
+		RouterID string    `json:"router_id"`
+		NASID    string    `json:"nas_id"`
+		Status   NASStatus `json:"status"`
+	}{created.RouterID, created.NASID, created.Status})
+}
+
+func (h *HTTP) changeNASStatus(status NASStatus) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok || principal.TenantID == "" {
+			security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+			return
+		}
+		if !principal.HasPermission("network.write") {
+			security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "You do not have permission to manage network AAA.")
+			return
+		}
+		if h.lifecycle == nil {
+			security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_AAA_UNAVAILABLE", "Router onboarding is not configured.")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		defer r.Body.Close()
+		var input struct {
+			Password string `json:"password"`
+			MFACode  string `json:"mfa_code"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil {
+			security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Password and authenticator confirmation are required.")
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
+			return
+		}
+		if err := h.lifecycle.SetStatus(r.Context(), principal, h.mutationActor(r, principal.UserID), input.Password, input.MFACode, r.PathValue("routerID"), status); errors.Is(err, ErrStepUpFailed) {
+			security.WriteError(w, r, http.StatusUnauthorized, "STEP_UP_FAILED", "Password or authenticator code was not accepted.")
+			return
+		} else if errors.Is(err, ErrNotFound) {
+			security.WriteError(w, r, http.StatusNotFound, "ROUTER_NOT_FOUND", "Router AAA configuration was not found.")
+			return
+		} else if err != nil {
+			security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_AAA_UNAVAILABLE", "Router onboarding is temporarily unavailable.")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (h *HTTP) aaa(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if !principal.HasPermission("network.read") {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "You do not have permission to view network AAA.")
+		return
+	}
+	if h.lifecycle == nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_AAA_UNAVAILABLE", "Router onboarding is not configured.")
+		return
+	}
+	configuration, err := h.lifecycle.AAA(r.Context(), principal.TenantID, r.PathValue("routerID"))
+	if errors.Is(err, ErrNotFound) {
+		security.WriteError(w, r, http.StatusNotFound, "ROUTER_NOT_FOUND", "Router AAA configuration was not found.")
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_AAA_UNAVAILABLE", "Router onboarding is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		RouterID       string    `json:"router_id"`
+		NASID          string    `json:"nas_id"`
+		NASIPAddress   string    `json:"nas_ip_address"`
+		RadiusSourceIP string    `json:"radius_source_ip"`
+		ShortName      string    `json:"short_name"`
+		Status         NASStatus `json:"status"`
+		Version        int64     `json:"version"`
+		Verified       bool      `json:"verified"`
+	}{configuration.RouterID, configuration.NASID, configuration.NASIPAddress, configuration.RadiusSourceIP, configuration.ShortName, configuration.Status, configuration.Version, configuration.Verified})
+}
+
+func (h *HTTP) verifyAAA(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if !principal.HasPermission("network.write") {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "You do not have permission to manage network AAA.")
+		return
+	}
+	if h.lifecycle == nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_AAA_UNAVAILABLE", "Router onboarding is not configured.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
+	var input struct {
+		Password  string `json:"password"`
+		MFACode   string `json:"mfa_code"`
+		Confirmed bool   `json:"private_test_confirmed"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Private test confirmation, password and authenticator code are required.")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
+		return
+	}
+	if err := h.lifecycle.VerifyAAA(r.Context(), principal, h.mutationActor(r, principal.UserID), input.Password, input.MFACode, r.PathValue("routerID"), input.Confirmed); errors.Is(err, ErrStepUpFailed) {
+		security.WriteError(w, r, http.StatusUnauthorized, "STEP_UP_FAILED", "Password or authenticator code was not accepted.")
+		return
+	} else if errors.Is(err, ErrPrivateTestRequired) {
+		security.WriteError(w, r, http.StatusBadRequest, "PRIVATE_TEST_REQUIRED", "Confirm the private Access-Request and accounting test before activation.")
+		return
+	} else if errors.Is(err, ErrNotFound) {
+		security.WriteError(w, r, http.StatusNotFound, "ROUTER_NOT_FOUND", "Router AAA configuration was not found.")
+		return
+	} else if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_AAA_UNAVAILABLE", "Router onboarding is temporarily unavailable.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *HTTP) export(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if !principal.HasPermission("network.write") {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "You do not have permission to manage network AAA.")
+		return
+	}
+	if h.lifecycle == nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_AAA_UNAVAILABLE", "Router onboarding is not configured.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
+	var input struct {
+		Password string `json:"password"`
+		MFACode  string `json:"mfa_code"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Password and authenticator confirmation are required.")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
+		return
+	}
+	setup, err := h.lifecycle.Export(r.Context(), principal, h.mutationActor(r, principal.UserID), input.Password, input.MFACode, r.PathValue("routerID"))
+	if errors.Is(err, ErrStepUpFailed) {
+		security.WriteError(w, r, http.StatusUnauthorized, "STEP_UP_FAILED", "Password or authenticator code was not accepted.")
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_AAA_UNAVAILABLE", "Router onboarding is temporarily unavailable.")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="netcore-router-aaa-`+r.PathValue("routerID")+`.txt"`)
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(setup)
 }
 
 func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {
@@ -126,22 +374,24 @@ type pageMeta struct {
 // routerResponse intentionally omits management_ip, api_endpoint,
 // serial_number, credential_ref, and radius_secret_ref.
 type routerResponse struct {
-	ID         string       `json:"id"`
-	Name       string       `json:"name"`
-	SiteName   string       `json:"site_name"`
-	Status     RouterStatus `json:"status"`
-	AAAStatus  string       `json:"aaa_status"`
-	LastSeenAt *time.Time   `json:"last_seen_at,omitempty"`
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	SiteName    string       `json:"site_name"`
+	Status      RouterStatus `json:"status"`
+	AAAStatus   string       `json:"aaa_status"`
+	AAAVerified bool         `json:"aaa_verified"`
+	LastSeenAt  *time.Time   `json:"last_seen_at,omitempty"`
 }
 
 func responseRouter(router Router) routerResponse {
 	return routerResponse{
-		ID:         router.ID,
-		Name:       router.Name,
-		SiteName:   router.SiteName,
-		Status:     router.Status,
-		AAAStatus:  router.AAAStatus,
-		LastSeenAt: router.LastSeenAt,
+		ID:          router.ID,
+		Name:        router.Name,
+		SiteName:    router.SiteName,
+		Status:      router.Status,
+		AAAStatus:   router.AAAStatus,
+		AAAVerified: router.AAAVerified,
+		LastSeenAt:  router.LastSeenAt,
 	}
 }
 
