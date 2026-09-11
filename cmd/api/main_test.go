@@ -5,7 +5,53 @@ import (
 	"testing"
 
 	"github.com/netcore-isp/netcore/internal/config"
+	"github.com/netcore-isp/netcore/internal/integrations"
 )
+
+type dashboardPaymentAccountStore struct{}
+
+func (dashboardPaymentAccountStore) ResolveTenant(context.Context, string) (string, bool, error) {
+	return "tenant-data-hub", true, nil
+}
+
+func (dashboardPaymentAccountStore) PrepareEmailRegistration(context.Context, string, string, string) error {
+	return nil
+}
+
+func (dashboardPaymentAccountStore) VerifyEmailAndEnsureCustomer(context.Context, string, string) error {
+	return nil
+}
+
+func (dashboardPaymentAccountStore) ResetVerifiedPassword(context.Context, string, string, string) error {
+	return nil
+}
+
+type dashboardPaymentCredentialStore struct{}
+
+func (dashboardPaymentCredentialStore) LoadActive(context.Context, string, integrations.Provider) (integrations.Record, bool, error) {
+	return integrations.Record{}, false, nil
+}
+
+func TestConfiguredPaymentGatewayUsesDashboardProviderWhenGatewayIsDisabled(t *testing.T) {
+	resolver, err := integrations.NewCredentialResolver(dashboardPaymentCredentialStore{}, integrations.NewUnavailableKeyWrapper())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gateway, webhook, err := configuredPaymentGateway(context.Background(), &config.Config{
+		Portal:   config.Portal{TenantSlug: "data-hub"},
+		Payments: config.Payments{Gateway: "disabled"},
+	}, dashboardPaymentAccountStore{}, resolver)
+	if err != nil {
+		t.Fatalf("configuredPaymentGateway: %v", err)
+	}
+	if gateway == nil || gateway.Name() != "squad" {
+		t.Fatalf("gateway = %#v, want dashboard-managed squad gateway", gateway)
+	}
+	if webhook == nil {
+		t.Fatal("configuredPaymentGateway returned a nil webhook gateway")
+	}
+}
 
 func TestHealthURL(t *testing.T) {
 	tests := []struct {

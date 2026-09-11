@@ -506,7 +506,7 @@ func configuredPaymentGateway(ctx context.Context, cfg *config.Config, store aut
 		return nil, nil, errors.New("payment portal tenant is not active")
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Payments.Gateway)) {
-	case "squad", "":
+	case "disabled", "squad", "":
 		gateway, err := payments.NewTenantSquadGateway(credentials, tenantID, nil)
 		if err != nil {
 			return nil, nil, err

@@ -135,7 +135,7 @@ func configuredWebhookProcessor(ctx context.Context, cfg *config.Config, db *dat
 	}
 	var gateway payments.Gateway
 	switch strings.ToLower(strings.TrimSpace(cfg.Payments.Gateway)) {
-	case "squad", "":
+	case "disabled", "squad", "":
 		gateway, err = payments.NewTenantSquadGateway(credentials, tenant.ID, nil)
 		if err != nil {
 			return nil, err
