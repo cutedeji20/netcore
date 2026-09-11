@@ -10,6 +10,7 @@ import (
 )
 
 const paystackChargeSuccess = "charge.success"
+const squadChargeSuccess = "charge_successful"
 
 // WebhookReceipt is the signed, minimal envelope persisted before work is
 // attempted. PayloadHash comes from the original bytes; RawJSON deliberately
@@ -81,7 +82,7 @@ func (p *WebhookProcessor) ProcessOne(ctx context.Context) (bool, error) {
 		return found, err
 	}
 
-	if event.EventType != paystackChargeSuccess {
+	if !isChargeSuccess(event.Provider, event.EventType) {
 		return true, p.store.MarkWebhookProcessed(ctx, event.ID, true, "event type does not activate a payment")
 	}
 	owner, found, err := p.store.PaymentOwnerForWebhook(ctx, event.Provider, event.Reference)
@@ -116,7 +117,7 @@ func (p *WebhookProcessor) fail(ctx context.Context, event QueuedWebhook, err er
 
 // NewWebhookReceipt derives the persistent digest before any JSON decode.
 func NewWebhookReceipt(event GatewayWebhook, raw []byte) (WebhookReceipt, error) {
-	if event.Provider != paystackName || event.EventID == "" || !validPaystackEventType(event.EventType) || !validReference(event.Reference) || len(raw) == 0 {
+	if event.EventID == "" || !validWebhookProviderEvent(event.Provider, event.EventType) || !validReference(event.Reference) || len(raw) == 0 {
 		return WebhookReceipt{}, ErrWebhookInvalid
 	}
 	digest := sha256.Sum256(raw)
@@ -124,6 +125,21 @@ func NewWebhookReceipt(event GatewayWebhook, raw []byte) (WebhookReceipt, error)
 		Provider: event.Provider, EventID: event.EventID, EventType: event.EventType,
 		Reference: event.Reference, PayloadHash: digest[:],
 	}, nil
+}
+
+func isChargeSuccess(provider, eventType string) bool {
+	return (provider == paystackName && eventType == paystackChargeSuccess) || (provider == squadName && eventType == squadChargeSuccess)
+}
+
+func validWebhookProviderEvent(provider, eventType string) bool {
+	switch provider {
+	case paystackName:
+		return validPaystackEventType(eventType)
+	case squadName:
+		return eventType == squadChargeSuccess
+	default:
+		return false
+	}
 }
 
 func webhookRetryDelay(attempt int) time.Duration {

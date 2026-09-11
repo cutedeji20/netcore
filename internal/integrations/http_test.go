@@ -122,6 +122,22 @@ func TestConfigurePaystackHTTPPersistsTestModeWithoutReturningCredential(t *test
 	}
 }
 
+func TestConfigureSquadHTTPPersistsTestModeWithoutReturningCredential(t *testing.T) {
+	handler, store := newTestIntegrationHTTP(t)
+	response := httptest.NewRecorder()
+	request := integrationPrincipalRequest(http.MethodPut, "/api/v1/integrations/squad", []byte(`{"credential":"sk_test_private_value","mode":"TEST","password":"current","mfa_code":"123456"}`))
+	handler.configureSquad(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+	if store.saved.Provider != ProviderSquad || store.saved.SquadMode != "TEST" || store.saved.PaystackMode != "TEST" {
+		t.Fatalf("saved Squad configuration = %#v", store.saved)
+	}
+	if strings.Contains(response.Body.String(), "sk_test_private_value") {
+		t.Fatalf("response exposed submitted credential: %s", response.Body)
+	}
+}
+
 func TestConfigureResendReturnsInvalidRequestWhenProviderValidationRejectsSetup(t *testing.T) {
 	// This fails if a rejected provider key or sender is reported as a generic
 	// platform outage, which hides the action the administrator must take.

@@ -59,22 +59,53 @@ func newHandler() (http.Handler, error) {
 			servePortalConfig(w, portalConfig)
 			return
 		}
+		if r.URL.Path == "/portal.html" {
+			// A captive-portal handoff may briefly appear in the subsequent
+			// RouterOS login URL, so this page must never be cached or forwarded
+			// as a Referer. Render the preview-only notice server-side to avoid a
+			// misleading production flash before JavaScript loads.
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:")
+			servePortalPage(w, content, portalConfig)
+			return
+		}
 		// The UI uses stable asset names. Revalidate the HTML, styles and scripts
 		// on every visit so a browser cannot combine a fresh deployment with an
 		// older command-palette script from its cache.
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" || strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
-		if r.URL.Path == "/portal.html" || r.URL.Path == "/staff-invite.html" {
-			// A captive-portal handoff may briefly appear in the subsequent
-			// RouterOS login URL. Invitation tokens live only in a URL fragment;
-			// both sensitive pages must not be cached or forwarded as a Referer.
+		if r.URL.Path == "/staff-invite.html" {
+			// Invitation tokens live only in a URL fragment, so this page must not
+			// be cached or forwarded as a Referer.
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Referrer-Policy", "no-referrer")
 			w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:")
 		}
 		files.ServeHTTP(w, r)
 	}), nil
+}
+
+const portalPreviewMarker = "<!-- NETCORE_PORTAL_PREVIEW_NOTE -->"
+
+func servePortalPage(w http.ResponseWriter, content fs.FS, config portalConfig) {
+	body, err := fs.ReadFile(content, "portal.html")
+	if err != nil {
+		http.Error(w, "portal unavailable", http.StatusInternalServerError)
+		return
+	}
+	preview := ""
+	if config.Mode != "live" {
+		preview = `<p class="preview-note">Portal preview · No payment, credentials, or device access is processed here.</p>`
+	}
+	page := strings.Replace(string(body), portalPreviewMarker, preview, 1)
+	if page == string(body) {
+		http.Error(w, "portal unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(page))
 }
 
 // adminConfig is deliberately public configuration. It contains no credential

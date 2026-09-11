@@ -37,6 +37,7 @@ type Record struct {
 	Envelope          CredentialEnvelope
 	SenderEmail       string
 	PaystackMode      string
+	SquadMode         string
 	LastTestedAt      time.Time
 	LastTestSucceeded bool
 	ActivatedAt       time.Time
@@ -60,6 +61,7 @@ type Snapshot struct {
 	Status            string     `json:"status"`
 	SenderEmail       string     `json:"sender_email,omitempty"`
 	PaystackMode      string     `json:"paystack_mode,omitempty"`
+	SquadMode         string     `json:"squad_mode,omitempty"`
 	LastTestedAt      *time.Time `json:"last_tested_at,omitempty"`
 	LastTestSucceeded *bool      `json:"last_test_succeeded,omitempty"`
 	ActivatedAt       time.Time  `json:"activated_at"`
@@ -90,6 +92,7 @@ type ConfigureInput struct {
 	Credential   []byte
 	SenderEmail  string
 	PaystackMode string
+	SquadMode    string
 }
 
 type Service struct {
@@ -140,10 +143,18 @@ func (s *Service) Configure(ctx context.Context, input ConfigureInput) error {
 		return err
 	}
 	now := s.now().UTC()
+	paystackMode := strings.ToUpper(strings.TrimSpace(input.PaystackMode))
+	squadMode := strings.ToUpper(strings.TrimSpace(input.SquadMode))
+	if input.Provider == ProviderSquad {
+		// The existing column is retained for migration compatibility; the
+		// public snapshot uses the provider-neutral Squad field.
+		paystackMode = squadMode
+	}
 	record := Record{
 		TenantID: input.Principal.TenantID, Provider: input.Provider, Status: StatusActive,
 		Envelope: envelope, SenderEmail: strings.TrimSpace(input.SenderEmail),
-		PaystackMode: strings.ToUpper(strings.TrimSpace(input.PaystackMode)),
+		PaystackMode: paystackMode,
+		SquadMode:    squadMode,
 		LastTestedAt: now, LastTestSucceeded: true, ActivatedAt: now, UpdatedAt: now, UpdatedBy: input.Principal.UserID,
 	}
 	if err := s.store.Save(ctx, record); err != nil {
@@ -165,7 +176,7 @@ func (s *Service) List(ctx context.Context, tenantID string) ([]Snapshot, error)
 		if record.TenantID != tenantID || !record.Provider.Valid() {
 			return nil, ErrStoreUnavailable
 		}
-		snapshot := Snapshot{Provider: record.Provider, Status: record.Status, SenderEmail: record.SenderEmail, PaystackMode: record.PaystackMode, ActivatedAt: record.ActivatedAt, UpdatedAt: record.UpdatedAt}
+		snapshot := Snapshot{Provider: record.Provider, Status: record.Status, SenderEmail: record.SenderEmail, PaystackMode: record.PaystackMode, SquadMode: record.SquadMode, ActivatedAt: record.ActivatedAt, UpdatedAt: record.UpdatedAt}
 		if !record.LastTestedAt.IsZero() {
 			result := record.LastTestSucceeded
 			testedAt := record.LastTestedAt
@@ -212,6 +223,8 @@ func validProviderSettings(input ConfigureInput) bool {
 		return err == nil && parsed.Address != "" && strings.TrimSpace(input.PaystackMode) == ""
 	case ProviderPaystack:
 		return strings.TrimSpace(input.SenderEmail) == "" && (strings.EqualFold(strings.TrimSpace(input.PaystackMode), "TEST") || strings.EqualFold(strings.TrimSpace(input.PaystackMode), "LIVE"))
+	case ProviderSquad:
+		return strings.TrimSpace(input.SenderEmail) == "" && (strings.EqualFold(strings.TrimSpace(input.SquadMode), "TEST") || strings.EqualFold(strings.TrimSpace(input.SquadMode), "LIVE"))
 	default:
 		return false
 	}

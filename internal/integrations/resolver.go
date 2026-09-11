@@ -18,6 +18,7 @@ type ActiveCredentialStore interface {
 type CredentialMetadata struct {
 	SenderEmail  string
 	PaystackMode string
+	SquadMode    string
 }
 
 // CredentialResolver decrypts a provider key on demand. It never caches
@@ -53,7 +54,7 @@ func (r *CredentialResolver) Resolve(ctx context.Context, tenantID string, provi
 	if err != nil || len(credential) == 0 {
 		return nil, CredentialMetadata{}, ErrCredentialInvalid
 	}
-	metadata := CredentialMetadata{SenderEmail: strings.TrimSpace(record.SenderEmail), PaystackMode: strings.ToUpper(strings.TrimSpace(record.PaystackMode))}
+	metadata := CredentialMetadata{SenderEmail: strings.TrimSpace(record.SenderEmail), PaystackMode: strings.ToUpper(strings.TrimSpace(record.PaystackMode)), SquadMode: strings.ToUpper(strings.TrimSpace(record.SquadMode))}
 	if !validResolvedMetadata(provider, metadata) {
 		for index := range credential {
 			credential[index] = 0
@@ -69,6 +70,8 @@ func validResolvedMetadata(provider Provider, metadata CredentialMetadata) bool 
 		return metadata.SenderEmail != "" && metadata.PaystackMode == ""
 	case ProviderPaystack:
 		return metadata.SenderEmail == "" && (metadata.PaystackMode == "TEST" || metadata.PaystackMode == "LIVE")
+	case ProviderSquad:
+		return metadata.SenderEmail == "" && (metadata.SquadMode == "TEST" || metadata.SquadMode == "LIVE")
 	default:
 		return false
 	}

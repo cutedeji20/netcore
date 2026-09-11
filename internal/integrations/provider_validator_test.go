@@ -65,3 +65,31 @@ func TestHTTPProviderValidatorChecksPaystackBalance(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 }
+
+func TestHTTPProviderValidatorChecksSquadTransactions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/transaction" || r.Header.Get("Authorization") != "Bearer sk_test_squad_key" {
+			t.Fatalf("request = %s %s %q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+		}
+		query := r.URL.Query()
+		if query.Get("page") != "1" || query.Get("perpage") != "1" || query.Get("start_date") == "" || query.Get("end_date") == "" {
+			t.Fatalf("unexpected transaction query: %v", query)
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	}))
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = time.Second
+	validator, err := NewHTTPProviderValidator(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator.squadSandboxBaseURL = server.URL
+	err = validator.Validate(context.Background(), ConfigureInput{
+		Principal: auth.Principal{TenantID: "tenant-a", UserID: "staff-a", Email: "administrator@example.test"},
+		Provider:  ProviderSquad, Credential: []byte("sk_test_squad_key"), SquadMode: "TEST",
+	})
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}

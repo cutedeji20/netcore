@@ -145,6 +145,7 @@ type Portal struct {
 type Payments struct {
 	Gateway             string
 	PaystackSecretRef   string
+	CallbackURL         string
 	PaystackCallbackURL string
 	WebhookPollInterval time.Duration
 	WebhookMaxAttempts  int
@@ -193,6 +194,10 @@ func Load(getenv func(string) string) (*Config, error) {
 		return nil, err
 	}
 
+	callbackURL := getenv("NETCORE_PAYMENT_CALLBACK_URL")
+	if callbackURL == "" {
+		callbackURL = getenv("NETCORE_PAYSTACK_CALLBACK_URL")
+	}
 	c := &Config{
 		Env:         Env(strDefault(getenv("NETCORE_ENV"), string(EnvDevelopment))),
 		ServiceName: strDefault(getenv("NETCORE_SERVICE_NAME"), "netcore-api"),
@@ -255,7 +260,8 @@ func Load(getenv func(string) string) (*Config, error) {
 		Payments: Payments{
 			Gateway:             strDefault(getenv("NETCORE_PAYMENT_GATEWAY"), "disabled"),
 			PaystackSecretRef:   getenv("NETCORE_PAYSTACK_SECRET_REF"),
-			PaystackCallbackURL: getenv("NETCORE_PAYSTACK_CALLBACK_URL"),
+			CallbackURL:         callbackURL,
+			PaystackCallbackURL: callbackURL,
 			WebhookPollInterval: durDefault(getenv("NETCORE_WEBHOOK_POLL_INTERVAL"), time.Second),
 			WebhookMaxAttempts:  intDefault(getenv("NETCORE_WEBHOOK_MAX_ATTEMPTS"), 8),
 		},
@@ -380,16 +386,22 @@ func (c *Config) Validate() error {
 		if !validSecretReference(c.Payments.PaystackSecretRef) {
 			p = append(p, "NETCORE_PAYSTACK_SECRET_REF must be a logical secret reference when NETCORE_PAYMENT_GATEWAY=paystack")
 		}
-		if !validHTTPSURL(c.Payments.PaystackCallbackURL) {
+		if !validHTTPSURL(c.Payments.CallbackURL) {
 			p = append(p, "NETCORE_PAYSTACK_CALLBACK_URL must be a valid HTTPS URL when NETCORE_PAYMENT_GATEWAY=paystack")
-		} else if !callbackOriginAllowed(c.Payments.PaystackCallbackURL, c.Security.AllowedOrigins) {
+		} else if !callbackOriginAllowed(c.Payments.CallbackURL, c.Security.AllowedOrigins) {
 			p = append(p, "NETCORE_PAYSTACK_CALLBACK_URL must use an origin listed in NETCORE_ALLOWED_ORIGINS")
 		}
 		if c.Secrets.Ref == "" {
 			p = append(p, "NETCORE_SECRETS_REF is required when NETCORE_PAYMENT_GATEWAY=paystack")
 		}
+	case "squad":
+		if !validHTTPSURL(c.Payments.CallbackURL) {
+			p = append(p, "NETCORE_PAYMENT_CALLBACK_URL must be a valid HTTPS URL when NETCORE_PAYMENT_GATEWAY=squad")
+		} else if !callbackOriginAllowed(c.Payments.CallbackURL, c.Security.AllowedOrigins) {
+			p = append(p, "NETCORE_PAYMENT_CALLBACK_URL must use an origin listed in NETCORE_ALLOWED_ORIGINS")
+		}
 	default:
-		p = append(p, fmt.Sprintf("NETCORE_PAYMENT_GATEWAY %q must be disabled or paystack", c.Payments.Gateway))
+		p = append(p, fmt.Sprintf("NETCORE_PAYMENT_GATEWAY %q must be disabled or paystack; squad is also supported", c.Payments.Gateway))
 	}
 	switch c.Email.Provider {
 	case "disabled":

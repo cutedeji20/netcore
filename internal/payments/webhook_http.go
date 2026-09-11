@@ -43,7 +43,14 @@ func (h *WebhookHTTP) receive(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	if err := h.gateway.VerifyWebhookSignature(r.Context(), raw, r.Header.Get("X-Paystack-Signature")); err != nil {
+	signature := r.Header.Get(h.gateway.SignatureHeader())
+	if signature == "" && h.gateway.Name() == squadName {
+		// Squad documents both the current encrypted-body header and the
+		// legacy signature header; accept either without changing the signed
+		// raw-body verification.
+		signature = r.Header.Get("X-Squad-Signature")
+	}
+	if err := h.gateway.VerifyWebhookSignature(r.Context(), raw, signature); err != nil {
 		if errors.Is(err, ErrWebhookInvalid) {
 			http.Error(w, "invalid webhook signature", http.StatusUnauthorized)
 			return

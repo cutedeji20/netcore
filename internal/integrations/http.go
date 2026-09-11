@@ -34,10 +34,13 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	mux.Handle("GET /api/v1/integrations", sessions.RequireAuth(auth.RequirePermission("integration.read", http.HandlerFunc(h.list))))
 	mux.Handle("PUT /api/v1/integrations/resend", sessions.RequireAuth(auth.RequirePermission("integration.write", http.HandlerFunc(h.configureResend))))
 	mux.Handle("PUT /api/v1/integrations/paystack", sessions.RequireAuth(auth.RequirePermission("integration.write", http.HandlerFunc(h.configurePaystack))))
+	mux.Handle("PUT /api/v1/integrations/squad", sessions.RequireAuth(auth.RequirePermission("integration.write", http.HandlerFunc(h.configureSquad))))
 	mux.Handle("POST /api/v1/integrations/resend/disable", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disable(ProviderResend))))
 	mux.Handle("POST /api/v1/integrations/paystack/disable", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disable(ProviderPaystack))))
+	mux.Handle("POST /api/v1/integrations/squad/disable", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disable(ProviderSquad))))
 	mux.Handle("DELETE /api/v1/integrations/resend", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disconnect(ProviderResend))))
 	mux.Handle("DELETE /api/v1/integrations/paystack", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disconnect(ProviderPaystack))))
+	mux.Handle("DELETE /api/v1/integrations/squad", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disconnect(ProviderSquad))))
 	return nil
 }
 
@@ -118,6 +121,37 @@ func (h *HTTP) configurePaystack(w http.ResponseWriter, r *http.Request) {
 	defer clear(credential)
 	err := h.service.Configure(r.Context(), ConfigureInput{Principal: principal, Password: input.Password, MFACode: input.MFACode, Provider: ProviderPaystack, Credential: credential, PaystackMode: input.Mode})
 	if h.writeConfigureError(w, r, err, "A valid Paystack configuration is required.") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *HTTP) configureSquad(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if !principal.HasPermission("integration.write") {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "You do not have permission to manage integrations.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxConfigureBodyBytes)
+	defer r.Body.Close()
+	var input struct {
+		Credential string `json:"credential"`
+		Mode       string `json:"mode"`
+		Password   string `json:"password"`
+		MFACode    string `json:"mfa_code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || strings.TrimSpace(input.Credential) == "" {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "A valid Squad configuration is required.")
+		return
+	}
+	credential := []byte(input.Credential)
+	defer clear(credential)
+	err := h.service.Configure(r.Context(), ConfigureInput{Principal: principal, Password: input.Password, MFACode: input.MFACode, Provider: ProviderSquad, Credential: credential, SquadMode: input.Mode})
+	if h.writeConfigureError(w, r, err, "A valid Squad configuration is required.") {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -47,7 +47,8 @@ func NewTenantPaystackGateway(resolver TenantPaystackCredentialResolver, tenantI
 	return &TenantPaystackGateway{resolver: resolver, tenantID: strings.TrimSpace(tenantID), client: client, baseURL: paystackAPIBase}, nil
 }
 
-func (*TenantPaystackGateway) Name() string { return paystackName }
+func (*TenantPaystackGateway) Name() string            { return paystackName }
+func (*TenantPaystackGateway) SignatureHeader() string { return "X-Paystack-Signature" }
 
 func (g *TenantPaystackGateway) Available() bool {
 	return g != nil && g.resolver != nil && g.tenantID != "" && g.client != nil

@@ -266,8 +266,33 @@ func TestPreviewServesCaptivePortal(t *testing.T) {
 		t.Fatalf("portal security headers = %+v", response.Header())
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, "doesn’t have an active internet plan") || !strings.Contains(body, "/portal.js") {
+	if !strings.Contains(body, "doesn’t have an active internet plan") || !strings.Contains(body, "/portal.js") || !strings.Contains(body, "Portal preview") {
 		t.Fatal("captive portal markup was not served")
+	}
+}
+
+func TestLivePortalOmitsPreviewCopyAndPlaceholderSupportAddress(t *testing.T) {
+	t.Setenv("NETCORE_UI_MODE", "live")
+	t.Setenv("NETCORE_TENANT_SLUG", "data-hub")
+	handler, err := newHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/portal.html", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	body := response.Body.String()
+	if strings.Contains(body, "Portal preview") {
+		t.Fatalf("live portal rendered preview copy: %s", body)
+	}
+	if strings.Contains(body, "support@netcore.example") {
+		t.Fatalf("live portal rendered placeholder support address: %s", body)
+	}
+	if !strings.Contains(body, "Contact your network operator") {
+		t.Fatalf("live portal omitted safe support guidance: %s", body)
 	}
 }
 

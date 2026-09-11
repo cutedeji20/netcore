@@ -1,5 +1,5 @@
 // Package integrations manages the encrypted, tenant-scoped configuration
-// required to call the fixed NetCore providers: Resend and Paystack.
+// required to call the fixed NetCore providers: Resend, Squad, and Paystack.
 package integrations
 
 import (
@@ -23,10 +23,11 @@ type Provider string
 const (
 	ProviderResend   Provider = "resend"
 	ProviderPaystack Provider = "paystack"
+	ProviderSquad    Provider = "squad"
 )
 
 func (p Provider) Valid() bool {
-	return p == ProviderResend || p == ProviderPaystack
+	return p == ProviderResend || p == ProviderPaystack || p == ProviderSquad
 }
 
 func validTenantID(tenantID string) bool {

@@ -17,9 +17,11 @@ const providerValidationResponseLimit = 64 * 1024
 // HTTPProviderValidator proves a candidate provider credential works before
 // it is encrypted and marked active. It never logs or stores credential data.
 type HTTPProviderValidator struct {
-	client          *http.Client
-	resendBaseURL   string
-	paystackBaseURL string
+	client              *http.Client
+	resendBaseURL       string
+	paystackBaseURL     string
+	squadBaseURL        string
+	squadSandboxBaseURL string
 }
 
 func NewHTTPProviderValidator(client *http.Client) (*HTTPProviderValidator, error) {
@@ -29,7 +31,7 @@ func NewHTTPProviderValidator(client *http.Client) (*HTTPProviderValidator, erro
 	if client.Timeout <= 0 {
 		return nil, errors.New("integrations: provider validation HTTP client requires a timeout")
 	}
-	return &HTTPProviderValidator{client: client, resendBaseURL: "https://api.resend.com", paystackBaseURL: "https://api.paystack.co"}, nil
+	return &HTTPProviderValidator{client: client, resendBaseURL: "https://api.resend.com", paystackBaseURL: "https://api.paystack.co", squadBaseURL: "https://api-d.squadco.com", squadSandboxBaseURL: "https://sandbox-api-d.squadco.com"}, nil
 }
 
 func (v *HTTPProviderValidator) Validate(ctx context.Context, input ConfigureInput) error {
@@ -41,9 +43,45 @@ func (v *HTTPProviderValidator) Validate(ctx context.Context, input ConfigureInp
 		return v.validateResend(ctx, input)
 	case ProviderPaystack:
 		return v.validatePaystack(ctx, input)
+	case ProviderSquad:
+		return v.validateSquad(ctx, input)
 	default:
 		return ErrCredentialInvalid
 	}
+}
+
+func (v *HTTPProviderValidator) validateSquad(ctx context.Context, input ConfigureInput) error {
+	mode := strings.ToUpper(strings.TrimSpace(input.SquadMode))
+	if mode != "TEST" && mode != "LIVE" {
+		return ErrCredentialInvalid
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	baseURL := v.squadBaseURL
+	if mode == "TEST" {
+		baseURL = v.squadSandboxBaseURL
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/transaction?start_date="+today+"&end_date="+today+"&page=1&perpage=1", nil)
+	if err != nil {
+		return ErrCredentialInvalid
+	}
+	request.Header.Set("Authorization", "Bearer "+string(input.Credential))
+	request.Header.Set("Accept", "application/json")
+	response, err := v.client.Do(request)
+	if err != nil {
+		return ErrCredentialInvalid
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, providerValidationResponseLimit+1))
+	if err != nil || len(body) == 0 || len(body) > providerValidationResponseLimit || response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return ErrCredentialInvalid
+	}
+	var payload struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || !payload.Success {
+		return ErrCredentialInvalid
+	}
+	return nil
 }
 
 func (v *HTTPProviderValidator) validateResend(ctx context.Context, input ConfigureInput) error {

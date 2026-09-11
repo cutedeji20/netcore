@@ -134,6 +134,9 @@ SELECT tenant_id::text, provider, status, COALESCE(sender_email::text, ''),
 			if activatedAt.Valid {
 				record.ActivatedAt = activatedAt.Time
 			}
+			if record.Provider == ProviderSquad {
+				record.SquadMode = record.PaystackMode
+			}
 			records = append(records, record)
 		}
 		return rows.Err()
@@ -161,6 +164,9 @@ SELECT tenant_id::text, provider, status, credential_ciphertext, credential_nonc
 			&record.Envelope.Nonce, &record.Envelope.WrappedDEK, &record.Envelope.KEKKeyID,
 			&record.SenderEmail, &record.PaystackMode,
 		)
+		if record.Provider == ProviderSquad {
+			record.SquadMode = record.PaystackMode
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			found = false
 			return nil

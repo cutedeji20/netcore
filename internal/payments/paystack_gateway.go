@@ -35,6 +35,7 @@ type SecretResolver interface {
 // needed for asynchronous server-to-server verification.
 type WebhookGateway interface {
 	Name() string
+	SignatureHeader() string
 	VerifyWebhookSignature(context.Context, []byte, string) error
 	ParseWebhook([]byte) (GatewayWebhook, error)
 }
@@ -73,7 +74,8 @@ func NewPaystackGateway(secrets SecretResolver, secretRef string, client *http.C
 	}, nil
 }
 
-func (*PaystackGateway) Name() string { return paystackName }
+func (*PaystackGateway) Name() string            { return paystackName }
+func (*PaystackGateway) SignatureHeader() string { return "X-Paystack-Signature" }
 func (g *PaystackGateway) Available() bool {
 	return g != nil && g.secrets != nil && g.secretRef != "" && g.client != nil
 }

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -132,9 +133,20 @@ func configuredWebhookProcessor(ctx context.Context, cfg *config.Config, db *dat
 	if err != nil {
 		return nil, err
 	}
-	gateway, err := payments.NewTenantPaystackGateway(credentials, tenant.ID, nil)
-	if err != nil {
-		return nil, err
+	var gateway payments.Gateway
+	switch strings.ToLower(strings.TrimSpace(cfg.Payments.Gateway)) {
+	case "squad", "":
+		gateway, err = payments.NewTenantSquadGateway(credentials, tenant.ID, nil)
+		if err != nil {
+			return nil, err
+		}
+	case "paystack":
+		gateway, err = payments.NewTenantPaystackGateway(credentials, tenant.ID, nil)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported payment gateway %q", cfg.Payments.Gateway)
 	}
 	paymentStore, err := payments.NewPostgresStore(db, true)
 	if err != nil {

@@ -56,20 +56,24 @@ func (h *ReadinessHTTP) get(w http.ResponseWriter, r *http.Request) {
 	if probe, ok := h.gateway.(GatewayProbe); ok && ready {
 		ready = probe.Check(r.Context()) == nil
 	}
-	if response.Provider == paystackName && ready && validPaymentCallbackURL(h.callbackURL) {
+	if ready && validPaymentCallbackURL(h.callbackURL) {
 		response.CheckoutStatus = "READY"
 		response.CallbackURL = h.callbackURL
-		response.WebhookURL = webhookURL(h.callbackURL)
+		response.WebhookURL = webhookURL(h.callbackURL, response.Provider)
 	}
 	writeJSON(w, http.StatusOK, response)
 }
 
-func webhookURL(callbackURL string) string {
+func webhookURL(callbackURL string, providers ...string) string {
 	parsed, err := url.Parse(callbackURL)
 	if err != nil {
 		return ""
 	}
-	parsed.Path = "/webhooks/" + paystackName
+	provider := paystackName
+	if len(providers) > 0 && strings.TrimSpace(providers[0]) != "" {
+		provider = strings.TrimSpace(providers[0])
+	}
+	parsed.Path = "/webhooks/" + provider
 	parsed.RawPath = ""
 	parsed.RawQuery = ""
 	parsed.ForceQuery = false

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -311,7 +312,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	paymentService, err := payments.NewService(paymentStore, paymentGateway, cfg.Payments.PaystackCallbackURL)
+	paymentService, err := payments.NewService(paymentStore, paymentGateway, cfg.Payments.CallbackURL)
 	if err != nil {
 		return err
 	}
@@ -319,7 +320,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	paymentReadinessHTTP, err := payments.NewReadinessHTTP(paymentGateway, cfg.Payments.PaystackCallbackURL)
+	paymentReadinessHTTP, err := payments.NewReadinessHTTP(paymentGateway, cfg.Payments.CallbackURL)
 	if err != nil {
 		return err
 	}
@@ -491,7 +492,7 @@ func configuredAccountHTTP(ctx context.Context, cfg *config.Config, store auth.A
 }
 
 // configuredPaymentGateway binds checkout and webhook verification to the
-// active Paystack credential configured for the public portal tenant. It does
+// active Squad credential configured for the public portal tenant. It does
 // not resolve or retain any payment key at process startup.
 func configuredPaymentGateway(ctx context.Context, cfg *config.Config, store auth.AccountStore, credentials *integrations.CredentialResolver) (payments.Gateway, payments.WebhookGateway, error) {
 	if cfg == nil || store == nil || credentials == nil {
@@ -504,11 +505,22 @@ func configuredPaymentGateway(ctx context.Context, cfg *config.Config, store aut
 	if !found || tenantID == "" {
 		return nil, nil, errors.New("payment portal tenant is not active")
 	}
-	gateway, err := payments.NewTenantPaystackGateway(credentials, tenantID, nil)
-	if err != nil {
-		return nil, nil, err
+	switch strings.ToLower(strings.TrimSpace(cfg.Payments.Gateway)) {
+	case "squad", "":
+		gateway, err := payments.NewTenantSquadGateway(credentials, tenantID, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		return gateway, gateway, nil
+	case "paystack":
+		gateway, err := payments.NewTenantPaystackGateway(credentials, tenantID, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		return gateway, gateway, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported payment gateway %q", cfg.Payments.Gateway)
 	}
-	return gateway, gateway, nil
 }
 
 // healthcheck is the Docker health-check entry point. It probes liveness over
