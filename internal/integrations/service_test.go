@@ -131,6 +131,26 @@ func TestConfigureDoesNotPersistCredentialWhenProviderValidationFails(t *testing
 	}
 }
 
+func TestConfigureSquadDoesNotRequireProviderValidation(t *testing.T) {
+	store := &memoryIntegrationStore{}
+	stepUp := &testStepUpVerifier{}
+	service, err := NewService(store, testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, stepUp, rejectingProviderValidator{err: errors.New("provider check unavailable")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return time.Date(2026, 9, 11, 20, 0, 0, 0, time.UTC) }
+	err = service.Configure(context.Background(), ConfigureInput{
+		Principal: auth.Principal{TenantID: "tenant-a", UserID: "staff-a", Email: "admin@example.test"}, Password: "current password", MFACode: "123456",
+		Provider: ProviderSquad, Credential: []byte("current_squad_key"), SquadMode: "LIVE",
+	})
+	if err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	if store.saved.Provider != ProviderSquad || store.saved.Status != StatusActive || store.saved.LastTestedAt.IsZero() || store.saved.LastTestSucceeded {
+		t.Fatalf("saved Squad record = %#v", store.saved)
+	}
+}
+
 func TestDisconnectRequiresStepUpAndClearsEnvelope(t *testing.T) {
 	// This fails if a stale session can erase or deactivate an integration, or
 	// if disconnect leaves recoverable provider credential material behind.

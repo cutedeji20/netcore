@@ -69,7 +69,7 @@
   function openForm(provider) {
     var overlay = element("div"); overlay.className = "integration-dialog";
     var dialog = element("form"); dialog.className = "panel";
-    dialog.append(element("h2", provider === "resend" ? "Connect Resend" : "Connect Squad"), element("p", provider === "resend" ? "Confirm your password and authenticator code. A verification email will be sent to your administrator address before this sender is activated." : "Confirm your password and authenticator code. NetCore will perform a read-only Squad account check before this key is activated."));
+    dialog.append(element("h2", provider === "resend" ? "Connect Resend" : "Connect Squad"), element("p", provider === "resend" ? "Confirm your password and authenticator code. A verification email will be sent to your administrator address before this sender is activated." : "Confirm your password and authenticator code. The key is encrypted and stored securely; Squad will validate it when a payment is initiated."));
     function field(label, type, name) { var wrap = element("label", label); var input = element("input"); input.type = type; input.name = name; input.required = true; input.autocomplete = "off"; wrap.appendChild(input); dialog.appendChild(wrap); return input; }
     var credential = field(provider === "resend" ? "Resend API key" : "Squad secret key", "password", "credential");
     var sender; var mode;

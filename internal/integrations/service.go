@@ -124,7 +124,9 @@ func NewService(store Store, wrapper KeyWrapper, stepUp StepUpVerifier, validato
 }
 
 // Configure validates provider metadata, verifies fresh staff credentials, and
-// persists only a newly encrypted credential envelope.
+// persists only a newly encrypted credential envelope. Squad credentials are
+// intentionally stored without a provider-side preflight: Squad key formats
+// have changed, and the first real checkout/verification remains authoritative.
 func (s *Service) Configure(ctx context.Context, input ConfigureInput) error {
 	if s == nil || s.store == nil || s.wrapper == nil || s.stepUp == nil || s.validator == nil {
 		return ErrStoreUnavailable
@@ -135,8 +137,11 @@ func (s *Service) Configure(ctx context.Context, input ConfigureInput) error {
 	if err := s.stepUp.VerifyStepUp(ctx, auth.StepUpInput{Principal: input.Principal, Password: input.Password, MFACode: input.MFACode}); err != nil {
 		return ErrStepUpFailed
 	}
-	if err := s.validator.Validate(ctx, input); err != nil {
-		return ErrCredentialInvalid
+	validated := input.Provider != ProviderSquad
+	if validated {
+		if err := s.validator.Validate(ctx, input); err != nil {
+			return ErrCredentialInvalid
+		}
 	}
 	envelope, err := EncryptCredential(ctx, s.wrapper, input.Principal.TenantID, input.Provider, input.Credential)
 	if err != nil {
@@ -154,8 +159,7 @@ func (s *Service) Configure(ctx context.Context, input ConfigureInput) error {
 		TenantID: input.Principal.TenantID, Provider: input.Provider, Status: StatusActive,
 		Envelope: envelope, SenderEmail: strings.TrimSpace(input.SenderEmail),
 		PaystackMode: paystackMode,
-		SquadMode:    squadMode,
-		LastTestedAt: now, LastTestSucceeded: true, ActivatedAt: now, UpdatedAt: now, UpdatedBy: input.Principal.UserID,
+		SquadMode: squadMode, LastTestedAt: now, LastTestSucceeded: validated, ActivatedAt: now, UpdatedAt: now, UpdatedBy: input.Principal.UserID,
 	}
 	if err := s.store.Save(ctx, record); err != nil {
 		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
