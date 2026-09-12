@@ -244,7 +244,7 @@ AND ($3 <> 'ACTIVE' OR EXISTS (SELECT 1 FROM router_radius_credentials c WHERE c
 
 func writeNetworkAudit(ctx context.Context, tx pgx.Tx, tenantID string, actor MutationActor, action, routerID, nasID, nasIP, sourceIP string, version int64) error {
 	_, err := tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id, metadata, ip_address, user_agent)
-VALUES ($1::uuid, 'USER', $2::uuid, $3, 'nas', NULLIF($4, '')::uuid, jsonb_build_object('router_id', NULLIF($5, ''), 'nas_ip_address', NULLIF($6, ''), 'radius_source_ip', NULLIF($7, ''), 'version', $8), NULLIF($9, '')::inet, NULLIF($10, ''))`, tenantID, actor.UserID, action, nasID, routerID, nasIP, sourceIP, version, actor.IP, actor.UserAgent)
+VALUES ($1::uuid, 'USER', $2::uuid, $3, 'nas', NULLIF($4, '')::uuid, jsonb_build_object('router_id', NULLIF($5, ''), 'nas_ip_address', NULLIF($6, ''), 'radius_source_ip', NULLIF($7, ''), 'version', $8::bigint), NULLIF($9, '')::inet, NULLIF($10, ''))`, tenantID, actor.UserID, action, nasID, routerID, nasIP, sourceIP, version, actor.IP, actor.UserAgent)
 	if err != nil {
 		return fmt.Errorf("write network audit record: %w", err)
 	}
