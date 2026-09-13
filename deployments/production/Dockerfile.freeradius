@@ -13,6 +13,7 @@ RUN apk add --no-cache libpq \
 	&& cp -a /etc/raddb/. /opt/netcore-radius/replay/ \
 	&& rm -f /opt/netcore-radius/writer/sites-enabled/* /opt/netcore-radius/replay/sites-enabled/* \
 	&& rm -f /opt/netcore-radius/writer/mods-enabled/sql /opt/netcore-radius/replay/mods-enabled/sql \
+	&& rm -f /opt/netcore-radius/writer/mods-enabled/eap /opt/netcore-radius/replay/mods-enabled/eap \
 	&& rm -f /opt/netcore-radius/writer/clients.conf /opt/netcore-radius/replay/clients.conf \
 	&& ln -s /run/netcore/runtime/clients.conf /opt/netcore-radius/writer/clients.conf \
 	&& ln -s /run/netcore/runtime/clients.conf /opt/netcore-radius/replay/clients.conf \

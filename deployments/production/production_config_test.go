@@ -269,3 +269,22 @@ func TestRadiusEntrypointPreservesUpstreamBinaryPath(t *testing.T) {
 	requireContains(t, text, "PATH=/opt/sbin:/opt/bin:$PATH")
 	requireContains(t, text, "export PATH")
 }
+
+func TestRadiusImageDisablesUnusedEAPModule(t *testing.T) {
+	dockerfile, err := os.ReadFile("Dockerfile.freeradius")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(dockerfile)
+	requireContains(t, text, "rm -f /opt/netcore-radius/writer/mods-enabled/eap /opt/netcore-radius/replay/mods-enabled/eap")
+}
+
+func TestRadiusValidationDoesNotEnableDebugOutput(t *testing.T) {
+	entrypoint, err := os.ReadFile("radius-entrypoint.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(entrypoint)
+	requireContains(t, text, `exec radiusd -d "$config_dir" -C`)
+	requireNotContains(t, text, `exec radiusd -d "$config_dir" -XC`)
+}

@@ -47,7 +47,7 @@ if [ -n "${NETCORE_RADIUS_VALIDATE:-}" ]; then
     echo "netcore radius: NETCORE_RADIUS_VALIDATE must be 1 when set" >&2
     exit 64
   fi
-  exec radiusd -d "$config_dir" -XC
+  exec radiusd -d "$config_dir" -C
 fi
 
 if [ "$mode" = "replay" ]; then
