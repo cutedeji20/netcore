@@ -178,8 +178,8 @@ services:
       - postgres_tls:/run/netcore/postgres-tls:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m,mode=1777
-      - /var/log/radius:rw,noexec,nosuid,size=32m,mode=1777
-      - /var/run/radiusd:rw,noexec,nosuid,size=16m,mode=1777
+      - /opt/var/log/radius:rw,noexec,nosuid,size=32m,mode=1777
+      - /opt/var/run/radiusd:rw,noexec,nosuid,size=16m,mode=1777
     depends_on:
       postgres:
         condition: service_healthy
@@ -213,8 +213,8 @@ services:
       - postgres_tls:/run/netcore/postgres-tls:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m,mode=1777
-      - /var/log/radius:rw,noexec,nosuid,size=32m,mode=1777
-      - /var/run/radiusd:rw,noexec,nosuid,size=16m,mode=1777
+      - /opt/var/log/radius:rw,noexec,nosuid,size=32m,mode=1777
+      - /opt/var/run/radiusd:rw,noexec,nosuid,size=16m,mode=1777
     depends_on:
       postgres:
         condition: service_healthy

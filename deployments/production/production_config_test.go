@@ -288,3 +288,21 @@ func TestRadiusValidationDoesNotEnableDebugOutput(t *testing.T) {
 	requireContains(t, text, `exec radiusd -d "$config_dir" -C`)
 	requireNotContains(t, text, `exec radiusd -d "$config_dir" -XC`)
 }
+
+func TestRadiusServicesMountWritableUpstreamRuntimePaths(t *testing.T) {
+	compose, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(compose)
+	for _, want := range []string{
+		"/opt/var/log/radius:rw,noexec,nosuid,size=32m,mode=1777",
+		"/opt/var/run/radiusd:rw,noexec,nosuid,size=16m,mode=1777",
+	} {
+		if got := strings.Count(text, want); got != 2 {
+			t.Fatalf("expected writer and replay to each mount %q; found %d occurrences", want, got)
+		}
+	}
+	requireNotContains(t, text, "      - /var/log/radius:rw,noexec,nosuid,size=32m,mode=1777")
+	requireNotContains(t, text, "      - /var/run/radiusd:rw,noexec,nosuid,size=16m,mode=1777")
+}
