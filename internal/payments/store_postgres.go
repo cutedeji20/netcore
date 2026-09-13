@@ -130,7 +130,7 @@ RETURNING id::text`, input.TenantID, customerID, subscriptionID, input.Gateway, 
 INSERT INTO idempotency_keys
     (tenant_id, user_id, endpoint, key, request_hash, response_body, expires_at)
 VALUES ($1, $2, 'POST /api/v1/payments', $3, $4,
-        jsonb_build_object('provider_reference', $5), now() + interval '24 hours')`,
+        jsonb_build_object('provider_reference', $5::text), now() + interval '24 hours')`,
 			input.TenantID, input.UserID, input.IdempotencyKey, input.RequestHash, input.Reference); err != nil {
 			// A concurrent writer has won this key. Rolling back prevents a
 			// second pending subscription and lets the browser safely retry.
