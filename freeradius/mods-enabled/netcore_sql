@@ -10,9 +10,9 @@ sql netcore_sql {
 	driver = "rlm_sql_postgresql"
 
 	# Use the full libpq connection setting so PostgreSQL TLS is mandatory.
-	# Keep the password in the short-lived process environment populated from a
-	# mounted file by the production entrypoint; it never appears in Compose.
-	radius_db = "host=$ENV{RADIUS_DB_HOST} port=$ENV{RADIUS_DB_PORT} dbname=$ENV{RADIUS_DB_NAME} user=$ENV{RADIUS_DB_USER} password=$ENV{RADIUS_DB_PASSWORD} sslmode=verify-full sslrootcert=/run/netcore/postgres-tls/ca.crt"
+	# The production entrypoint supplies the password through a mode-0600 libpq
+	# password file, keeping it out of this logged connection string.
+	radius_db = "host=$ENV{RADIUS_DB_HOST} port=$ENV{RADIUS_DB_PORT} dbname=$ENV{RADIUS_DB_NAME} user=$ENV{RADIUS_DB_USER} sslmode=verify-full sslrootcert=/run/netcore/postgres-tls/ca.crt"
 
 	# The NAS shared secrets are materialised into clients.conf by the secret
 	# deployment step. `nas.secret_ref` is intentionally not a usable secret.

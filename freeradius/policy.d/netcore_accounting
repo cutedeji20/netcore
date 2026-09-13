@@ -10,7 +10,7 @@ netcore_accounting {
 	# time; a NAS that omits it gets FreeRADIUS's receive time instead.  Counters
 	# default to zero only where RADIUS permits the attribute to be absent.
 	update control {
-		Tmp-String-1 := "%{netcore_sql:SELECT CASE WHEN radius_accounting_ingest('%{NAS-IP-Address}', '%{Acct-Status-Type}', '%{Acct-Session-Id}', '%{Acct-Unique-Session-Id}', '%{Class}', COALESCE(NULLIF(NULLIF('%{Event-Timestamp#}', ''), '0')::bigint, %l), COALESCE(NULLIF('%{Acct-Session-Time#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Input-Octets#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Input-Gigawords#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Output-Octets#}', '')::bigint, 0), COALESCE(NULLIF('%{Acct-Output-Gigawords#}', '')::bigint, 0), '%{Framed-IP-Address}', '%{Calling-Station-Id}', '%{Acct-Terminate-Cause}') THEN 'ok' ELSE 'reject' END}"
+		Tmp-String-1 := "%{netcore_sql:SELECT CASE WHEN radius_accounting_ingest('%{NAS-IP-Address}', '%{Acct-Status-Type}', '%{Acct-Session-Id}', '%{Acct-Unique-Session-Id}', '%{Class}', COALESCE(NULLIF(NULLIF('%{integer:&Event-Timestamp}', ''), '0')::bigint, %l), COALESCE(NULLIF('%{integer:&Acct-Session-Time}', '')::bigint, 0), COALESCE(NULLIF('%{integer:&Acct-Input-Octets}', '')::bigint, 0), COALESCE(NULLIF('%{integer:&Acct-Input-Gigawords}', '')::bigint, 0), COALESCE(NULLIF('%{integer:&Acct-Output-Octets}', '')::bigint, 0), COALESCE(NULLIF('%{integer:&Acct-Output-Gigawords}', '')::bigint, 0), '%{Framed-IP-Address}', '%{Calling-Station-Id}', '%{Acct-Terminate-Cause}') THEN 'ok' ELSE 'reject' END}"
 	}
 
 	# A completed ingest reports `ok`. A valid but rejected packet (such as an

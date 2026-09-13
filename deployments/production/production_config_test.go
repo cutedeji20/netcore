@@ -306,3 +306,23 @@ func TestRadiusServicesMountWritableUpstreamRuntimePaths(t *testing.T) {
 	requireNotContains(t, text, "      - /var/log/radius:rw,noexec,nosuid,size=32m,mode=1777")
 	requireNotContains(t, text, "      - /var/run/radiusd:rw,noexec,nosuid,size=16m,mode=1777")
 }
+
+func TestRadiusDatabasePasswordIsKeptOutOfLoggedConnectionString(t *testing.T) {
+	sqlModule, err := os.ReadFile("../../freeradius/mods-enabled/netcore_sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlText := string(sqlModule)
+	requireNotContains(t, sqlText, "password=$ENV{RADIUS_DB_PASSWORD}")
+
+	entrypoint, err := os.ReadFile("radius-entrypoint.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entrypointText := string(entrypoint)
+	requireContains(t, entrypointText, "PGPASSFILE=/tmp/netcore-radius.pgpass")
+	requireContains(t, entrypointText, `chmod 0600 "$PGPASSFILE"`)
+	requireContains(t, entrypointText, "export PGPASSFILE")
+	requireContains(t, entrypointText, "unset RADIUS_DB_PASSWORD")
+	requireNotContains(t, entrypointText, "export RADIUS_DB_PASSWORD")
+}

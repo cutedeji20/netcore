@@ -50,8 +50,11 @@ func TestPortalDeploymentTemplatesPreserveHandoffBoundaries(t *testing.T) {
 	}
 
 	accounting := read("freeradius", "policy.d", "netcore_accounting")
-	if !strings.Contains(accounting, "radius_accounting_ingest") || !strings.Contains(accounting, "Event-Timestamp#") || !strings.Contains(accounting, "Acct-Input-Gigawords#") {
+	if !strings.Contains(accounting, "radius_accounting_ingest") || !strings.Contains(accounting, "%{integer:&Event-Timestamp}") || !strings.Contains(accounting, "%{integer:&Acct-Input-Gigawords}") {
 		t.Fatal("RADIUS accounting policy lost the narrow ingestion call or 64-bit counter inputs")
+	}
+	if strings.Contains(accounting, "#}") {
+		t.Fatal("RADIUS accounting policy must not use attribute-count syntax as an integer conversion")
 	}
 
 	server := read("freeradius", "sites-enabled", "netcore-hotspot")

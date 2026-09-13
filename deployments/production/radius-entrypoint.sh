@@ -24,7 +24,27 @@ case "$RADIUS_DB_PASSWORD" in
     exit 64
     ;;
 esac
-export RADIUS_DB_PASSWORD
+
+: "${RADIUS_DB_HOST:?netcore radius: missing database host}"
+: "${RADIUS_DB_PORT:?netcore radius: missing database port}"
+: "${RADIUS_DB_NAME:?netcore radius: missing database name}"
+: "${RADIUS_DB_USER:?netcore radius: missing database user}"
+
+# libpq reads the password from this process-private file instead of a DSN.
+# Keeping it out of radius_db prevents normal FreeRADIUS startup logs from
+# disclosing the credential. The base64url validation above guarantees that
+# the password cannot inject a pgpass field separator.
+PGPASSFILE=/tmp/netcore-radius.pgpass
+umask 077
+printf '%s:%s:%s:%s:%s\n' \
+  "$RADIUS_DB_HOST" \
+  "$RADIUS_DB_PORT" \
+  "$RADIUS_DB_NAME" \
+  "$RADIUS_DB_USER" \
+  "$RADIUS_DB_PASSWORD" > "$PGPASSFILE"
+chmod 0600 "$PGPASSFILE"
+export PGPASSFILE
+unset RADIUS_DB_PASSWORD
 
 mode=${NETCORE_RADIUS_MODE:-writer}
 case "$mode" in
