@@ -259,3 +259,13 @@ func TestRouterNASMigrationProtectsEncryptedCredentials(t *testing.T) {
 	}
 	requireContains(t, string(compose), "/radius/clients.conf:/run/netcore/runtime/clients.conf:ro")
 }
+
+func TestRadiusEntrypointPreservesUpstreamBinaryPath(t *testing.T) {
+	entrypoint, err := os.ReadFile("radius-entrypoint.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(entrypoint)
+	requireContains(t, text, "PATH=/opt/sbin:/opt/bin:$PATH")
+	requireContains(t, text, "export PATH")
+}

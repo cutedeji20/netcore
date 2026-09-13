@@ -1,6 +1,12 @@
 #!/bin/sh
 set -eu
 
+# The upstream Alpine image installs FreeRADIUS under /opt and normally adds
+# these directories in its entrypoint. NetCore replaces that entrypoint, so
+# preserve the upstream binary path explicitly.
+PATH=/opt/sbin:/opt/bin:$PATH
+export PATH
+
 password_file=/run/netcore/runtime/radius_db_password
 if [ ! -r "$password_file" ]; then
   echo "netcore radius: missing readable database password file" >&2
