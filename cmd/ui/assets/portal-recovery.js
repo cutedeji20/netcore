@@ -18,7 +18,7 @@
   }
 
   function canConfirm(password, confirmation) {
-    return typeof password === "string" && password.length >= 12 && password === confirmation;
+    return typeof password === "string" && /^[A-Za-z0-9]{4,12}$/.test(password) && password === confirmation;
   }
 
   return {

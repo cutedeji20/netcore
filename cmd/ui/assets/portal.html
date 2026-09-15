@@ -65,8 +65,8 @@
           <form id="portal-register" novalidate>
             <label>Email<input name="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required /></label>
             <label>Phone number<input name="phone" autocomplete="tel" inputmode="tel" placeholder="+2348012345678" required /></label>
-            <label>Password<input name="password" autocomplete="new-password" type="password" minlength="12" placeholder="At least 12 characters" required /></label>
-            <label>Confirm password<input name="confirm_password" autocomplete="new-password" type="password" minlength="12" placeholder="Enter your password again" required /></label>
+            <label>Password<input name="password" autocomplete="new-password" type="password" minlength="4" maxlength="12" pattern="[A-Za-z0-9]{4,12}" placeholder="4–12 letters or numbers" required /></label>
+            <label>Confirm password<input name="confirm_password" autocomplete="new-password" type="password" minlength="4" maxlength="12" pattern="[A-Za-z0-9]{4,12}" placeholder="Enter your password again" required /></label>
             <button class="primary-action" type="submit">Send verification code <span>→</span></button>
           </form>
           <button class="link-button" type="button" data-action="login">Already have an account? Sign in</button>
@@ -119,8 +119,8 @@
           <p class="lead compact">Enter the six-digit recovery code and a new password for your NetCore account.</p>
           <form id="portal-reset-confirm" novalidate>
             <label>Six-digit code<input name="code" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" required /></label>
-            <label>New password<input name="password" autocomplete="new-password" type="password" minlength="12" placeholder="At least 12 characters" required /></label>
-            <label>Confirm new password<input name="confirm_password" autocomplete="new-password" type="password" minlength="12" placeholder="Enter your new password again" required /></label>
+            <label>New password<input name="password" autocomplete="new-password" type="password" minlength="4" maxlength="12" pattern="[A-Za-z0-9]{4,12}" placeholder="4–12 letters or numbers" required /></label>
+            <label>Confirm new password<input name="confirm_password" autocomplete="new-password" type="password" minlength="4" maxlength="12" pattern="[A-Za-z0-9]{4,12}" placeholder="Enter your new password again" required /></label>
             <button class="primary-action" type="submit">Reset password <span>→</span></button>
           </form>
           <p class="form-status" id="reset-confirm-status" role="status"></p>

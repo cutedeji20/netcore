@@ -229,7 +229,7 @@
     var fields = new FormData(resetConfirmForm);
     var password = String(fields.get("password") || "");
     if (!recovery.canConfirm(password, String(fields.get("confirm_password") || ""))) {
-      resetConfirmStatus.textContent = "Passwords must match and be at least 12 characters.";
+      resetConfirmStatus.textContent = "Passwords must match, be 4 to 12 characters, and use letters and numbers only.";
       return;
     }
     setFormSubmitting(resetConfirmForm, true);

@@ -108,7 +108,7 @@ func TestAccountServiceVerifiesEmailBeforeCreatingCustomer(t *testing.T) {
 	service.now = func() time.Time { return time.Date(2026, 8, 24, 18, 0, 0, 0, time.UTC) }
 
 	issued, err := service.BeginRegistration(context.Background(), RegistrationInput{
-		TenantSlug: "example", Email: "Customer@Example.com", Phone: "+2348012345678", Password: "correct customer password",
+		TenantSlug: "example", Email: "Customer@Example.com", Phone: "+2348012345678", Password: "Pass1234",
 	})
 	if err != nil {
 		t.Fatalf("BeginRegistration: %v", err)
@@ -268,7 +268,7 @@ func containsSQL(queries []string, want string) bool {
 func TestAccountServiceDoesNotVerifyEmailWhenCodeIsWrong(t *testing.T) {
 	service, store, _ := newTestAccountService(t)
 	issued, err := service.BeginRegistration(context.Background(), RegistrationInput{
-		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "correct customer password",
+		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "Pass1234",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -288,7 +288,7 @@ func TestAccountServiceActivatesRegistrationWithoutEmailOTPWhenPolicyAllowsIt(t 
 	service, store, notifier := newTestAccountService(t)
 	store.policy.RequireEmailVerification = false
 	issued, err := service.BeginRegistration(context.Background(), RegistrationInput{
-		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "correct customer password",
+		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "Pass1234",
 	})
 	if err != nil {
 		t.Fatalf("BeginRegistration: %v", err)
@@ -305,7 +305,7 @@ func TestAccountServiceRejectsPhoneVerificationUntilSMSIsConfigured(t *testing.T
 	service, store, _ := newTestAccountService(t)
 	store.policy.RequirePhoneVerification = true
 	_, err := service.BeginRegistration(context.Background(), RegistrationInput{
-		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "correct customer password",
+		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "Pass1234",
 	})
 	if !errors.Is(err, ErrPhoneVerificationUnavailable) {
 		t.Fatalf("error = %v, want ErrPhoneVerificationUnavailable", err)
@@ -319,7 +319,7 @@ func TestAccountServicePasswordResetRequiresAValidEmailBoundCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = service.ConfirmPasswordReset(context.Background(), PasswordResetInput{
-		TenantSlug: "example", Email: "other@example.com", ChallengeID: issued.ChallengeID, Code: notifier.code, Password: "a new customer password",
+		TenantSlug: "example", Email: "other@example.com", ChallengeID: issued.ChallengeID, Code: notifier.code, Password: "Pass1234",
 	})
 	if !errors.Is(err, ErrInvalidOTP) {
 		t.Fatalf("wrong email reset error = %v, want ErrInvalidOTP", err)
@@ -334,7 +334,7 @@ func TestAccountHTTPRegistersAgainstItsConfiguredTenant(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Routes(mux)
 
-	request := httptest.NewRequest(http.MethodPost, "/portal/auth/register", strings.NewReader(`{"email":"customer@example.com","phone":"+2348012345678","password":"correct customer password"}`))
+	request := httptest.NewRequest(http.MethodPost, "/portal/auth/register", strings.NewReader(`{"email":"customer@example.com","phone":"+2348012345678","password":"Pass1234"}`))
 	request.RemoteAddr = "203.0.113.9:4040"
 	response := httptest.NewRecorder()
 	mux.ServeHTTP(response, request)
@@ -355,7 +355,7 @@ func TestAccountHTTPRejectsBrowserTenantSelector(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Routes(mux)
 
-	request := httptest.NewRequest(http.MethodPost, "/portal/auth/register", strings.NewReader(`{"tenant":"attacker","email":"customer@example.com","phone":"+2348012345678","password":"correct customer password"}`))
+	request := httptest.NewRequest(http.MethodPost, "/portal/auth/register", strings.NewReader(`{"tenant":"attacker","email":"customer@example.com","phone":"+2348012345678","password":"Pass1234"}`))
 	response := httptest.NewRecorder()
 	mux.ServeHTTP(response, request)
 
@@ -367,7 +367,7 @@ func TestAccountHTTPRejectsBrowserTenantSelector(t *testing.T) {
 func TestAccountHTTPDoesNotExposeCustomerLinkConflict(t *testing.T) {
 	handler, store, notifier := newTestAccountHTTP(t)
 	issued, err := handler.service.BeginRegistration(context.Background(), RegistrationInput{
-		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "correct customer password",
+		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "Pass1234",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -415,5 +415,18 @@ func TestAccountHTTPPortalLoginUsesConfiguredTenant(t *testing.T) {
 
 	if response.Code != http.StatusOK || len(response.Result().Cookies()) != 1 || strings.Contains(response.Body.String(), "tenant") {
 		t.Fatalf("status=%d cookies=%v body=%s", response.Code, response.Result().Cookies(), response.Body)
+	}
+}
+
+func TestCustomerPasswordPolicyAcceptsOnlyFourToTwelveAlphaNumericCharacters(t *testing.T) {
+	for _, password := range []string{"Pass", "Pass1234", "A1b2C3d4E5f6"} {
+		if !validCustomerPassword(password) {
+			t.Fatalf("valid password %q was rejected", password)
+		}
+	}
+	for _, password := range []string{"abc", "Pass1234Pass1", "Pass1234!", "pass word"} {
+		if validCustomerPassword(password) {
+			t.Fatalf("invalid password %q was accepted", password)
+		}
 	}
 }

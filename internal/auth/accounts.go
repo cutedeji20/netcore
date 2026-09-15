@@ -211,7 +211,15 @@ func normalizeAccountIdentity(tenantSlug, email string) (string, string, error) 
 }
 
 func validCustomerPassword(value string) bool {
-	return len(value) >= 12 && len(value) <= 1024
+	if len(value) < 4 || len(value) > 12 {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= 'a' && character <= 'z') && !(character >= 'A' && character <= 'Z') && !(character >= '0' && character <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func validPhone(value string) bool {

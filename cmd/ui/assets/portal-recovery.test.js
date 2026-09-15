@@ -13,7 +13,8 @@ test("keeps only a valid reset e-mail and opaque challenge", () => {
 });
 
 test("requires matching customer reset passwords", () => {
-  assert.equal(recovery.canConfirm("a secure password", "a secure password"), true);
-  assert.equal(recovery.canConfirm("a secure password", "different password"), false);
-  assert.equal(recovery.canConfirm("short", "short"), false);
+  assert.equal(recovery.canConfirm("Pass1234", "Pass1234"), true);
+  assert.equal(recovery.canConfirm("Pass1234", "Pass1235"), false);
+  assert.equal(recovery.canConfirm("abc", "abc"), false);
+  assert.equal(recovery.canConfirm("Pass1234!", "Pass1234!"), false);
 });
