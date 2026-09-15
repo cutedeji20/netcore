@@ -29,6 +29,14 @@ type memoryAccountStore struct {
 	prepareErr    error
 	verifyErr     error
 	resetErr      error
+	policy        RegistrationPolicy
+}
+
+func (s *memoryAccountStore) RegistrationPolicy(_ context.Context, tenantID string) (RegistrationPolicy, error) {
+	if tenantID != s.tenantID {
+		return RegistrationPolicy{}, errors.New("unexpected tenant")
+	}
+	return s.policy, nil
 }
 
 func (s *memoryAccountStore) ResolveTenant(_ context.Context, slug string) (string, bool, error) {
@@ -52,7 +60,7 @@ func newTestAccountHTTP(t *testing.T) (*AccountHTTP, *memoryAccountStore, *recor
 	return handler, store, notifier
 }
 
-func (s *memoryAccountStore) PrepareEmailRegistration(_ context.Context, tenantID, email, passwordHash string) error {
+func (s *memoryAccountStore) PrepareEmailRegistration(_ context.Context, tenantID, email, _ string, passwordHash string) error {
 	if tenantID != s.tenantID {
 		return errors.New("unexpected tenant")
 	}
@@ -82,7 +90,7 @@ func newTestAccountService(t *testing.T) (*AccountService, *memoryAccountStore, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &memoryAccountStore{tenantID: testTenantID, tenantFound: true}
+	store := &memoryAccountStore{tenantID: testTenantID, tenantFound: true, policy: RegistrationPolicy{RequireEmailVerification: true}}
 	notifier := &recordingNotifier{}
 	otp, err := NewOTPService(newMemoryOTPStore(), notifier)
 	if err != nil {
@@ -100,7 +108,7 @@ func TestAccountServiceVerifiesEmailBeforeCreatingCustomer(t *testing.T) {
 	service.now = func() time.Time { return time.Date(2026, 8, 24, 18, 0, 0, 0, time.UTC) }
 
 	issued, err := service.BeginRegistration(context.Background(), RegistrationInput{
-		TenantSlug: "example", Email: "Customer@Example.com", Password: "correct customer password",
+		TenantSlug: "example", Email: "Customer@Example.com", Phone: "+2348012345678", Password: "correct customer password",
 	})
 	if err != nil {
 		t.Fatalf("BeginRegistration: %v", err)
@@ -260,7 +268,7 @@ func containsSQL(queries []string, want string) bool {
 func TestAccountServiceDoesNotVerifyEmailWhenCodeIsWrong(t *testing.T) {
 	service, store, _ := newTestAccountService(t)
 	issued, err := service.BeginRegistration(context.Background(), RegistrationInput{
-		TenantSlug: "example", Email: "customer@example.com", Password: "correct customer password",
+		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "correct customer password",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -273,6 +281,34 @@ func TestAccountServiceDoesNotVerifyEmailWhenCodeIsWrong(t *testing.T) {
 	}
 	if store.verifiedEmail != "" {
 		t.Fatalf("wrong code verified %q", store.verifiedEmail)
+	}
+}
+
+func TestAccountServiceActivatesRegistrationWithoutEmailOTPWhenPolicyAllowsIt(t *testing.T) {
+	service, store, notifier := newTestAccountService(t)
+	store.policy.RequireEmailVerification = false
+	issued, err := service.BeginRegistration(context.Background(), RegistrationInput{
+		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "correct customer password",
+	})
+	if err != nil {
+		t.Fatalf("BeginRegistration: %v", err)
+	}
+	if issued.VerificationRequired || issued.ChallengeID != "" || notifier.code != "" {
+		t.Fatalf("unexpected OTP when e-mail verification is disabled: %+v code=%q", issued, notifier.code)
+	}
+	if store.verifiedEmail != "customer@example.com" {
+		t.Fatalf("registration was not activated: %q", store.verifiedEmail)
+	}
+}
+
+func TestAccountServiceRejectsPhoneVerificationUntilSMSIsConfigured(t *testing.T) {
+	service, store, _ := newTestAccountService(t)
+	store.policy.RequirePhoneVerification = true
+	_, err := service.BeginRegistration(context.Background(), RegistrationInput{
+		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "correct customer password",
+	})
+	if !errors.Is(err, ErrPhoneVerificationUnavailable) {
+		t.Fatalf("error = %v, want ErrPhoneVerificationUnavailable", err)
 	}
 }
 
@@ -298,7 +334,7 @@ func TestAccountHTTPRegistersAgainstItsConfiguredTenant(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Routes(mux)
 
-	request := httptest.NewRequest(http.MethodPost, "/portal/auth/register", strings.NewReader(`{"email":"customer@example.com","password":"correct customer password"}`))
+	request := httptest.NewRequest(http.MethodPost, "/portal/auth/register", strings.NewReader(`{"email":"customer@example.com","phone":"+2348012345678","password":"correct customer password"}`))
 	request.RemoteAddr = "203.0.113.9:4040"
 	response := httptest.NewRecorder()
 	mux.ServeHTTP(response, request)
@@ -319,7 +355,7 @@ func TestAccountHTTPRejectsBrowserTenantSelector(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Routes(mux)
 
-	request := httptest.NewRequest(http.MethodPost, "/portal/auth/register", strings.NewReader(`{"tenant":"attacker","email":"customer@example.com","password":"correct customer password"}`))
+	request := httptest.NewRequest(http.MethodPost, "/portal/auth/register", strings.NewReader(`{"tenant":"attacker","email":"customer@example.com","phone":"+2348012345678","password":"correct customer password"}`))
 	response := httptest.NewRecorder()
 	mux.ServeHTTP(response, request)
 
@@ -331,7 +367,7 @@ func TestAccountHTTPRejectsBrowserTenantSelector(t *testing.T) {
 func TestAccountHTTPDoesNotExposeCustomerLinkConflict(t *testing.T) {
 	handler, store, notifier := newTestAccountHTTP(t)
 	issued, err := handler.service.BeginRegistration(context.Background(), RegistrationInput{
-		TenantSlug: "example", Email: "customer@example.com", Password: "correct customer password",
+		TenantSlug: "example", Email: "customer@example.com", Phone: "+2348012345678", Password: "correct customer password",
 	})
 	if err != nil {
 		t.Fatal(err)

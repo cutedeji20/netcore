@@ -31,6 +31,7 @@ if (typeof window !== "undefined") (function () {
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
   var livePage = window.NetCoreLivePage;
   var issuedInvitations = [];
+  var selectedMemberIDs = new Set();
 
   function canWrite() {
     var principal = window.NETCORE_PRINCIPAL || {};
@@ -201,7 +202,7 @@ if (typeof window !== "undefined") (function () {
 
   function setHeadings(table) {
     var headings = ["Team member", "Role", "Last active", "MFA", "Access"];
-    if (canWrite()) headings.push("Actions");
+    if (canWrite()) headings.push("Select", "Actions");
     var headingRow = table.querySelector("thead tr");
     headingRow.replaceChildren();
     headings.forEach(function (value) {
@@ -209,6 +210,12 @@ if (typeof window !== "undefined") (function () {
       heading.textContent = value;
       headingRow.appendChild(heading);
     });
+  }
+
+  function renderBulkActions() {
+    if (!canWrite() || currentPage() !== "team") return;
+    var toolbar=document.querySelector("#page-content .toolbar"); if(!toolbar)return; var old=toolbar.querySelector(".team-bulk-actions"); if(old)old.remove(); var wrap=document.createElement("div"); wrap.className="team-bulk-actions";
+    [["Deactivate selected",false],["Reactivate selected",true]].forEach(function(action){var button=document.createElement("button");button.type="button";button.className="button team-row-action";button.textContent=action[0];button.disabled=selectedMemberIDs.size===0;button.onclick=function(){sensitiveDialog(action[0]+" members",[],action[0],function(values){values.user_ids=Array.from(selectedMemberIDs);values.active=action[1];return postJSON("/api/v1/team/members/bulk-lifecycle","POST",values).then(function(response){if(!response.ok)return safeError(response).then(Promise.reject.bind(Promise));selectedMemberIDs.clear();});});};wrap.appendChild(button);});toolbar.appendChild(wrap);
   }
 
   function displayMembers() {
@@ -237,10 +244,11 @@ if (typeof window !== "undefined") (function () {
       appendTagCell(row, member.mfa_status, mfaClass(member.mfa_status));
       appendTagCell(row, member.status, accountClass(member.status));
       if (canWrite()) {
+        var select=document.createElement("td"), checkbox=document.createElement("input"); checkbox.type="checkbox"; checkbox.checked=selectedMemberIDs.has(member.id); checkbox.setAttribute("aria-label","Select "+displayName(member)); checkbox.onchange=(function(input,id){return function(){if(input.checked)selectedMemberIDs.add(id);else selectedMemberIDs.delete(id);renderBulkActions();};})(checkbox,member.id); select.appendChild(checkbox); row.appendChild(select);
         var actions = document.createElement("td");
         [
           ["Change role", "PUT", "/api/v1/team/members/" + member.id + "/role", true],
-          ["Deactivate", "POST", "/api/v1/team/members/" + member.id + "/deactivate", false]
+          [member.status === "DISABLED" ? "Reactivate" : "Deactivate", "POST", "/api/v1/team/members/" + member.id + (member.status === "DISABLED" ? "/reactivate" : "/deactivate"), false]
         ].forEach(function (action) {
           var button = document.createElement("button"); button.type = "button"; button.className = "button team-row-action"; button.textContent = action[0];
           button.addEventListener("click", function () { sensitiveDialog(action[0] + " member", action[3] ? [{ label: "New role", name: "role", options: ["Administrator", "Operations", "Billing", "Support"] }] : [], action[0], function (values) { return postJSON(action[2], action[1], values).then(function (response) { return response.ok ? undefined : safeError(response).then(Promise.reject.bind(Promise)); }); }); }); actions.appendChild(button);
@@ -250,6 +258,7 @@ if (typeof window !== "undefined") (function () {
     });
     displayIssuedInvitations();
     showState("records");
+    renderBulkActions();
   }
 
   function requestMembers(force) {
@@ -292,6 +301,7 @@ if (typeof window !== "undefined") (function () {
   function onPageRendered(event) {
     if (event.detail !== "team") return;
     bindHeaderAction();
+    renderBulkActions();
     requestInvitations(true);
     if (loadedMembers) requestMembers(true);
     else requestMembers();

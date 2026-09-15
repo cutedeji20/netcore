@@ -64,6 +64,15 @@ func (s *memoryStore) Deactivate(_ context.Context, tenantID, customerID string,
 	return s.deactivated, s.err
 }
 
+func (s *memoryStore) Restore(_ context.Context, tenantID, customerID string, actor MutationActor) (Customer, error) {
+	s.deactivatedTenant, s.deactivatedID, s.deactivatedActor = tenantID, customerID, actor
+	return s.deactivated, s.err
+}
+
+func (s *memoryStore) BulkSetStatus(_ context.Context, _ string, _ []string, _ string, _ MutationActor) (int, error) {
+	return 0, s.err
+}
+
 func newTestHTTP(t *testing.T) (*HTTP, *memoryStore) {
 	t.Helper()
 	store := &memoryStore{

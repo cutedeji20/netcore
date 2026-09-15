@@ -37,6 +37,13 @@ UPDATE customers
 RETURNING id::text, customer_number, status, COALESCE(first_name, ''),
           COALESCE(last_name, ''), COALESCE(phone, ''), COALESCE(email::text, ''), created_at, updated_at`
 
+const customerRestoreSQL = `
+UPDATE customers
+   SET status = 'ACTIVE', updated_at = now()
+ WHERE tenant_id = $1 AND id = $2::uuid AND status = 'SUSPENDED'
+RETURNING id::text, customer_number, status, COALESCE(first_name, ''),
+          COALESCE(last_name, ''), COALESCE(phone, ''), COALESCE(email::text, ''), created_at, updated_at`
+
 const customerAuditSQL = `
 INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id, ip_address, user_agent, metadata)
 VALUES ($1, 'USER', $2, $3, 'customers', $4, NULLIF($5, '')::inet, NULLIF($6, ''), '{}'::jsonb)`
@@ -204,6 +211,59 @@ func (s *PostgresStore) Deactivate(ctx context.Context, tenantID, customerID str
 		return Customer{}, err
 	}
 	return customer, nil
+}
+
+func (s *PostgresStore) Restore(ctx context.Context, tenantID, customerID string, actor MutationActor) (customer Customer, err error) {
+	if tenantID == "" || !validUUID(customerID) || actor.UserID == "" {
+		return Customer{}, ErrInvalidInput
+	}
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := scanCustomer(tx.QueryRow(ctx, customerRestoreSQL, tenantID, customerID), &customer); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return customerWriteError("restore customer", err)
+		}
+		return writeCustomerAudit(ctx, tx, tenantID, actor, "CUSTOMER_RESTORED", customer.ID)
+	})
+	if err != nil {
+		return Customer{}, err
+	}
+	return customer, nil
+}
+
+func (s *PostgresStore) BulkSetStatus(ctx context.Context, tenantID string, customerIDs []string, status string, actor MutationActor) (count int, err error) {
+	if tenantID == "" || actor.UserID == "" || len(customerIDs) < 1 || len(customerIDs) > 100 || (status != "ACTIVE" && status != "SUSPENDED") {
+		return 0, ErrInvalidInput
+	}
+	for _, id := range customerIDs {
+		if !validUUID(id) {
+			return 0, ErrInvalidInput
+		}
+	}
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `UPDATE customers SET status=$3, updated_at=now() WHERE tenant_id=$1 AND id = ANY($2::uuid[]) AND status <> $3 RETURNING id::text`, tenantID, customerIDs, status)
+		if err != nil {
+			return fmt.Errorf("bulk update customers: %w", err)
+		}
+		defer rows.Close()
+		action := "CUSTOMER_SUSPENDED"
+		if status == "ACTIVE" {
+			action = "CUSTOMER_RESTORED"
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			if err := writeCustomerAudit(ctx, tx, tenantID, actor, action, id); err != nil {
+				return err
+			}
+			count++
+		}
+		return rows.Err()
+	})
+	return count, err
 }
 
 func scanCustomer(row pgx.Row, customer *Customer) error {

@@ -64,6 +64,8 @@ func (h *HTTP) invitationRoutes(mux *http.ServeMux, sessions *auth.HTTP) {
 	mux.Handle("DELETE /api/v1/team/invitations/{id}", write(h.revoke))
 	mux.Handle("PUT /api/v1/team/members/{id}/role", write(h.changeRole))
 	mux.Handle("POST /api/v1/team/members/{id}/deactivate", write(h.deactivate))
+	mux.Handle("POST /api/v1/team/members/{id}/reactivate", write(h.reactivate))
+	mux.Handle("POST /api/v1/team/members/bulk-lifecycle", write(h.bulkLifecycle))
 	mux.HandleFunc("POST /api/v1/staff-invitations/prepare", h.publicNoStore(h.prepareInvitation(sessions)))
 	mux.HandleFunc("POST /api/v1/staff-invitations/complete", h.publicNoStore(h.completeInvitation(sessions)))
 }
@@ -198,6 +200,52 @@ func (h *HTTP) deactivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+func (h *HTTP) reactivate(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	var input struct {
+		Password string `json:"password"`
+		MFACode  string `json:"mfa_code"`
+	}
+	userID := r.PathValue("id")
+	if !decodeInvitationJSON(w, r, &input) || !validUUID(userID) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
+		return
+	}
+	if err := h.invitations.Reactivate(r.Context(), ReactivateInput{Principal: principal, UserID: userID, Password: input.Password, MFACode: input.MFACode}); err != nil {
+		h.writeMutationError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (h *HTTP) bulkLifecycle(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	var input struct {
+		UserIDs  []string `json:"user_ids"`
+		Active   bool     `json:"active"`
+		Password string   `json:"password"`
+		MFACode  string   `json:"mfa_code"`
+	}
+	if !decodeInvitationJSON(w, r, &input) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
+		return
+	}
+	count, err := h.invitations.BulkLifecycle(r.Context(), principal, input.UserIDs, input.Active, input.Password, input.MFACode)
+	if err != nil {
+		h.writeMutationError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Updated int `json:"updated"`
+	}{count})
 }
 
 func (h *HTTP) prepareInvitation(sessions *auth.HTTP) http.HandlerFunc {

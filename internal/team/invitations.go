@@ -85,6 +85,13 @@ type DeactivateInput struct {
 	UserID            string
 	Password, MFACode string
 }
+
+type ReactivateInput struct {
+	Principal auth.Principal
+	UserID    string
+	Password  string
+	MFACode   string
+}
 type MFASetup struct {
 	URI       string `json:"uri"`
 	ManualKey string `json:"manual_key"`
@@ -109,6 +116,7 @@ type InvitationStore interface {
 	RevokeInvitation(context.Context, string, string, string) error
 	ChangeStaffRole(context.Context, string, string, string, BuiltInRole) error
 	DeactivateStaff(context.Context, string, string, string) error
+	ReactivateStaff(context.Context, string, string, string) error
 }
 
 type Service struct {
@@ -274,6 +282,47 @@ func (s *Service) Deactivate(ctx context.Context, in DeactivateInput) error {
 		return ErrStepUpFailed
 	}
 	return mapStoreError(s.store.DeactivateStaff(ctx, in.Principal.TenantID, in.Principal.UserID, in.UserID))
+}
+
+func (s *Service) Reactivate(ctx context.Context, in ReactivateInput) error {
+	if s == nil || !validMutationPrincipal(in.Principal) || !validUUID(in.UserID) || in.UserID == in.Principal.UserID {
+		return ErrInvitationInvalid
+	}
+	if err := s.stepUp.VerifyStepUp(ctx, auth.StepUpInput{Principal: in.Principal, Password: in.Password, MFACode: in.MFACode}); err != nil {
+		return ErrStepUpFailed
+	}
+	return mapStoreError(s.store.ReactivateStaff(ctx, in.Principal.TenantID, in.Principal.UserID, in.UserID))
+}
+
+func (s *Service) BulkLifecycle(ctx context.Context, principal auth.Principal, userIDs []string, active bool, password, mfaCode string) (int, error) {
+	if s == nil || !validMutationPrincipal(principal) || len(userIDs) < 1 || len(userIDs) > 100 {
+		return 0, ErrInvitationInvalid
+	}
+	seen := map[string]struct{}{}
+	for _, id := range userIDs {
+		if !validUUID(id) || id == principal.UserID {
+			return 0, ErrInvitationInvalid
+		}
+		if _, exists := seen[id]; exists {
+			return 0, ErrInvitationInvalid
+		}
+		seen[id] = struct{}{}
+	}
+	if err := s.stepUp.VerifyStepUp(ctx, auth.StepUpInput{Principal: principal, Password: password, MFACode: mfaCode}); err != nil {
+		return 0, ErrStepUpFailed
+	}
+	for _, id := range userIDs {
+		var err error
+		if active {
+			err = s.store.ReactivateStaff(ctx, principal.TenantID, principal.UserID, id)
+		} else {
+			err = s.store.DeactivateStaff(ctx, principal.TenantID, principal.UserID, id)
+		}
+		if err != nil {
+			return 0, mapStoreError(err)
+		}
+	}
+	return len(userIDs), nil
 }
 
 func (s *Service) PrepareAcceptance(ctx context.Context, raw string) (MFASetup, error) {

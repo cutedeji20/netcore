@@ -33,6 +33,8 @@ SELECT tenant.name,
        tenant.currency,
        tenant.status,
        tenant.updated_at,
+	       tenant.require_email_verification,
+	       tenant.require_phone_verification,
        (
            SELECT COUNT(*)
              FROM routers AS router
@@ -55,6 +57,8 @@ SELECT tenant.name,
 			&snapshot.Currency,
 			&snapshot.Status,
 			&snapshot.UpdatedAt,
+			&snapshot.RequireEmailVerification,
+			&snapshot.RequirePhoneVerification,
 			&snapshot.RegisteredRouters,
 			&snapshot.ActiveTeamMembers,
 		)
@@ -70,4 +74,31 @@ SELECT tenant.name,
 		return Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func (s *PostgresStore) SetVerificationPolicy(ctx context.Context, tenantID, actorID string, emailRequired, phoneRequired bool) (Snapshot, error) {
+	if tenantID == "" || actorID == "" {
+		return Snapshot{}, ErrUnavailable
+	}
+	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+UPDATE tenants
+   SET require_email_verification = $2,
+       require_phone_verification = $3,
+       updated_at = now()
+ WHERE id = $1`, tenantID, emailRequired, phoneRequired); err != nil {
+			return fmt.Errorf("update verification policy: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id, metadata)
+VALUES ($1, 'USER', $2::uuid, 'REGISTRATION_VERIFICATION_POLICY_UPDATED', 'tenant', $1::uuid,
+        jsonb_build_object('email_required', $3::boolean, 'phone_required', $4::boolean))`, tenantID, actorID, emailRequired, phoneRequired); err != nil {
+			return fmt.Errorf("write verification policy audit record: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx, tenantID)
 }

@@ -184,6 +184,28 @@ func (s *PostgresStore) ChangeStaffRole(ctx context.Context, tenantID, actorID, 
 func (s *PostgresStore) DeactivateStaff(ctx context.Context, tenantID, actorID, targetID string) error {
 	return s.mutateStaff(ctx, tenantID, actorID, targetID, "", true)
 }
+func (s *PostgresStore) ReactivateStaff(ctx context.Context, tenantID, actorID, targetID string) error {
+	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, tenantID); err != nil {
+			return err
+		}
+		var target string
+		if err := tx.QueryRow(ctx, lockedTenantStaffTargetSQL, tenantID, targetID).Scan(&target); err != nil {
+			return ErrInvitationInvalid
+		}
+		command, err := tx.Exec(ctx, `UPDATE users SET status='ACTIVE',updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='DISABLED'`, tenantID, targetID)
+		if err != nil {
+			return err
+		}
+		if command.RowsAffected() != 1 {
+			return ErrInvitationInvalid
+		}
+		if _, err := tx.Exec(ctx, invalidateTargetSessionsSQL, tenantID, targetID); err != nil {
+			return err
+		}
+		return teamAudit(ctx, tx, tenantID, actorID, "STAFF_REACTIVATED", "users", targetID)
+	})
+}
 func (s *PostgresStore) mutateStaff(ctx context.Context, tenantID, actorID, targetID string, role BuiltInRole, deactivate bool) error {
 	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, tenantID); err != nil {

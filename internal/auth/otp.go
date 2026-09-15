@@ -67,8 +67,9 @@ type OTPService struct {
 // IssuedOTP identifies a newly issued challenge. Code is intentionally absent:
 // it belongs only in the notifier call.
 type IssuedOTP struct {
-	ChallengeID string
-	ExpiresAt   time.Time
+	ChallengeID          string
+	ExpiresAt            time.Time
+	VerificationRequired bool
 }
 
 func NewOTPService(store OTPChallengeStore, notifier OTPNotifier) (*OTPService, error) {

@@ -51,6 +51,23 @@ func (s *PostgresStore) ResolveTenant(ctx context.Context, slug string) (string,
 	return tenant.ID, ok, nil
 }
 
+func (s *PostgresStore) RegistrationPolicy(ctx context.Context, tenantID string) (RegistrationPolicy, error) {
+	if tenantID == "" {
+		return RegistrationPolicy{}, ErrInvalidAccountInput
+	}
+	var policy RegistrationPolicy
+	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+SELECT require_email_verification, require_phone_verification
+  FROM tenants
+ WHERE id = $1`, tenantID).Scan(&policy.RequireEmailVerification, &policy.RequirePhoneVerification); err != nil {
+			return fmt.Errorf("query registration policy: %w", err)
+		}
+		return nil
+	})
+	return policy, err
+}
+
 func (s *PostgresStore) FindUser(ctx context.Context, tenantID, identifier string) (user User, found bool, err error) {
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
@@ -206,19 +223,19 @@ UPDATE users
 // PrepareEmailRegistration creates an unverified customer identity or lets its
 // owner restart registration with a new password. A verified account is never
 // altered by this public path, so it cannot become an account-takeover route.
-func (s *PostgresStore) PrepareEmailRegistration(ctx context.Context, tenantID, email, passwordHash string) error {
-	if tenantID == "" || email == "" || passwordHash == "" {
+func (s *PostgresStore) PrepareEmailRegistration(ctx context.Context, tenantID, email, phone, passwordHash string) error {
+	if tenantID == "" || email == "" || phone == "" || passwordHash == "" {
 		return ErrInvalidAccountInput
 	}
 	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
-INSERT INTO users (tenant_id, email, password_hash, password_params, status)
-VALUES ($1, $2, $3, '{}'::jsonb, 'ACTIVE')
+INSERT INTO users (tenant_id, email, phone, password_hash, password_params, status)
+VALUES ($1, $2, $3, $4, '{}'::jsonb, 'ACTIVE')
 ON CONFLICT (tenant_id, email) WHERE email IS NOT NULL
-DO UPDATE SET password_hash = EXCLUDED.password_hash,
+DO UPDATE SET password_hash = EXCLUDED.password_hash, phone = EXCLUDED.phone,
               password_params = '{}'::jsonb,
               updated_at = now()
-      WHERE users.email_verified_at IS NULL`, tenantID, email, passwordHash); err != nil {
+      WHERE users.email_verified_at IS NULL`, tenantID, email, phone, passwordHash); err != nil {
 			return fmt.Errorf("prepare e-mail registration: %w", err)
 		}
 		return nil

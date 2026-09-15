@@ -22,9 +22,12 @@ type Snapshot struct {
 	UpdatedAt         time.Time
 	RegisteredRouters int
 	ActiveTeamMembers int
+	RequireEmailVerification bool
+	RequirePhoneVerification bool
 }
 
 // Store is the workspace settings persistence boundary.
 type Store interface {
 	Get(ctx context.Context, tenantID string) (Snapshot, error)
+	SetVerificationPolicy(ctx context.Context, tenantID, actorID string, emailRequired, phoneRequired bool) (Snapshot, error)
 }

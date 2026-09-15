@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/netcore-isp/netcore/internal/auth"
 	"github.com/netcore-isp/netcore/internal/config"
 	"github.com/netcore-isp/netcore/internal/integrations"
 )
@@ -14,7 +15,11 @@ func (dashboardPaymentAccountStore) ResolveTenant(context.Context, string) (stri
 	return "tenant-data-hub", true, nil
 }
 
-func (dashboardPaymentAccountStore) PrepareEmailRegistration(context.Context, string, string, string) error {
+func (dashboardPaymentAccountStore) RegistrationPolicy(context.Context, string) (auth.RegistrationPolicy, error) {
+	return auth.RegistrationPolicy{}, nil
+}
+
+func (dashboardPaymentAccountStore) PrepareEmailRegistration(context.Context, string, string, string, string) error {
 	return nil
 }
 

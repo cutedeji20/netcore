@@ -61,4 +61,6 @@ type Store interface {
 	Create(ctx context.Context, tenantID string, actor MutationActor, input WriteInput) (Customer, error)
 	Update(ctx context.Context, tenantID, customerID string, actor MutationActor, input WriteInput) (Customer, error)
 	Deactivate(ctx context.Context, tenantID, customerID string, actor MutationActor) (Customer, error)
+	Restore(ctx context.Context, tenantID, customerID string, actor MutationActor) (Customer, error)
+	BulkSetStatus(ctx context.Context, tenantID string, customerIDs []string, status string, actor MutationActor) (int, error)
 }

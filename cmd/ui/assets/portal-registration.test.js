@@ -4,9 +4,9 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const registration = require("./portal-registration.js");
 
-test("stops a matching customer password that is shorter than twelve characters", () => {
+test("requires a country-code phone number before accepting a registration", () => {
   assert.equal(
-    registration.validate("customer@example.com", "short-pass", "short-pass"),
-    "Your password must be at least 12 characters."
+    registration.validate("customer@example.com", "correct customer password", "correct customer password", "08012345678"),
+    "Enter a valid phone number with country code."
   );
 });

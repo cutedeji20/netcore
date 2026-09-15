@@ -21,6 +21,7 @@ if (typeof window !== "undefined") (function () {
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
   var livePage = window.NetCoreLivePage;
+  var selectedCustomerIDs = new Set();
 
   function canWrite() { var principal = window.NETCORE_PRINCIPAL || {}; return Array.isArray(principal.permissions) && principal.permissions.indexOf("customer.write") !== -1; }
   function request(path, method, payload) { var requestValue = customerMutationRequest(path, method, payload || {}); return fetch(apiBase + requestValue.url, requestValue); }
@@ -104,13 +105,28 @@ if (typeof window !== "undefined") (function () {
     row.appendChild(cell);
   }
 
+  function appendSelectionCell(row, customer) {
+    var cell = document.createElement("td"), input = document.createElement("input");
+    input.type = "checkbox"; input.checked = selectedCustomerIDs.has(customer.id); input.setAttribute("aria-label", "Select " + customer.customer_number);
+    input.onchange = function () { if (input.checked) selectedCustomerIDs.add(customer.id); else selectedCustomerIDs.delete(customer.id); renderBulkActions(); };
+    cell.appendChild(input); row.appendChild(cell);
+  }
+
+  function renderBulkActions() {
+    if (!canWrite() || currentPage() !== "customers") return;
+    var toolbar = document.querySelector("#page-content .toolbar"); if (!toolbar) return;
+    var old = toolbar.querySelector(".customer-bulk-actions"); if (old) old.remove();
+    var wrap = document.createElement("div"); wrap.className = "customer-bulk-actions";
+    [["Suspend selected", "SUSPENDED"], ["Restore selected", "ACTIVE"]].forEach(function (action) { var button = document.createElement("button"); button.type = "button"; button.className = "button customer-row-action"; button.textContent = action[0]; button.disabled = selectedCustomerIDs.size === 0; button.onclick = function () { if (!window.confirm(action[0] + " customers?")) return; button.disabled = true; fetch(apiBase + "/api/v1/customers/bulk-status", { method:"POST", credentials:"same-origin", cache:"no-store", headers:{"Content-Type":"application/json"}, body:JSON.stringify({customer_ids:Array.from(selectedCustomerIDs),status:action[1]}) }).then(function(response){ return response.ok ? undefined : errorMessage(response).then(Promise.reject.bind(Promise)); }).then(function(){ selectedCustomerIDs.clear(); requestCustomers(true); }).catch(function(message){ window.alert(message); }).finally(function(){ button.disabled=false; }); }; wrap.appendChild(button); }); toolbar.appendChild(wrap);
+  }
+
   function displayCustomers() {
     if (!loadedCustomers || currentPage() !== "customers") return;
     var table = document.querySelector("#page-content .data-table");
     if (!table) return;
 
     var headings = ["Customer", "Phone", "Email", "Joined", "Status"];
-    if (canWrite()) headings.push("Actions");
+    if (canWrite()) { headings.push("Select", "Actions"); }
     var headingRow = table.querySelector("thead tr");
     headingRow.replaceChildren();
     headings.forEach(function (value) { var heading = document.createElement("th"); heading.textContent = value; headingRow.appendChild(heading); });
@@ -128,10 +144,12 @@ if (typeof window !== "undefined") (function () {
       appendTextCell(row, customer.email);
       appendTextCell(row, new Date(customer.created_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }));
       appendStatusCell(row, customer.status);
-      if (canWrite()) { var actions = document.createElement("td"); var edit = document.createElement("button"); edit.type = "button"; edit.className = "button customer-row-action"; edit.textContent = "Edit"; edit.onclick = function () { customerDialog("Edit customer", customer, "PUT", "/api/v1/customers/" + customer.id); }; var deactivate = document.createElement("button"); deactivate.type = "button"; deactivate.className = "button customer-row-action"; deactivate.textContent = "Deactivate"; deactivate.onclick = function () { if (!window.confirm("Deactivate this customer?")) return; deactivate.disabled = true; fetch(apiBase + "/api/v1/customers/" + customer.id + "/deactivate", { method: "POST", credentials: "same-origin", cache: "no-store" }).then(function (response) { return response.ok ? undefined : errorMessage(response).then(Promise.reject.bind(Promise)); }).then(function () { requestCustomers(true); }).catch(function (message) { window.alert(message); }).finally(function () { deactivate.disabled = false; }); }; actions.append(edit, deactivate); row.appendChild(actions); }
+      if (canWrite()) appendSelectionCell(row, customer);
+      if (canWrite()) { var actions = document.createElement("td"); var edit = document.createElement("button"); edit.type = "button"; edit.className = "button customer-row-action"; edit.textContent = "Edit"; edit.onclick = function () { customerDialog("Edit customer", customer, "PUT", "/api/v1/customers/" + customer.id); }; var lifecycle = document.createElement("button"); lifecycle.type = "button"; lifecycle.className = "button customer-row-action"; lifecycle.textContent = customer.status === "SUSPENDED" ? "Restore" : "Suspend"; lifecycle.onclick = function () { var restoring = customer.status === "SUSPENDED"; if (!window.confirm((restoring ? "Restore" : "Suspend") + " this customer?")) return; lifecycle.disabled = true; fetch(apiBase + "/api/v1/customers/" + customer.id + (restoring ? "/restore" : "/deactivate"), { method: "POST", credentials: "same-origin", cache: "no-store" }).then(function (response) { return response.ok ? undefined : errorMessage(response).then(Promise.reject.bind(Promise)); }).then(function () { requestCustomers(true); }).catch(function (message) { window.alert(message); }).finally(function () { lifecycle.disabled = false; }); }; actions.append(edit, lifecycle); row.appendChild(actions); }
       body.appendChild(row);
     });
     showState("records");
+    renderBulkActions();
   }
 
   function requestCustomers(force) {
@@ -165,6 +183,7 @@ if (typeof window !== "undefined") (function () {
     var page = event.detail;
     if (page !== "customers") return;
     bindHeaderAction();
+    renderBulkActions();
     if (loadedCustomers) requestCustomers(true);
     else requestCustomers();
   }

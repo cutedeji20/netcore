@@ -25,6 +25,10 @@ func (s *memoryStore) Get(_ context.Context, tenantID string) (Snapshot, error) 
 	return s.snapshot, s.err
 }
 
+func (s *memoryStore) SetVerificationPolicy(_ context.Context, tenantID, _ string, email, phone bool) (Snapshot, error) {
+	s.tenantID = tenantID; s.snapshot.RequireEmailVerification=email; s.snapshot.RequirePhoneVerification=phone; return s.snapshot,s.err
+}
+
 func newTestHTTP(t *testing.T) (*HTTP, *memoryStore) {
 	t.Helper()
 	store := &memoryStore{snapshot: Snapshot{

@@ -119,19 +119,28 @@
     }
     var fields = new FormData(registerForm);
     var email = String(fields.get("email") || "");
+    var phone = String(fields.get("phone") || "");
     var password = String(fields.get("password") || "");
-    var registrationMessage = registration ? registration.validate(email, password, String(fields.get("confirm_password") || "")) : "Account setup is temporarily unavailable. Please try again shortly.";
+    var registrationMessage = registration ? registration.validate(email, password, String(fields.get("confirm_password") || ""), phone) : "Account setup is temporarily unavailable. Please try again shortly.";
     if (registrationMessage) {
       registerStatus.textContent = registrationMessage;
       return;
     }
     setFormSubmitting(registerForm, true);
-    registerStatus.textContent = "Sending your verification code…";
-    postJSON("/portal/auth/register", { email: email, password: password }).then(function (result) {
-      if (!result.response.ok || !result.body.challenge_id) {
-        throw new Error(humanError(result.body, "We could not send a verification code. Please try again."));
-      }
-      pendingRegistration = {
+      registerStatus.textContent = "Creating your account…";
+      postJSON("/portal/auth/register", { email: email, phone: phone, password: password }).then(function (result) {
+        if (!result.response.ok) {
+          throw new Error(humanError(result.body, "We could not send a verification code. Please try again."));
+        }
+        if (!result.body.verification_required) {
+          loginForm.elements.identifier.value = email;
+          loginForm.elements.password.value = password;
+          showView("login");
+          loginStatus.textContent = "Account created. Sign in to continue.";
+          return;
+        }
+        if (!result.body.challenge_id) throw new Error("We could not send a verification code. Please try again.");
+        pendingRegistration = {
         email: email,
         password: password,
         challengeID: String(result.body.challenge_id)

@@ -63,8 +63,53 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"POST /api/v1/customers/{id}/deactivate",
 		sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("customer.write", http.HandlerFunc(h.deactivate)))),
 	)
+	mux.Handle("POST /api/v1/customers/{id}/restore", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("customer.write", http.HandlerFunc(h.restore)))))
+	mux.Handle("POST /api/v1/customers/bulk-status", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("customer.write", http.HandlerFunc(h.bulkStatus)))))
 	h.clientIP = sessions.ClientIP
 	return nil
+}
+
+func (h *HTTP) restore(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	customer, err := h.store.Restore(r.Context(), principal.TenantID, r.PathValue("id"), h.mutationActor(r, principal.UserID))
+	if h.writeMutationError(w, r, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, responseCustomer(customer))
+}
+
+func (h *HTTP) bulkStatus(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	var input struct {
+		CustomerIDs []string `json:"customer_ids"`
+		Status      string   `json:"status"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 32<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_CUSTOMER", "Customer selection is invalid.")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_CUSTOMER", "Customer selection is invalid.")
+		return
+	}
+	count, err := h.store.BulkSetStatus(r.Context(), principal.TenantID, input.CustomerIDs, input.Status, h.mutationActor(r, principal.UserID))
+	if err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_CUSTOMER", "Customer selection is invalid.")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Updated int `json:"updated"`
+	}{count})
 }
 
 func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {

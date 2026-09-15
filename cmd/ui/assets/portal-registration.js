@@ -5,8 +5,9 @@
 })(typeof window !== "undefined" ? window : globalThis, function () {
   "use strict";
 
-  function validate(email, password, confirmation) {
+  function validate(email, password, confirmation, phone) {
     if (!String(email || "").trim()) return "Enter your email address.";
+    if (!/^\+[1-9]\d{7,14}$/.test(String(phone || "").trim())) return "Enter a valid phone number with country code.";
     if (String(password || "").length < 12) return "Your password must be at least 12 characters.";
     if (String(password || "").length > 1024) return "Your password is too long. Please use 1024 characters or fewer.";
     if (String(password || "") !== String(confirmation || "")) return "The password confirmation does not match.";

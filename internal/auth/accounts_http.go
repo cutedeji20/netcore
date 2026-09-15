@@ -100,6 +100,7 @@ func (h *AccountHTTP) register(w http.ResponseWriter, r *http.Request) {
 	}
 	var input struct {
 		Email    string `json:"email"`
+		Phone    string `json:"phone"`
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
@@ -110,12 +111,12 @@ func (h *AccountHTTP) register(w http.ResponseWriter, r *http.Request) {
 		h.writeRateLimitError(w, r, err)
 		return
 	}
-	issued, err := h.service.BeginRegistration(r.Context(), RegistrationInput{TenantSlug: h.tenantSlug, Email: input.Email, Password: input.Password})
+	issued, err := h.service.BeginRegistration(r.Context(), RegistrationInput{TenantSlug: h.tenantSlug, Email: input.Email, Phone: input.Phone, Password: input.Password})
 	if err != nil {
 		h.writeAccountError(w, r, err, "We could not send a verification code. Please try again shortly.")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, accountCodeResponse{ChallengeID: issued.ChallengeID, ExpiresAt: issued.ExpiresAt})
+	writeJSON(w, http.StatusAccepted, accountCodeResponse{ChallengeID: issued.ChallengeID, ExpiresAt: issued.ExpiresAt, VerificationRequired: issued.VerificationRequired})
 }
 
 func (h *AccountHTTP) verifyEmail(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +246,10 @@ func (h *AccountHTTP) writeAccountError(w http.ResponseWriter, r *http.Request, 
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
 		return
 	}
+	if errors.Is(err, ErrPhoneVerificationUnavailable) {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "PHONE_VERIFICATION_UNAVAILABLE", "Phone verification is not available yet. Please contact support.")
+		return
+	}
 	security.WriteError(w, r, http.StatusServiceUnavailable, "AUTH_UNAVAILABLE", unavailableMessage)
 }
 
@@ -266,8 +271,9 @@ func (h *AccountHTTP) setSessionCookie(w http.ResponseWriter, session Session) {
 }
 
 type accountCodeResponse struct {
-	ChallengeID string    `json:"challenge_id"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	ChallengeID          string    `json:"challenge_id,omitempty"`
+	ExpiresAt            time.Time `json:"expires_at,omitempty"`
+	VerificationRequired bool      `json:"verification_required"`
 }
 
 type accountLoginResponse struct {

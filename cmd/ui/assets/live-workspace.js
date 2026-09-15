@@ -41,6 +41,64 @@
     body.appendChild(row);
   }
 
+  function canWriteVerificationPolicy() {
+    var principal = window.NETCORE_PRINCIPAL;
+    return Boolean(principal && Array.isArray(principal.permissions) && principal.permissions.indexOf("workspace.write") !== -1);
+  }
+
+  function addVerificationPolicyControls(content) {
+    var controls = content.querySelector(".verification-policy-controls");
+    if (!canWriteVerificationPolicy()) {
+      if (controls) controls.remove();
+      return;
+    }
+    if (!controls) {
+      controls = document.createElement("div");
+      controls.className = "verification-policy-controls";
+      controls.innerHTML = "<strong>Customer registration verification</strong><p>Email verification can be enabled now. Phone verification remains unavailable until an SMS provider is configured.</p>";
+      [["Require email verification", "require_email_verification"], ["Require phone verification", "require_phone_verification"]].forEach(function (item) {
+        var label = document.createElement("label");
+        var input = document.createElement("input");
+        input.type = "checkbox";
+        input.name = item[1];
+        input.disabled = item[1] === "require_phone_verification";
+        label.append(input, document.createTextNode(" " + item[0]));
+        controls.appendChild(label);
+      });
+      var feedback = document.createElement("p");
+      feedback.className = "verification-policy-feedback";
+      controls.appendChild(feedback);
+      var save = document.createElement("button");
+      save.type = "button";
+      save.className = "button primary";
+      save.textContent = "Save verification policy";
+      save.onclick = function () {
+        feedback.textContent = "";
+        save.disabled = true;
+        fetch(apiBase + "/api/v1/workspace/verification-policy", {
+          method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            require_email_verification: controls.querySelector('[name=require_email_verification]').checked,
+            require_phone_verification: controls.querySelector('[name=require_phone_verification]').checked
+          })
+        }).then(function (response) {
+          if (!response.ok) throw new Error("save failed");
+          return response.json();
+        }).then(function (next) {
+          workspace = next;
+          displayWorkspace();
+          feedback.textContent = "Saved.";
+        }).catch(function () {
+          feedback.textContent = "The policy was not saved. Please try again.";
+        }).finally(function () { save.disabled = false; });
+      };
+      controls.appendChild(save);
+      content.querySelector(".panel.table").appendChild(controls);
+    }
+    controls.querySelector('[name=require_email_verification]').checked = Boolean(workspace.require_email_verification);
+    controls.querySelector('[name=require_phone_verification]').checked = Boolean(workspace.require_phone_verification);
+  }
+
   function displayWorkspace() {
     if (currentPage() !== "settings") return;
     if (workspaceIsEmpty) {
@@ -68,6 +126,10 @@
     appendRow(body, "Currency", workspace.currency);
     appendRow(body, "Registered routers", workspace.registered_routers);
     appendRow(body, "Active team members", workspace.active_team_members);
+    appendRow(body, "Require email verification", workspace.require_email_verification ? "On" : "Off");
+    appendRow(body, "Require phone verification", workspace.require_phone_verification ? "On" : "Off");
+
+    addVerificationPolicyControls(content);
     appendRow(body, "Profile last updated", formatDate(workspace.updated_at));
 
     var metricNames = ["Workspace status", "Registered routers", "Active team members", "Currency"];

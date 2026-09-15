@@ -296,3 +296,7 @@ func (s *memoryInvitationStore) DeactivateStaff(context.Context, string, string,
 	}
 	return s.deactivateErr
 }
+
+func (s *memoryInvitationStore) ReactivateStaff(context.Context, string, string, string) error {
+	return nil
+}
