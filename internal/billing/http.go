@@ -20,9 +20,14 @@ const maxSearchLength = 120
 // HTTP exposes staff-only revenue transaction read endpoints.
 type HTTP struct {
 	store           Store
+	lifecycle       *Service
 	defaultPageSize int
 	maxPageSize     int
+	clientIP        func(*http.Request) string
 }
+
+// ConfigureLifecycle enables MFA-gated operational payment-attempt clearance.
+func (h *HTTP) ConfigureLifecycle(service *Service) { h.lifecycle = service }
 
 func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
 	if store == nil {
@@ -49,7 +54,66 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"GET /api/v1/billing/transactions",
 		sessions.RequireAuth(auth.RequirePermission("billing.read", http.HandlerFunc(h.list))),
 	)
+	mux.Handle("POST /api/v1/billing/payment-attempts/clear", sessions.RequireAuth(auth.RequirePermission("billing.write", http.HandlerFunc(h.clearAttempts))))
+	h.clientIP = sessions.ClientIP
 	return nil
+}
+
+func (h *HTTP) clearAttempts(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if !principal.HasPermission("billing.write") {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "You do not have permission to clear payment attempts.")
+		return
+	}
+	if h.lifecycle == nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "BILLING_UNAVAILABLE", "Payment operations are temporarily unavailable.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8192)
+	defer r.Body.Close()
+	var input struct {
+		Scope      string   `json:"scope"`
+		PaymentIDs []string `json:"payment_ids"`
+		Password   string   `json:"password"`
+		MFACode    string   `json:"mfa_code"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Clear request and administrator confirmation are required.")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
+		return
+	}
+	cleared, err := h.lifecycle.Clear(r.Context(), principal, MutationActor{IP: h.requestIP(r), UserAgent: r.UserAgent()}, input.Password, input.MFACode, ClearRequest{Scope: ClearScope(input.Scope), PaymentIDs: input.PaymentIDs})
+	if errors.Is(err, ErrStepUpFailed) {
+		security.WriteError(w, r, http.StatusUnauthorized, "STEP_UP_FAILED", "Password or authenticator code was not accepted.")
+		return
+	}
+	if errors.Is(err, ErrInvalidClear) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Only pending, failed, or selected non-successful payment attempts can be cleared.")
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "BILLING_UNAVAILABLE", "Payment attempts could not be cleared. Please try again.")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Cleared int `json:"cleared"`
+	}{cleared})
+}
+
+func (h *HTTP) requestIP(r *http.Request) string {
+	if h.clientIP == nil {
+		return ""
+	}
+	return h.clientIP(r)
 }
 
 func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {

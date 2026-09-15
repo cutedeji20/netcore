@@ -50,7 +50,8 @@ WITH transactions AS (
       JOIN customers AS c
         ON c.id = p.customer_id
        AND c.tenant_id = p.tenant_id
-     WHERE p.tenant_id = $1
+	     WHERE p.tenant_id = $1
+	       AND p.cleared_at IS NULL
 
     UNION ALL
 
@@ -161,6 +162,108 @@ SELECT source,
 		return Page{}, err
 	}
 	return page, nil
+}
+
+func (s *PostgresStore) Clear(ctx context.Context, tenantID string, actor MutationActor, request ClearRequest) (count int, err error) {
+	if !validUUID(tenantID) || !validUUID(actor.UserID) || !validClearRequest(request) {
+		return 0, ErrInvalidClear
+	}
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		where, args := clearWhere(request)
+		if request.Scope == ClearSelected {
+			var eligible int
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM payments WHERE tenant_id = $1 AND cleared_at IS NULL AND status IN ('PENDING', 'FAILED', 'ABANDONED') AND id = ANY($2::uuid[])`, tenantID, request.PaymentIDs).Scan(&eligible); err != nil {
+				return fmt.Errorf("check selected payment attempts: %w", err)
+			}
+			if eligible != len(request.PaymentIDs) {
+				return ErrInvalidClear
+			}
+		}
+
+		rows, err := tx.Query(ctx, `UPDATE payments
+SET status = 'ABANDONED', cleared_at = now(), cleared_by = $2::uuid, updated_at = now()
+WHERE tenant_id = $1 AND cleared_at IS NULL AND `+where+`
+RETURNING id::text, COALESCE(subscription_id::text, ''), provider_reference, status`, append([]any{tenantID, actor.UserID}, args...)...)
+		if err != nil {
+			return fmt.Errorf("clear payment attempts: %w", err)
+		}
+		defer rows.Close()
+		type clearedPayment struct{ id, subscriptionID, reference, status string }
+		var cleared []clearedPayment
+		for rows.Next() {
+			var item clearedPayment
+			if err := rows.Scan(&item.id, &item.subscriptionID, &item.reference, &item.status); err != nil {
+				return fmt.Errorf("scan cleared payment attempt: %w", err)
+			}
+			cleared = append(cleared, item)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate cleared payment attempts: %w", err)
+		}
+		if len(cleared) == 0 {
+			return nil
+		}
+
+		references := make([]string, 0, len(cleared))
+		subscriptions := make([]string, 0, len(cleared))
+		for _, item := range cleared {
+			references = append(references, item.reference)
+			if item.subscriptionID != "" {
+				subscriptions = append(subscriptions, item.subscriptionID)
+			}
+		}
+		if len(subscriptions) > 0 {
+			cancelledRows, err := tx.Query(ctx, `UPDATE subscriptions SET status = 'CANCELLED', updated_at = now() WHERE tenant_id = $1 AND id = ANY($2::uuid[]) AND status = 'PENDING' RETURNING id::text`, tenantID, subscriptions)
+			if err != nil {
+				return fmt.Errorf("cancel pending subscriptions: %w", err)
+			}
+			var cancelled []string
+			for cancelledRows.Next() {
+				var subscriptionID string
+				if err := cancelledRows.Scan(&subscriptionID); err != nil {
+					cancelledRows.Close()
+					return fmt.Errorf("scan cancelled subscription: %w", err)
+				}
+				cancelled = append(cancelled, subscriptionID)
+			}
+			if err := cancelledRows.Err(); err != nil {
+				cancelledRows.Close()
+				return fmt.Errorf("iterate cancelled subscriptions: %w", err)
+			}
+			cancelledRows.Close()
+			for _, subscriptionID := range cancelled {
+				if _, err := tx.Exec(ctx, `INSERT INTO subscription_events (tenant_id, subscription_id, from_status, to_status, reason, actor_type, actor_id, metadata)
+VALUES ($1, $2::uuid, 'PENDING', 'CANCELLED', 'PAYMENT_ATTEMPT_CLEARED', 'ADMIN', $3::uuid, '{}'::jsonb)`, tenantID, subscriptionID, actor.UserID); err != nil {
+					return fmt.Errorf("write cancellation event: %w", err)
+				}
+			}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM idempotency_keys WHERE tenant_id = $1 AND endpoint = 'POST /api/v1/payments' AND response_body->>'provider_reference' = ANY($2::text[])`, tenantID, references); err != nil {
+			return fmt.Errorf("clear payment idempotency records: %w", err)
+		}
+		for _, item := range cleared {
+			if _, err := tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id, metadata, ip_address, user_agent)
+VALUES ($1, 'USER', $2::uuid, 'PAYMENT_ATTEMPT_CLEARED', 'payment', $3::uuid, jsonb_build_object('scope', $4::text), NULLIF($5, '')::inet, NULLIF($6, ''))`, tenantID, actor.UserID, item.id, string(request.Scope), actor.IP, actor.UserAgent); err != nil {
+				return fmt.Errorf("write payment clear audit record: %w", err)
+			}
+		}
+		count = len(cleared)
+		return nil
+	})
+	return count, err
+}
+
+func clearWhere(request ClearRequest) (string, []any) {
+	switch request.Scope {
+	case ClearPending:
+		return "status = 'PENDING'", nil
+	case ClearFailed:
+		return "status = 'FAILED'", nil
+	case ClearSelected:
+		return "status IN ('PENDING', 'FAILED', 'ABANDONED') AND id = ANY($3::uuid[])", []any{request.PaymentIDs}
+	default:
+		return "FALSE", nil
+	}
 }
 
 func nullableCursorTime(cursor Cursor) any {

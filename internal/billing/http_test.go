@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,10 +17,13 @@ import (
 const billingTestTenantID = "11111111-1111-4111-8111-111111111111"
 
 type memoryStore struct {
-	tenantID string
-	options  ListOptions
-	page     Page
-	err      error
+	tenantID     string
+	options      ListOptions
+	page         Page
+	err          error
+	clearRequest ClearRequest
+	clearActor   MutationActor
+	clearCount   int
 }
 
 func (s *memoryStore) List(_ context.Context, tenantID string, options ListOptions) (Page, error) {
@@ -26,6 +31,15 @@ func (s *memoryStore) List(_ context.Context, tenantID string, options ListOptio
 	s.options = options
 	return s.page, s.err
 }
+
+func (s *memoryStore) Clear(_ context.Context, tenantID string, actor MutationActor, request ClearRequest) (int, error) {
+	s.tenantID, s.clearActor, s.clearRequest = tenantID, actor, request
+	return s.clearCount, s.err
+}
+
+type stepUpStub struct{ err error }
+
+func (s stepUpStub) VerifyStepUp(context.Context, auth.StepUpInput) error { return s.err }
 
 func newTestHTTP(t *testing.T) (*HTTP, *memoryStore) {
 	t.Helper()
@@ -104,6 +118,47 @@ func TestListRejectsMissingPrincipal(t *testing.T) {
 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d body=%s", response.Code, response.Body)
+	}
+}
+
+func TestClearAttemptsRequiresStepUpAndRestrictsScope(t *testing.T) {
+	handler, store := newTestHTTP(t)
+	service, err := NewService(store, stepUpStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.ConfigureLifecycle(service)
+	principal := auth.Principal{TenantID: billingTestTenantID, UserID: "44444444-4444-4444-8444-444444444444", Permissions: map[string]struct{}{"billing.write": {}}}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/billing/payment-attempts/clear", strings.NewReader(`{"scope":"PENDING","password":"current","mfa_code":"123456"}`))
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), principal))
+	response := httptest.NewRecorder()
+	handler.clearAttempts(response, request)
+	if response.Code != http.StatusOK || store.clearRequest.Scope != ClearPending || store.clearActor.UserID != principal.UserID {
+		t.Fatalf("status=%d request=%+v actor=%+v", response.Code, store.clearRequest, store.clearActor)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/billing/payment-attempts/clear", strings.NewReader(`{"scope":"SELECTED","payment_ids":["22222222-2222-4222-8222-222222222222"],"password":"current","mfa_code":"123456"}`))
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), principal))
+	response = httptest.NewRecorder()
+	handler.clearAttempts(response, request)
+	if response.Code != http.StatusOK || len(store.clearRequest.PaymentIDs) != 1 {
+		t.Fatalf("selected status=%d request=%+v", response.Code, store.clearRequest)
+	}
+}
+
+func TestClearAttemptsRejectsInvalidScopeAndBadStepUp(t *testing.T) {
+	handler, store := newTestHTTP(t)
+	service, _ := NewService(store, stepUpStub{err: errors.New("bad")})
+	handler.ConfigureLifecycle(service)
+	principal := auth.Principal{TenantID: billingTestTenantID, UserID: "44444444-4444-4444-8444-444444444444", Permissions: map[string]struct{}{"billing.write": {}}}
+	for _, body := range []string{`{"scope":"SUCCESS","password":"current","mfa_code":"123456"}`, `{"scope":"PENDING","password":"current","mfa_code":"123456"}`} {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/billing/payment-attempts/clear", strings.NewReader(body))
+		request = request.WithContext(auth.ContextWithPrincipal(request.Context(), principal))
+		response := httptest.NewRecorder()
+		handler.clearAttempts(response, request)
+		if response.Code != http.StatusBadRequest && response.Code != http.StatusUnauthorized {
+			t.Fatalf("body=%s status=%d", body, response.Code)
+		}
 	}
 }
 
