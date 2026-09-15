@@ -206,6 +206,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	billingService, err := billing.NewService(billingStore, authService)
+	if err != nil {
+		return fmt.Errorf("billing payment-attempt service: %w", err)
+	}
+	billingHTTP.ConfigureLifecycle(billingService)
 	networkStore, err := network.NewPostgresStore(postgres)
 	if err != nil {
 		return err

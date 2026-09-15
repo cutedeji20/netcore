@@ -12,6 +12,8 @@
   var pendingQuery = "";
   var criteriaPending = false;
   var requestVersion = 0;
+  var selectedPaymentIDs = new Set();
+  var clearBusy = false;
   var currencyExponents = {
     JPY: 0, KRW: 0, VND: 0, CLP: 0, ISK: 0, XAF: 0, XOF: 0,
     BHD: 3, KWD: 3, OMR: 3, TND: 3, JOD: 3
@@ -85,6 +87,32 @@
     row.appendChild(cell);
   }
 
+  function isClearable(item) {
+    return item.source === "PAYMENT" && (item.status === "PENDING" || item.status === "FAILED" || item.status === "ABANDONED");
+  }
+
+  function appendActionCell(row, item) {
+    var cell = document.createElement("td");
+    if (isClearable(item)) {
+      var label = document.createElement("label");
+      label.className = "billing-select";
+      var input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = selectedPaymentIDs.has(item.id);
+      input.setAttribute("aria-label", "Select payment attempt " + item.reference);
+      input.addEventListener("change", function () {
+        if (input.checked) selectedPaymentIDs.add(item.id);
+        else selectedPaymentIDs.delete(item.id);
+        renderClearControls();
+      });
+      label.append(input, document.createTextNode(" Select"));
+      cell.appendChild(label);
+    } else {
+      cell.textContent = "—";
+    }
+    row.appendChild(cell);
+  }
+
   function appendReferenceCell(row, item) {
     var cell = document.createElement("td");
     var entity = document.createElement("div");
@@ -125,7 +153,7 @@
   }
 
   function setHeadings(table) {
-    var headings = ["Reference", "Customer", "Amount", "Recorded", "Status"];
+    var headings = ["Reference", "Customer", "Amount", "Recorded", "Status", "Action"];
     var headingRow = table.querySelector("thead tr");
     headingRow.replaceChildren();
     headings.forEach(function (value) {
@@ -155,9 +183,69 @@
       appendTextCell(row, formatPrice(item.amount_minor, item.currency));
       appendTextCell(row, formatDate(item.recorded_at));
       appendStatusCell(row, item);
+      appendActionCell(row, item);
       body.appendChild(row);
     });
     showState("records");
+  }
+
+  function clearButton(label, scope, disabled) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "button payment-clear-button";
+    button.textContent = label;
+    button.disabled = disabled || clearBusy;
+    button.addEventListener("click", function () { openClearDialog(scope); });
+    return button;
+  }
+
+  function renderClearControls() {
+    if (currentPage() !== "billing") return;
+    var toolbar = document.querySelector("#page-content .toolbar");
+    if (!toolbar) return;
+    var existing = toolbar.querySelector(".payment-clear-actions");
+    if (existing) existing.remove();
+    var actions = document.createElement("div");
+    actions.className = "payment-clear-actions";
+    actions.append(
+      clearButton("Clear selected", "SELECTED", selectedPaymentIDs.size === 0),
+      clearButton("Clear pending", "PENDING", false),
+      clearButton("Clear failed", "FAILED", false)
+    );
+    toolbar.appendChild(actions);
+  }
+
+  function dialogTitle(scope) {
+    if (scope === "SELECTED") return "Clear selected payment attempts";
+    return scope === "PENDING" ? "Clear all pending payment attempts" : "Clear all failed payment attempts";
+  }
+
+  function openClearDialog(scope) {
+    if (clearBusy || (scope === "SELECTED" && selectedPaymentIDs.size === 0)) return;
+    var backdrop = document.createElement("div");
+    backdrop.className = "payment-clear-dialog-backdrop";
+    var form = document.createElement("form");
+    form.className = "payment-clear-dialog";
+    var heading = document.createElement("h2"); heading.textContent = dialogTitle(scope);
+    var note = document.createElement("p"); note.textContent = "This removes the selected non-successful attempts from normal billing history. Successful and refunded payments cannot be cleared.";
+    var passwordLabel = document.createElement("label"); passwordLabel.textContent = "Current password";
+    var password = document.createElement("input"); password.type = "password"; password.autocomplete = "current-password"; password.required = true; passwordLabel.appendChild(password);
+    var mfaLabel = document.createElement("label"); mfaLabel.textContent = "Authenticator code";
+    var mfa = document.createElement("input"); mfa.inputMode = "numeric"; mfa.autocomplete = "one-time-code"; mfa.required = true; mfaLabel.appendChild(mfa);
+    var feedback = document.createElement("p"); feedback.className = "payment-clear-feedback";
+    var footer = document.createElement("footer");
+    var cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "button"; cancel.textContent = "Cancel"; cancel.addEventListener("click", function () { backdrop.remove(); });
+    var submit = document.createElement("button"); submit.type = "submit"; submit.className = "button primary"; submit.textContent = "Clear securely";
+    footer.append(cancel, submit); form.append(heading, note, passwordLabel, mfaLabel, feedback, footer); backdrop.appendChild(form); document.body.appendChild(backdrop); password.focus();
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      clearBusy = true; submit.disabled = true; feedback.textContent = "Clearing payment attempts…"; renderClearControls();
+      fetch(apiBase + "/api/v1/billing/payment-attempts/clear", { method: "POST", credentials: "include", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope: scope, payment_ids: scope === "SELECTED" ? Array.from(selectedPaymentIDs) : [], password: password.value, mfa_code: mfa.value }) })
+        .then(function (response) { return response.json().catch(function () { return {}; }).then(function (body) { if (!response.ok) throw new Error((body.error && body.error.message) || "Payment attempts could not be cleared."); return body; }); })
+        .then(function (body) { selectedPaymentIDs.clear(); backdrop.remove(); if (window.NetCoreToast) window.NetCoreToast.show((body.cleared || 0) + " payment attempt(s) cleared."); requestTransactions(true); })
+        .catch(function (error) { feedback.textContent = error.message || "Payment attempts could not be cleared."; })
+        .finally(function () { clearBusy = false; submit.disabled = false; renderClearControls(); });
+    });
   }
 
   function filterOptions() {
@@ -193,6 +281,7 @@
     requestInFlight = true;
     var requestVersionAtStart = requestVersion;
     renderControls();
+    renderClearControls();
     if (!loadedTransactions) showState("loading");
     fetch(window.NetCoreLiveListControls.requestURL(apiBase, listConfig.endpoint, listState, 25), {
       credentials: "include",
@@ -209,6 +298,7 @@
         loadedTransactionsMeta = payload.meta || {};
         window.NetCoreLiveListControls.applyResponseMeta(listState, loadedTransactionsMeta);
         displayTransactions();
+        renderClearControls();
       })
       .catch(function () {
         if (criteriaPending || requestVersionAtStart !== requestVersion) return;
