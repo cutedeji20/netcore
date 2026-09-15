@@ -26,21 +26,21 @@ RETURNING id::text, customer_number, status, COALESCE(first_name, ''),
 const customerUpdateSQL = `
 UPDATE customers
    SET first_name = $3, last_name = $4, email = $5, phone = NULLIF($6, ''), updated_at = now()
- WHERE tenant_id = $1 AND id = $2::uuid
+ WHERE tenant_id = $1 AND (id::text = $2 OR customer_number = $2)
 RETURNING id::text, customer_number, status, COALESCE(first_name, ''),
           COALESCE(last_name, ''), COALESCE(phone, ''), COALESCE(email::text, ''), created_at, updated_at`
 
 const customerDeactivateSQL = `
 UPDATE customers
    SET status = 'SUSPENDED', updated_at = now()
- WHERE tenant_id = $1 AND id = $2::uuid
+ WHERE tenant_id = $1 AND (id::text = $2 OR customer_number = $2)
 RETURNING id::text, customer_number, status, COALESCE(first_name, ''),
           COALESCE(last_name, ''), COALESCE(phone, ''), COALESCE(email::text, ''), created_at, updated_at`
 
 const customerRestoreSQL = `
 UPDATE customers
    SET status = 'ACTIVE', updated_at = now()
- WHERE tenant_id = $1 AND id = $2::uuid AND status = 'SUSPENDED'
+ WHERE tenant_id = $1 AND (id::text = $2 OR customer_number = $2) AND status IN ('SUSPENDED', 'CLOSED')
 RETURNING id::text, customer_number, status, COALESCE(first_name, ''),
           COALESCE(last_name, ''), COALESCE(phone, ''), COALESCE(email::text, ''), created_at, updated_at`
 
@@ -82,6 +82,7 @@ SELECT id::text,
        OR COALESCE(phone, '') ILIKE '%' || $2 || '%'
        OR COALESCE(email::text, '') ILIKE '%' || $2 || '%'
    )
+   AND status <> 'CLOSED'
    AND (
        $3::timestamptz IS NULL
        OR (created_at, id) < ($3::timestamptz, $4::uuid)
@@ -169,7 +170,7 @@ func (s *PostgresStore) Create(ctx context.Context, tenantID string, actor Mutat
 }
 
 func (s *PostgresStore) Update(ctx context.Context, tenantID, customerID string, actor MutationActor, input WriteInput) (customer Customer, err error) {
-	if tenantID == "" || !validUUID(customerID) || actor.UserID == "" || input.NormalizeAndValidate() != nil {
+	if tenantID == "" || !validCustomerIdentifier(customerID) || actor.UserID == "" || input.NormalizeAndValidate() != nil {
 		return Customer{}, ErrInvalidInput
 	}
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -194,7 +195,7 @@ func (s *PostgresStore) Update(ctx context.Context, tenantID, customerID string,
 // neither destroys data nor cascades into subscriptions, router sessions, or
 // any portal identity state.
 func (s *PostgresStore) Deactivate(ctx context.Context, tenantID, customerID string, actor MutationActor) (customer Customer, err error) {
-	if tenantID == "" || !validUUID(customerID) || actor.UserID == "" {
+	if tenantID == "" || !validCustomerIdentifier(customerID) || actor.UserID == "" {
 		return Customer{}, ErrInvalidInput
 	}
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -214,7 +215,7 @@ func (s *PostgresStore) Deactivate(ctx context.Context, tenantID, customerID str
 }
 
 func (s *PostgresStore) Restore(ctx context.Context, tenantID, customerID string, actor MutationActor) (customer Customer, err error) {
-	if tenantID == "" || !validUUID(customerID) || actor.UserID == "" {
+	if tenantID == "" || !validCustomerIdentifier(customerID) || actor.UserID == "" {
 		return Customer{}, ErrInvalidInput
 	}
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -233,16 +234,22 @@ func (s *PostgresStore) Restore(ctx context.Context, tenantID, customerID string
 }
 
 func (s *PostgresStore) BulkSetStatus(ctx context.Context, tenantID string, customerIDs []string, status string, actor MutationActor) (count int, err error) {
-	if tenantID == "" || actor.UserID == "" || len(customerIDs) < 1 || len(customerIDs) > 100 || (status != "ACTIVE" && status != "SUSPENDED") {
+	if tenantID == "" || actor.UserID == "" || len(customerIDs) < 1 || len(customerIDs) > 100 || (status != "ACTIVE" && status != "SUSPENDED" && status != "CLOSED") {
 		return 0, ErrInvalidInput
 	}
 	for _, id := range customerIDs {
-		if !validUUID(id) {
+		if !validCustomerIdentifier(id) {
 			return 0, ErrInvalidInput
 		}
 	}
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `UPDATE customers SET status=$3, updated_at=now() WHERE tenant_id=$1 AND id = ANY($2::uuid[]) AND status <> $3 RETURNING id::text`, tenantID, customerIDs, status)
+		rows, err := tx.Query(ctx, `
+UPDATE customers
+   SET status = $3, updated_at = now()
+ WHERE tenant_id = $1
+   AND (id::text = ANY($2::text[]) OR customer_number = ANY($2::text[]))
+   AND status <> $3
+RETURNING id::text`, tenantID, customerIDs, status)
 		if err != nil {
 			return fmt.Errorf("bulk update customers: %w", err)
 		}
@@ -250,6 +257,8 @@ func (s *PostgresStore) BulkSetStatus(ctx context.Context, tenantID string, cust
 		action := "CUSTOMER_SUSPENDED"
 		if status == "ACTIVE" {
 			action = "CUSTOMER_RESTORED"
+		} else if status == "CLOSED" {
+			action = "CUSTOMER_ARCHIVED"
 		}
 		for rows.Next() {
 			var id string
@@ -264,6 +273,22 @@ func (s *PostgresStore) BulkSetStatus(ctx context.Context, tenantID string, cust
 		return rows.Err()
 	})
 	return count, err
+}
+
+func validCustomerIdentifier(value string) bool {
+	value = strings.TrimSpace(value)
+	if validUUID(value) {
+		return true
+	}
+	if !strings.HasPrefix(value, "CUS-") || len(value) > 80 {
+		return false
+	}
+	for _, character := range value[4:] {
+		if !(character >= 'A' && character <= 'Z') && !(character >= '0' && character <= '9') && character != '-' {
+			return false
+		}
+	}
+	return len(value) > 4
 }
 
 func scanCustomer(row pgx.Row, customer *Customer) error {

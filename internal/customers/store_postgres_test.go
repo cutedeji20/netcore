@@ -33,7 +33,7 @@ func TestCustomerMutationQueriesKeepTenantLifecycleAndAuditContracts(t *testing.
 			t.Fatalf("%s query lost tenant scoping: %s", name, query)
 		}
 	}
-	if !strings.Contains(customerUpdateSQL, "WHERE tenant_id = $1 AND id = $2::uuid") || !strings.Contains(customerDeactivateSQL, "WHERE tenant_id = $1 AND id = $2::uuid") {
+	if !strings.Contains(customerUpdateSQL, "WHERE tenant_id = $1 AND (id::text = $2 OR customer_number = $2)") || !strings.Contains(customerDeactivateSQL, "WHERE tenant_id = $1 AND (id::text = $2 OR customer_number = $2)") {
 		t.Fatal("customer target mutations must retain an explicit tenant predicate")
 	}
 	if !strings.Contains(customerDeactivateSQL, "SET status = 'SUSPENDED', updated_at = now()") || strings.Contains(customerDeactivateSQL, "subscriptions") || strings.Contains(customerDeactivateSQL, "router") {

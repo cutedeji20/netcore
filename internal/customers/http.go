@@ -177,7 +177,7 @@ func (h *HTTP) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	customerID := r.PathValue("id")
-	if !validUUID(customerID) {
+	if !validCustomerIdentifier(customerID) {
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_CUSTOMER", "Customer details are invalid.")
 		return
 	}
@@ -200,7 +200,7 @@ func (h *HTTP) deactivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	customerID := r.PathValue("id")
-	if !validUUID(customerID) {
+	if !validCustomerIdentifier(customerID) {
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_CUSTOMER", "Customer details are invalid.")
 		return
 	}
