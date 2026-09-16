@@ -57,10 +57,36 @@ func TestTenantSquadInitializeUsesHostedCheckout(t *testing.T) {
 
 func TestTenantSquadVerifyMatchesTransaction(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/transaction" || r.URL.Query().Get("reference") != "pay-0123456789abcdef0123456789abcdef" {
-			t.Fatalf("request=%s %s query=%v", r.Method, r.URL.Path, r.URL.Query())
+		if r.Method != http.MethodGet || r.URL.Path != "/transaction/verify/pay-0123456789abcdef0123456789abcdef" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"status":200,"success":true,"data":[{"transaction_ref":"pay-0123456789abcdef0123456789abcdef","transaction_status":"success","transaction_amount":500000,"transaction_currency_id":"NGN","created_at":"2026-09-11T10:15:00.000+00:00"}]}`))
+		_, _ = w.Write([]byte(`{"status":200,"data":{"transaction_ref":"pay-0123456789abcdef0123456789abcdef","transaction_status":"successful","transaction_amount":"500000","transaction_currency_id":"NGN","paid_at":"2026-09-11T10:15:00.000+00:00"}}`))
+	}))
+	defer server.Close()
+	gateway, err := NewTenantSquadGateway(testTenantSquadResolver{}, "tenant-data-hub", &http.Client{Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway.baseURL = server.URL
+	verification, err := gateway.Verify(context.Background(), "pay-0123456789abcdef0123456789abcdef")
+	if err != nil || verification.Status != StatusSuccess || verification.AmountMinor != 500000 || verification.Currency != "NGN" || verification.VerifiedAt.IsZero() {
+		t.Fatalf("verification=%#v err=%v", verification, err)
+	}
+}
+
+func TestTenantSquadVerifyFallsBackToListingForLegacyCheckout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/transaction/verify/pay-0123456789abcdef0123456789abcdef":
+			http.NotFound(w, r)
+		case "/transaction":
+			if r.URL.Query().Get("reference") != "pay-0123456789abcdef0123456789abcdef" {
+				t.Fatalf("listing reference=%q", r.URL.Query().Get("reference"))
+			}
+			_, _ = w.Write([]byte(`{"status":200,"success":true,"data":[{"transaction_ref":"pay-0123456789abcdef0123456789abcdef","transaction_status":"success","transaction_amount":500000,"transaction_currency_id":"NGN","created_at":"2026-09-11T10:15:00.000+00:00"}]}`))
+		default:
+			t.Fatalf("unexpected request %s", r.URL.Path)
+		}
 	}))
 	defer server.Close()
 	gateway, err := NewTenantSquadGateway(testTenantSquadResolver{}, "tenant-data-hub", &http.Client{Timeout: time.Second})

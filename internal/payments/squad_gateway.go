@@ -125,18 +125,49 @@ func (g *TenantSquadGateway) Verify(ctx context.Context, reference string) (Gate
 		return GatewayVerification{}, err
 	}
 	defer clearSquadCredential(secret)
+	verification, err := g.verifyByReference(ctx, secret, reference)
+	if err == nil {
+		return verification, nil
+	}
+
+	// Keep the list query as a compatibility fallback for previously-created
+	// checkout links while Squad rolls out the reference-specific endpoint.
+	// The direct endpoint is authoritative because it does not depend on a
+	// time window or pagination.
+	return g.verifyByListing(ctx, secret, reference)
+}
+
+type squadTransaction struct {
+	Reference string      `json:"transaction_ref"`
+	Status    string      `json:"transaction_status"`
+	Amount    json.Number `json:"transaction_amount"`
+	Currency  string      `json:"transaction_currency_id"`
+	CreatedAt string      `json:"created_at"`
+	PaidAt    string      `json:"paid_at"`
+}
+
+func (g *TenantSquadGateway) verifyByReference(ctx context.Context, secret []byte, reference string) (GatewayVerification, error) {
+	var response struct {
+		Status  int              `json:"status"`
+		Success bool             `json:"success"`
+		Data    squadTransaction `json:"data"`
+	}
+	if err := g.doJSON(ctx, http.MethodGet, "/transaction/verify/"+url.PathEscape(reference), secret, nil, &response); err != nil {
+		return GatewayVerification{}, err
+	}
+	if response.Status != http.StatusOK {
+		return GatewayVerification{}, errors.New("payments: Squad verification rejected")
+	}
+	return squadVerification(response.Data, reference)
+}
+
+func (g *TenantSquadGateway) verifyByListing(ctx context.Context, secret []byte, reference string) (GatewayVerification, error) {
 	day := time.Now().UTC().Format("2006-01-02")
 	path := "/transaction?start_date=" + url.QueryEscape(day) + "&end_date=" + url.QueryEscape(day) + "&page=1&perpage=100&reference=" + url.QueryEscape(reference)
 	var response struct {
-		Status  int  `json:"status"`
-		Success bool `json:"success"`
-		Data    []struct {
-			Reference string      `json:"transaction_ref"`
-			Status    string      `json:"transaction_status"`
-			Amount    json.Number `json:"transaction_amount"`
-			Currency  string      `json:"transaction_currency_id"`
-			CreatedAt string      `json:"created_at"`
-		} `json:"data"`
+		Status  int                `json:"status"`
+		Success bool               `json:"success"`
+		Data    []squadTransaction `json:"data"`
 	}
 	if err := g.doJSON(ctx, http.MethodGet, path, secret, nil, &response); err != nil {
 		return GatewayVerification{}, err
@@ -148,21 +179,47 @@ func (g *TenantSquadGateway) Verify(ctx context.Context, reference string) (Gate
 		if item.Reference != reference {
 			continue
 		}
-		amount, err := item.Amount.Int64()
-		if err != nil || amount <= 0 {
-			return GatewayVerification{}, errors.New("payments: Squad verification returned invalid amount")
-		}
-		verification := GatewayVerification{Reference: reference, Status: strings.ToUpper(strings.TrimSpace(item.Status)), AmountMinor: amount, Currency: strings.ToUpper(strings.TrimSpace(item.Currency))}
-		if verification.Status == StatusSuccess {
-			verifiedAt, err := parseSquadTime(item.CreatedAt)
-			if err != nil {
-				return GatewayVerification{}, errors.New("payments: Squad verification returned invalid created_at")
-			}
-			verification.VerifiedAt = verifiedAt
-		}
-		return verification, nil
+		return squadVerification(item, reference)
 	}
 	return GatewayVerification{Reference: reference, Status: "PENDING"}, nil
+}
+
+func squadVerification(item squadTransaction, reference string) (GatewayVerification, error) {
+	if item.Reference != reference {
+		return GatewayVerification{}, errors.New("payments: Squad verification returned a different reference")
+	}
+	amount, err := item.Amount.Int64()
+	if err != nil || amount <= 0 {
+		return GatewayVerification{}, errors.New("payments: Squad verification returned invalid amount")
+	}
+	verification := GatewayVerification{Reference: reference, Status: normalizeSquadStatus(item.Status), AmountMinor: amount, Currency: strings.ToUpper(strings.TrimSpace(item.Currency))}
+	if verification.Status != StatusSuccess {
+		return verification, nil
+	}
+	verifiedAt, err := parseSquadTime(firstNonEmpty(item.PaidAt, item.CreatedAt))
+	if err != nil {
+		return GatewayVerification{}, errors.New("payments: Squad verification returned invalid payment time")
+	}
+	verification.VerifiedAt = verifiedAt
+	return verification, nil
+}
+
+func normalizeSquadStatus(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "SUCCESS", "SUCCESSFUL", "PAID", "COMPLETED":
+		return StatusSuccess
+	default:
+		return strings.ToUpper(strings.TrimSpace(value))
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (g *TenantSquadGateway) VerifyWebhookSignature(ctx context.Context, raw []byte, supplied string) error {
