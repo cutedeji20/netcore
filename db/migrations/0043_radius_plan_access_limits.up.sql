@@ -132,24 +132,24 @@ BEGIN
 
     SELECT count(*)
       INTO v_active_sessions
-      FROM sessions
-     WHERE subscription_id = v_subscription_id
-       AND status <> 'CLOSED';
+      FROM sessions AS session_row
+     WHERE session_row.subscription_id = v_subscription_id
+       AND session_row.status <> 'CLOSED';
     SELECT count(*)
       INTO v_reserved_sessions
-      FROM radius_access_reservations
-     WHERE subscription_id = v_subscription_id
-       AND expires_at > p_at;
+      FROM radius_access_reservations AS reservation
+     WHERE reservation.subscription_id = v_subscription_id
+       AND reservation.expires_at > p_at;
     IF v_active_sessions + v_reserved_sessions >= v_max_sessions THEN
         RETURN;
     END IF;
 
     SELECT customer_id
       INTO v_device_customer_id
-      FROM devices
-     WHERE tenant_id = v_tenant_id
-       AND normalized_mac = v_mac
-       AND status = 'ACTIVE'
+      FROM devices AS device_row
+     WHERE device_row.tenant_id = v_tenant_id
+       AND device_row.normalized_mac = v_mac
+       AND device_row.status = 'ACTIVE'
      FOR UPDATE;
     IF FOUND AND v_device_customer_id <> v_customer_id THEN
         -- A MAC already registered to another customer is never reassigned
@@ -159,10 +159,10 @@ BEGIN
     IF NOT FOUND THEN
         SELECT count(*)
           INTO v_registered_devices
-          FROM devices
-         WHERE tenant_id = v_tenant_id
-           AND customer_id = v_customer_id
-           AND status = 'ACTIVE';
+          FROM devices AS device_row
+         WHERE device_row.tenant_id = v_tenant_id
+           AND device_row.customer_id = v_customer_id
+           AND device_row.status = 'ACTIVE';
         IF v_registered_devices >= v_max_devices THEN
             RETURN;
         END IF;
@@ -172,9 +172,9 @@ BEGIN
         UPDATE devices
            SET last_seen_at = GREATEST(COALESCE(last_seen_at, p_at), p_at),
                updated_at = now()
-         WHERE tenant_id = v_tenant_id
-           AND normalized_mac = v_mac
-           AND status = 'ACTIVE';
+         WHERE devices.tenant_id = v_tenant_id
+           AND devices.normalized_mac = v_mac
+           AND devices.status = 'ACTIVE';
     END IF;
 
     INSERT INTO radius_access_reservations (tenant_id, subscription_id, normalized_mac, expires_at)
@@ -196,8 +196,8 @@ BEGIN
     -- remove the reservation so it cannot temporarily consume a session slot.
     IF NOT FOUND THEN
         DELETE FROM radius_access_reservations
-         WHERE subscription_id = v_subscription_id
-           AND normalized_mac = v_mac;
+         WHERE radius_access_reservations.subscription_id = v_subscription_id
+           AND radius_access_reservations.normalized_mac = v_mac;
     END IF;
 END;
 $$;

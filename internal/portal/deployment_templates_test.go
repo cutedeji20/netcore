@@ -76,4 +76,15 @@ func TestPortalDeploymentTemplatesPreserveHandoffBoundaries(t *testing.T) {
 			t.Fatalf("RADIUS plan-limit migration missing %q", want)
 		}
 	}
+
+	correctedLimits := read("db", "migrations", "0047_fix_radius_plan_authorization_sql.up.sql")
+	for _, want := range []string{
+		"session_row.subscription_id = v_subscription_id",
+		"reservation.subscription_id = v_subscription_id",
+		"radius_access_reservations.subscription_id = v_subscription_id",
+	} {
+		if !strings.Contains(correctedLimits, want) {
+			t.Fatalf("corrected RADIUS authorization migration missing qualified %q", want)
+		}
+	}
 }
