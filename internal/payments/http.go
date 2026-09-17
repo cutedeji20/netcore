@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"time"
 
 	"github.com/netcore-isp/netcore/internal/auth"
+	"github.com/netcore-isp/netcore/internal/logger"
 	"github.com/netcore-isp/netcore/internal/security"
 )
 
@@ -76,6 +78,11 @@ func (h *HTTP) verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.service.Verify(r.Context(), principal.TenantID, principal.UserID, r.PathValue("reference"))
+	if err != nil {
+		logger.FromContext(r.Context(), slog.Default()).Warn("payment verification failed",
+			slog.String("error", err.Error()),
+		)
+	}
 	switch {
 	case errors.Is(err, ErrInvalidRequest):
 		security.WriteNotFound(w, r)
