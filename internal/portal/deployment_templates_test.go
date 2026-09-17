@@ -61,4 +61,19 @@ func TestPortalDeploymentTemplatesPreserveHandoffBoundaries(t *testing.T) {
 	if !strings.Contains(server, "acct_unique") || !strings.Contains(server, "netcore_accounting") {
 		t.Fatal("HotSpot server template lost accounting id generation or ingestion")
 	}
+
+	limits := read("db", "migrations", "0043_radius_plan_access_limits.up.sql")
+	for _, want := range []string{
+		"CREATE TABLE radius_access_reservations",
+		"max_devices",
+		"max_concurrent_sessions",
+		"pg_advisory_xact_lock",
+		"status <> 'CLOSED'",
+		"INSERT INTO devices",
+		"sessions_release_radius_access_reservation",
+	} {
+		if !strings.Contains(limits, want) {
+			t.Fatalf("RADIUS plan-limit migration missing %q", want)
+		}
+	}
 }
