@@ -20,15 +20,14 @@ netcore_portal_handoff {
 	# the one browser-originated identifier; the NAS and MAC are still validated
 	# a second time by PostgreSQL before the handoff is consumed.
 	update control {
-		Tmp-String-0 := "%{netcore_sql:SELECT concat_ws('|', subscription_id::text, rate_limit, session_timeout_seconds::text, idle_timeout_seconds::text, interim_interval::text, COALESCE(total_limit::text, '-'), COALESCE(total_limit_gigawords::text, '-'), filter_id) FROM radius_portal_handoff_authorize('%{User-Name}', '%{NAS-IP-Address}', '%{Calling-Station-Id}')}"
+		Tmp-String-0 := "%{netcore_sql:SELECT concat_ws(',', subscription_id::text, rate_limit, session_timeout_seconds::text, idle_timeout_seconds::text, interim_interval::text, COALESCE(total_limit::text, '-'), COALESCE(total_limit_gigawords::text, '-'), filter_id) FROM radius_portal_handoff_authorize('%{User-Name}', '%{NAS-IP-Address}', '%{Calling-Station-Id}')}"
 	}
 
 	# One row has eight fixed, safe fields. No row means the nonce is expired,
 	# replayed, from another NAS/device, or no longer entitled: Access-Reject.
-	# Unlang consumes a backslash before a literal pipe in a regular expression.
-	# Use a character class so each reply field is separated by a literal pipe,
-	# not a regex alternation.
-	if (&control:Tmp-String-0 !~ /^([0-9a-fA-F-]{36})[|]([0-9]+\/[0-9]+)[|]([1-9][0-9]*)[|]([1-9][0-9]*)[|]([1-9][0-9]*)[|]([0-9]+|-)[|]([0-9]+|-)[|]([a-z0-9-]+)$/) {
+	# Commas are not valid in any policy field and require no special Unlang
+	# or regular-expression escaping. This keeps all eight captures stable.
+	if (&control:Tmp-String-0 !~ /^([0-9a-fA-F-]{36}),([0-9]+\/[0-9]+),([1-9][0-9]*),([1-9][0-9]*),([1-9][0-9]*),([0-9]+|-),([0-9]+|-),([a-z0-9-]+)$/) {
 		reject
 	}
 

@@ -45,7 +45,7 @@ func TestPortalDeploymentTemplatesPreserveHandoffBoundaries(t *testing.T) {
 	if strings.Count(policy, "FROM radius_portal_handoff_authorize") != 1 || strings.Contains(policy, "FROM radius_portal_handoff_consume") {
 		t.Fatal("RADIUS policy must use exactly one atomic handoff authorization query")
 	}
-	if !strings.Contains(policy, "Mikrotik-Total-Limit-Gigawords") || !strings.Contains(policy, "^[A-Za-z0-9_-]{43}$") || !strings.Contains(policy, "[|]([0-9]+\\/[0-9]+)[|]") {
+	if !strings.Contains(policy, "Mikrotik-Total-Limit-Gigawords") || !strings.Contains(policy, "^[A-Za-z0-9_-]{43}$") || !strings.Contains(policy, "concat_ws(',',") || !strings.Contains(policy, "),([0-9]+\\/[0-9]+),") {
 		t.Fatal("RADIUS policy lost gigawords or nonce-shape enforcement")
 	}
 
