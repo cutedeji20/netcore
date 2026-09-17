@@ -141,7 +141,7 @@ VALUES ($1::uuid, $2::uuid, NULLIF($3, '')::uuid, $4, $5::inet, 'PROVISIONING', 
 		if err := tx.QueryRow(ctx, `INSERT INTO nas (id, tenant_id, router_id, nasname, hotspot_address, shortname, secret_ref, radius_source_ip, status)
 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::inet, $5::inet, $6, $7, $8::inet, 'DISABLED')
 RETURNING id::text, hotspot_address::text, radius_source_ip::text, shortname, status`,
-			nasID, tenantID, routerID, input.NASIPAddress, input.NASIPAddress, input.Name, "network/nas/"+nasID+"/radius-shared-secret", input.RadiusSourceIP).
+			nasID, tenantID, routerID, input.RadiusSourceIP, input.NASIPAddress, input.Name, "network/nas/"+nasID+"/radius-shared-secret", input.RadiusSourceIP).
 			Scan(&result.NASID, &result.NASIPAddress, &result.RadiusSourceIP, &result.ShortName, &result.Status); err != nil {
 			return fmt.Errorf("insert NAS: %w", err)
 		}
