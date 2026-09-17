@@ -137,7 +137,7 @@ func (s *PostgresStore) IssueHandoff(ctx context.Context, record HandoffRecord) 
 SELECT id::text
   FROM nas
  WHERE tenant_id = $1
-   AND nasname = $2::inet
+   AND hotspot_address = $2::inet
    AND status = 'ACTIVE'`,
 			record.TenantID,
 			record.NASAddress,

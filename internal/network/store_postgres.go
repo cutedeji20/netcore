@@ -138,10 +138,10 @@ VALUES ($1::uuid, $2::uuid, NULLIF($3, '')::uuid, $4, $5::inet, 'PROVISIONING', 
 			"network/router/"+routerID+"/management-credential", "network/nas/"+nasID+"/radius-shared-secret"); err != nil {
 			return fmt.Errorf("insert router: %w", err)
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO nas (id, tenant_id, router_id, nasname, shortname, secret_ref, radius_source_ip, status)
-VALUES ($1::uuid, $2::uuid, $3::uuid, $4::inet, $5, $6, $7::inet, 'DISABLED')
-RETURNING id::text, nasname::text, radius_source_ip::text, shortname, status`,
-			nasID, tenantID, routerID, input.NASIPAddress, input.Name, "network/nas/"+nasID+"/radius-shared-secret", input.RadiusSourceIP).
+		if err := tx.QueryRow(ctx, `INSERT INTO nas (id, tenant_id, router_id, nasname, hotspot_address, shortname, secret_ref, radius_source_ip, status)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4::inet, $5::inet, $6, $7, $8::inet, 'DISABLED')
+RETURNING id::text, hotspot_address::text, radius_source_ip::text, shortname, status`,
+			nasID, tenantID, routerID, input.RadiusSourceIP, input.NASIPAddress, input.Name, "network/nas/"+nasID+"/radius-shared-secret", input.RadiusSourceIP).
 			Scan(&result.NASID, &result.NASIPAddress, &result.RadiusSourceIP, &result.ShortName, &result.Status); err != nil {
 			return fmt.Errorf("insert NAS: %w", err)
 		}
@@ -159,7 +159,7 @@ func (s *PostgresStore) LoadAAA(ctx context.Context, tenantID, routerID string) 
 		return AAAConfiguration{}, ErrNotFound
 	}
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT r.id::text, n.id::text, n.nasname::text, n.radius_source_ip::text, n.shortname, n.status, COALESCE(c.version, 0), COALESCE(c.verified_at IS NOT NULL, false)
+		err := tx.QueryRow(ctx, `SELECT r.id::text, n.id::text, n.hotspot_address::text, n.radius_source_ip::text, n.shortname, n.status, COALESCE(c.version, 0), COALESCE(c.verified_at IS NOT NULL, false)
 FROM routers r JOIN nas n ON n.router_id = r.id AND n.tenant_id = r.tenant_id
 LEFT JOIN router_radius_credentials c ON c.nas_id = n.id AND c.tenant_id = n.tenant_id
 WHERE r.tenant_id = $1::uuid AND r.id = $2::uuid`, tenantID, routerID).
