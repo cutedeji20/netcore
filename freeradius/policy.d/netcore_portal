@@ -20,7 +20,7 @@ netcore_portal_handoff {
 	# the one browser-originated identifier; the NAS and MAC are still validated
 	# a second time by PostgreSQL before the handoff is consumed.
 	update control {
-		Tmp-String-0 := "%{netcore_sql:SELECT concat_ws(',', subscription_id::text, rate_limit, session_timeout_seconds::text, idle_timeout_seconds::text, interim_interval::text, COALESCE(total_limit::text, '-'), COALESCE(total_limit_gigawords::text, '-'), filter_id) FROM radius_portal_handoff_authorize('%{User-Name}', '%{NAS-IP-Address}', '%{Calling-Station-Id}')}"
+		Tmp-String-0 := "%{netcore_sql:SELECT concat_ws(',', subscription_id::text, rate_limit, session_timeout_seconds::text, idle_timeout_seconds::text, interim_interval::text, COALESCE(total_limit::text, '-'), COALESCE(total_limit_gigawords::text, '-'), COALESCE(filter_id, '-')) FROM radius_portal_handoff_authorize('%{User-Name}', '%{NAS-IP-Address}', '%{Calling-Station-Id}')}"
 	}
 
 	# One row has eight fixed, safe fields. No row means the nonce is expired,
