@@ -25,7 +25,10 @@ netcore_portal_handoff {
 
 	# One row has eight fixed, safe fields. No row means the nonce is expired,
 	# replayed, from another NAS/device, or no longer entitled: Access-Reject.
-	if (&control:Tmp-String-0 !~ /^([0-9a-fA-F-]{36})\|([0-9]+\/[0-9]+)\|([1-9][0-9]*)\|([1-9][0-9]*)\|([1-9][0-9]*)\|([0-9]+|-)\|([0-9]+|-)\|([a-z0-9-]+)$/) {
+	# Unlang consumes a backslash before a literal pipe in a regular expression.
+	# Use a character class so each reply field is separated by a literal pipe,
+	# not a regex alternation.
+	if (&control:Tmp-String-0 !~ /^([0-9a-fA-F-]{36})[|]([0-9]+\/[0-9]+)[|]([1-9][0-9]*)[|]([1-9][0-9]*)[|]([1-9][0-9]*)[|]([0-9]+|-)[|]([0-9]+|-)[|]([a-z0-9-]+)$/) {
 		reject
 	}
 
