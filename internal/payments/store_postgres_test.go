@@ -35,7 +35,12 @@ func TestPaymentActivationOutboxValuesHaveExplicitSQLTypes(t *testing.T) {
 		"'period_start', $6::timestamptz",
 		"'period_end', $7::timestamptz",
 		"'quota_bytes', $8::bigint",
+		"'gateway', $4::text",
+		"'provider_reference', $5::text",
+		"'currency', $9::text",
 		"'verified_at', $10::timestamptz",
+		"'plan_name', $5::text",
+		"'reference', $6::text",
 		"'starts_at', $9::timestamptz",
 		"'expires_at', $10::timestamptz",
 	} {

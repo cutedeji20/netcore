@@ -344,10 +344,10 @@ VALUES ($1::uuid, $2, 'subscription', $3::uuid, 'subscription.activated',
 INSERT INTO outbox_events
     (event_id, tenant_id, aggregate_type, aggregate_id, event_type, payload)
 VALUES ($1::uuid, $2, 'payment', $3::uuid, 'payment.succeeded',
-        jsonb_build_object('payment_id', $3::uuid, 'gateway', $4,
-            'provider_reference', $5, 'customer_id', $6::uuid,
+        jsonb_build_object('payment_id', $3::uuid, 'gateway', $4::text,
+            'provider_reference', $5::text, 'customer_id', $6::uuid,
             'subscription_id', $7::uuid, 'amount_minor', $8::bigint,
-            'currency', $9, 'verified_at', $10::timestamptz,
+            'currency', $9::text, 'verified_at', $10::timestamptz,
             'verification_source', 'server_to_server'))`,
 			deterministicEventID("payment.succeeded", input.Gateway, input.Reference), input.TenantID,
 			paymentID, input.Gateway, input.Reference, customerID, subscriptionID, amountMinor, currency, verifiedAt); err != nil {
@@ -363,8 +363,8 @@ INSERT INTO outbox_events
     (event_id, tenant_id, aggregate_type, aggregate_id, event_type, payload)
 VALUES ($1::uuid, $2, 'payment', $3::uuid, 'payment.receipt.requested',
         jsonb_build_object('payment_id', $3::uuid, 'customer_id', $4::uuid,
-            'plan_name', $5, 'reference', $6, 'amount_minor', $7::bigint,
-            'currency', $8, 'starts_at', $9::timestamptz, 'expires_at', $10::timestamptz))
+            'plan_name', $5::text, 'reference', $6::text, 'amount_minor', $7::bigint,
+            'currency', $8::text, 'starts_at', $9::timestamptz, 'expires_at', $10::timestamptz))
 ON CONFLICT (event_id) DO NOTHING`,
 				receipt.EventID, input.TenantID, receipt.PaymentID, receipt.CustomerID,
 				receipt.PlanName, receipt.Reference, receipt.AmountMinor, receipt.Currency,
