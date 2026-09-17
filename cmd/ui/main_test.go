@@ -312,6 +312,21 @@ func TestPortalUsesThePublishedPlanCatalogueInsteadOfHardcodedPlans(t *testing.T
 	}
 }
 
+func TestPortalSignInFromHotSpotContinuesToHandoff(t *testing.T) {
+	handler, err := newHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/portal.js", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d", response.Code)
+	}
+	if !strings.Contains(response.Body.String(), "accountRequested = !connection") {
+		t.Fatal("captive sign-in must continue to the HotSpot handoff instead of opening account management")
+	}
+}
+
 func TestPortalServesCustomerRegistrationAndEmailVerificationJourney(t *testing.T) {
 	handler, err := newHandler()
 	if err != nil {

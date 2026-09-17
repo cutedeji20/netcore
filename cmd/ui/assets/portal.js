@@ -73,7 +73,11 @@
       if (action.dataset.action === "login") showView("login");
       if (action.dataset.action === "reset-request") showView("resetRequest");
       if (action.dataset.action === "account") {
-        accountRequested = true;
+        // The home-page action is also the normal sign-in route for a device
+        // that arrived from RouterOS.  Preserve explicit account management
+        // only outside a captive connection; otherwise a successful login
+        // must continue directly to the one-time HotSpot handoff.
+        accountRequested = !connection;
         if (customerAuthenticated) {
           showView("account");
           loadCustomerAccount();
