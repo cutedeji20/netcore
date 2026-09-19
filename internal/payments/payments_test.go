@@ -110,6 +110,36 @@ func TestInitiateFreezesServerPaymentAndReturnsOnlyCheckout(t *testing.T) {
 	}
 }
 
+func TestInitiateSendsFrozenPlanAndBankChargeTotalToGateway(t *testing.T) {
+	store := &memoryPaymentStore{pending: PendingPayment{ID: "payment", SubscriptionID: "subscription", PlanAmountMinor: 50000, BankChargeMinor: 1500, AmountMinor: 51500, Currency: "NGN", CustomerEmail: "a@example.test"}}
+	gateway := &memoryGateway{available: true, checkout: GatewayCheckout{AuthorizationURL: "https://checkout.example.test/pay"}}
+	service := newPaymentService(t, store, gateway)
+	if _, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001"); err != nil {
+		t.Fatal(err)
+	}
+	if gateway.initialization.AmountMinor != 51500 {
+		t.Fatalf("gateway amount=%d want 51500", gateway.initialization.AmountMinor)
+	}
+}
+
+func TestIdempotentRetryRetainsFrozenBankChargeAfterSettingsChange(t *testing.T) {
+	store := &memoryPaymentStore{pending: PendingPayment{ID: "payment", SubscriptionID: "subscription", PlanAmountMinor: 50000, BankChargeMinor: 1500, AmountMinor: 51500, Currency: "NGN", CustomerEmail: "a@example.test"}}
+	gateway := &memoryGateway{available: true, checkout: GatewayCheckout{AuthorizationURL: "https://checkout.example.test/pay"}}
+	service := newPaymentService(t, store, gateway)
+	checkout, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A later settings change can affect only a new initiation. The persisted
+	// idempotency response must be returned instead of starting a 50000-kobo retry.
+	store.pending = PendingPayment{PlanAmountMinor: 50000, AmountMinor: 50000, Currency: "NGN", CustomerEmail: "a@example.test"}
+	store.replay = &checkout
+	retry, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001")
+	if err != nil || retry != checkout || gateway.initCalls != 1 {
+		t.Fatalf("retry=%+v err=%v initialize_calls=%d", retry, err, gateway.initCalls)
+	}
+}
+
 func TestInitiatePassesConfiguredCallbackURLToGateway(t *testing.T) {
 	store := &memoryPaymentStore{pending: PendingPayment{ID: "payment", SubscriptionID: "subscription", AmountMinor: 500000, Currency: "NGN", CustomerEmail: "a@example.test"}}
 	gateway := &memoryGateway{available: true, checkout: GatewayCheckout{AuthorizationURL: "https://checkout.example.test/pay"}}
@@ -169,6 +199,16 @@ func TestVerifyRejectsAmountMismatchWithoutActivation(t *testing.T) {
 
 	_, err := service.Verify(context.Background(), paymentTestTenant, paymentTestUser, reference)
 	if !errors.Is(err, ErrVerificationMismatch) || store.activateCalls != 0 {
+		t.Fatalf("err=%v activate_calls=%d", err, store.activateCalls)
+	}
+}
+
+func TestVerifyRejectsPlanSubtotalAgainstFrozenBankChargeTotal(t *testing.T) {
+	reference := "pay_12345678901234567890123456789012"
+	store := &memoryPaymentStore{payment: Payment{Gateway: "paystack", Reference: reference, PlanAmountMinor: 50000, BankChargeMinor: 1500, AmountMinor: 51500, Currency: "NGN", Status: StatusPending}}
+	gateway := &memoryGateway{available: true, verify: GatewayVerification{Reference: reference, Status: StatusSuccess, AmountMinor: 50000, Currency: "NGN", VerifiedAt: time.Now().UTC()}}
+	service := newPaymentService(t, store, gateway)
+	if _, err := service.Verify(context.Background(), paymentTestTenant, paymentTestUser, reference); !errors.Is(err, ErrVerificationMismatch) || store.activateCalls != 0 {
 		t.Fatalf("err=%v activate_calls=%d", err, store.activateCalls)
 	}
 }

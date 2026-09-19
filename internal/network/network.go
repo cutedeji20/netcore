@@ -77,6 +77,18 @@ type MutationActor struct {
 	UserAgent string
 }
 
+// TetheringPolicy is the tenant's desired HotSpot TTL enforcement policy.
+// Rendering/applying RouterOS rules remains an explicit operator action.
+type TetheringPolicy struct {
+	Enabled           bool
+	ExpectedClientTTL int
+}
+
+type TetheringStore interface {
+	LoadTetheringPolicy(context.Context, string) (TetheringPolicy, error)
+	SaveTetheringPolicy(context.Context, string, MutationActor, TetheringPolicy) error
+}
+
 // NASStatus is the lifecycle state accepted by the RADIUS policy.
 type NASStatus string
 

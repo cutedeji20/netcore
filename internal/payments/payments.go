@@ -89,12 +89,14 @@ type Initiation struct {
 }
 
 type PendingPayment struct {
-	ID             string
-	SubscriptionID string
-	Reference      string
-	AmountMinor    int64
-	Currency       string
-	CustomerEmail  string
+	ID              string
+	SubscriptionID  string
+	Reference       string
+	AmountMinor     int64
+	PlanAmountMinor int64
+	BankChargeMinor int64
+	Currency        string
+	CustomerEmail   string
 }
 
 // Checkout is safe to return to a browser. It contains no gateway secret,
@@ -105,13 +107,15 @@ type Checkout struct {
 }
 
 type Payment struct {
-	ID             string
-	SubscriptionID string
-	Gateway        string
-	Reference      string
-	AmountMinor    int64
-	Currency       string
-	Status         string
+	ID              string
+	SubscriptionID  string
+	Gateway         string
+	Reference       string
+	AmountMinor     int64
+	PlanAmountMinor int64
+	BankChargeMinor int64
+	Currency        string
+	Status          string
 }
 
 type Activation struct {

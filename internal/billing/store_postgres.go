@@ -24,6 +24,41 @@ func NewPostgresStore(db *database.Pool) (*PostgresStore, error) {
 	return &PostgresStore{db: db}, nil
 }
 
+func (s *PostgresStore) LoadSettings(ctx context.Context, tenantID string) (settings Settings, err error) {
+	if !validUUID(tenantID) {
+		return Settings{}, ErrUnavailable
+	}
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var updatedBy pgtype.Text
+		if err := tx.QueryRow(ctx, `SELECT fixed_bank_charge_minor, currency, updated_at, updated_by::text FROM tenant_billing_settings WHERE tenant_id=$1`, tenantID).Scan(&settings.FixedBankChargeMinor, &settings.Currency, &settings.UpdatedAt, &updatedBy); err != nil {
+			return fmt.Errorf("load billing settings: %w", err)
+		}
+		settings.UpdatedAt = settings.UpdatedAt.UTC()
+		if updatedBy.Valid {
+			settings.UpdatedBy = updatedBy.String
+		}
+		return nil
+	})
+	return settings, err
+}
+
+func (s *PostgresStore) SaveSettings(ctx context.Context, tenantID string, actor MutationActor, settings Settings) error {
+	if !validUUID(tenantID) || !validUUID(actor.UserID) || settings.FixedBankChargeMinor < 0 || settings.Currency != "NGN" {
+		return ErrInvalidClear
+	}
+	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var old int64
+		if err := tx.QueryRow(ctx, `SELECT fixed_bank_charge_minor FROM tenant_billing_settings WHERE tenant_id=$1 FOR UPDATE`, tenantID).Scan(&old); err != nil {
+			return fmt.Errorf("load billing settings: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE tenant_billing_settings SET fixed_bank_charge_minor=$2, updated_at=now(), updated_by=$3::uuid WHERE tenant_id=$1`, tenantID, settings.FixedBankChargeMinor, actor.UserID); err != nil {
+			return fmt.Errorf("save billing settings: %w", err)
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata) VALUES ($1,'STAFF',$2::uuid,'BILLING_BANK_CHARGE_UPDATED','tenant',$1::uuid,jsonb_build_object('old_fixed_bank_charge_minor',$3,'new_fixed_bank_charge_minor',$4))`, tenantID, actor.UserID, old, settings.FixedBankChargeMinor)
+		return err
+	})
+}
+
 func (s *PostgresStore) List(ctx context.Context, tenantID string, options ListOptions) (page Page, err error) {
 	if tenantID == "" || options.Limit < 1 || (options.Source != "" && !IsValidSource(options.Source)) {
 		return Page{}, ErrInvalidPage
