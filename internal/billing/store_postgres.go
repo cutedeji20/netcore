@@ -47,16 +47,24 @@ func (s *PostgresStore) SaveSettings(ctx context.Context, tenantID string, actor
 		return ErrInvalidClear
 	}
 	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		var old int64
-		if err := tx.QueryRow(ctx, `SELECT fixed_bank_charge_minor FROM tenant_billing_settings WHERE tenant_id=$1 FOR UPDATE`, tenantID).Scan(&old); err != nil {
-			return fmt.Errorf("load billing settings: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `UPDATE tenant_billing_settings SET fixed_bank_charge_minor=$2, updated_at=now(), updated_by=$3::uuid WHERE tenant_id=$1`, tenantID, settings.FixedBankChargeMinor, actor.UserID); err != nil {
-			return fmt.Errorf("save billing settings: %w", err)
-		}
-		_, err := tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata) VALUES ($1,'STAFF',$2::uuid,'BILLING_BANK_CHARGE_UPDATED','tenant',$1::uuid,jsonb_build_object('old_fixed_bank_charge_minor',$3,'new_fixed_bank_charge_minor',$4))`, tenantID, actor.UserID, old, settings.FixedBankChargeMinor)
-		return err
+		return saveSettingsTx(ctx, tx, tenantID, actor, settings)
 	})
+}
+
+// saveSettingsTx holds the settings row lock while it writes the replacement
+// and its immutable audit fact. Callers commit or roll back the whole unit.
+func saveSettingsTx(ctx context.Context, tx pgx.Tx, tenantID string, actor MutationActor, settings Settings) error {
+	var old int64
+	if err := tx.QueryRow(ctx, `SELECT fixed_bank_charge_minor FROM tenant_billing_settings WHERE tenant_id=$1 FOR UPDATE`, tenantID).Scan(&old); err != nil {
+		return fmt.Errorf("load billing settings: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE tenant_billing_settings SET fixed_bank_charge_minor=$2, updated_at=now(), updated_by=$3::uuid WHERE tenant_id=$1`, tenantID, settings.FixedBankChargeMinor, actor.UserID); err != nil {
+		return fmt.Errorf("save billing settings: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata) VALUES ($1,'STAFF',$2::uuid,'BILLING_BANK_CHARGE_UPDATED','tenant',$1::uuid,jsonb_build_object('old_fixed_bank_charge_minor',$3::bigint,'new_fixed_bank_charge_minor',$4::bigint))`, tenantID, actor.UserID, old, settings.FixedBankChargeMinor); err != nil {
+		return fmt.Errorf("write billing settings audit record: %w", err)
+	}
+	return nil
 }
 
 func (s *PostgresStore) List(ctx context.Context, tenantID string, options ListOptions) (page Page, err error) {

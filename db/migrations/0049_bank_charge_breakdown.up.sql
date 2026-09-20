@@ -38,10 +38,17 @@ ALTER TABLE payments
     ADD COLUMN plan_amount_minor bigint,
     ADD COLUMN bank_charge_minor bigint NOT NULL DEFAULT 0 CHECK (bank_charge_minor >= 0);
 
+-- 0027 makes successful payments immutable. These added columns must be
+-- backfilled from the already-frozen total, so temporarily suppress only that
+-- named trigger inside this transaction; rollback restores its original state.
+ALTER TABLE payments DISABLE TRIGGER payments_no_change_after_success;
+
 UPDATE payments
    SET plan_amount_minor = amount_minor,
        bank_charge_minor = 0
  WHERE plan_amount_minor IS NULL;
+
+ALTER TABLE payments ENABLE TRIGGER payments_no_change_after_success;
 
 ALTER TABLE payments
     ALTER COLUMN plan_amount_minor SET NOT NULL,
