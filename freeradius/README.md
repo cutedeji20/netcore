@@ -95,3 +95,17 @@ path; production readiness still requires the documented staging evidence,
 host disk monitoring, router firewall restrictions, and alerts for spool
 capacity or replay failure. Until those are evidenced, a PostgreSQL failure is
 not a live-router acceptance condition.
+
+### Device-bound subscriptions (migration 0051)
+
+`radius_portal_handoff_authorize` enforces `subscriptions.device_id`. A
+subscription bound to a device authorizes only when the RADIUS
+`Calling-Station-Id` normalizes to that same active, customer-owned `devices`
+row; any other MAC is an Access-Reject.
+
+Subscriptions created before this feature have a NULL `device_id` and keep the
+prior find-or-register behavior under the plan's `max_devices`. **Strict binding
+does not apply to a legacy subscription until it is deliberately assigned a
+device.** Assign one through an audited admin/migration path before enabling
+strict binding for existing paid users — do not back-fill `device_id`
+automatically, or an active customer could be disconnected mid-session.
