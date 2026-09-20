@@ -36,6 +36,7 @@ func (h *CatalogueHTTP) list(w http.ResponseWriter, r *http.Request) {
 	for _, plan := range plans {
 		response.Data = append(response.Data, publicPlanResponse{
 			ID: plan.ID, Name: plan.Name, Description: plan.Description, PriceMinor: plan.PriceMinor,
+			BankChargeMinor: plan.BankChargeMinor, TotalMinor: plan.TotalMinor,
 			Currency: plan.Currency, DurationSeconds: plan.DurationSeconds, DownloadBPS: plan.DownloadBPS,
 			UploadBPS: plan.UploadBPS, MaxDevices: plan.MaxDevices, MaxConcurrentSessions: plan.MaxConcurrentSessions,
 		})
@@ -52,6 +53,8 @@ type publicPlanResponse struct {
 	Name                  string `json:"name"`
 	Description           string `json:"description,omitempty"`
 	PriceMinor            int64  `json:"price_minor"`
+	BankChargeMinor       int64  `json:"bank_charge_minor"`
+	TotalMinor            int64  `json:"total_minor"`
 	Currency              string `json:"currency"`
 	DurationSeconds       int64  `json:"duration_seconds"`
 	DownloadBPS           int64  `json:"download_bps"`

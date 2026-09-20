@@ -9,6 +9,7 @@
   var accountsEnabled = liveMode && portalConfig.accountsEnabled === true;
   var paymentsEnabled = liveMode && portalConfig.paymentsEnabled === true;
   var checkoutStorage = window.NetCorePortalCheckout || null;
+	var pricing = window.NetCorePortalPricing || null;
   var accountPresentation = window.NetCorePortalAccount || null;
   var recovery = window.NetCorePortalRecovery || null;
   var postLoginNavigation = window.NetCorePortalNavigation || null;
@@ -361,11 +362,15 @@
       duration.textContent = formatDuration(plan.duration_seconds);
       top.append(name, duration);
 
+      var amounts = pricing && pricing.breakdown ? pricing.breakdown(plan) : null;
+      if (!amounts) return;
       var price = document.createElement("strong");
-      price.textContent = formatMoney(plan.price_minor, plan.currency);
+      price.textContent = formatMoney(amounts.totalMinor, amounts.currency);
+	  var breakdown = document.createElement("small");
+	  breakdown.textContent = "Plan " + formatMoney(amounts.priceMinor, amounts.currency) + " · Bank charge " + formatMoney(amounts.bankChargeMinor, amounts.currency) + " · Total " + formatMoney(amounts.totalMinor, amounts.currency);
       var detail = document.createElement("small");
       detail.textContent = plan.description || accessHighlight(plan);
-      option.append(top, price, detail);
+	  option.append(top, price, breakdown, detail);
       planGrid.append(option);
     });
     planStatus.textContent = "";
@@ -417,7 +422,7 @@
       account.subscriptions.forEach(function (subscription) {
         var row = accountRow(subscription.planName, subscription.status, subscription.status === "ACTIVE" && subscription.expiresAt ? "Expires " + formatPortalDate(subscription.expiresAt) : subscription.startsAt ? "Starts " + formatPortalDate(subscription.startsAt) : "Waiting for payment confirmation");
         var detail = document.createElement("small");
-        detail.textContent = "Payment: " + formatState(subscription.paymentStatus);
+        detail.textContent = "Device: " + (subscription.deviceLabel || subscription.deviceMAC || "Not assigned") + " · Payment: " + formatState(subscription.paymentStatus);
         row.append(detail);
         accountSubscriptions.append(row);
       });

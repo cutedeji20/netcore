@@ -18,6 +18,7 @@
     if (typeof value !== "string" || Number.isNaN(Date.parse(value))) return "";
     return value;
   }
+  function mac(value) { return typeof value === "string" && /^[0-9a-f]{12}$/i.test(value) ? value.toLowerCase() : ""; }
 
   function subscription(value) {
     if (!value || typeof value !== "object") return null;
@@ -25,7 +26,7 @@
     var status = text(value.status, 32);
     var paymentStatus = text(value.payment_status, 32);
     if (!planName || !status || !paymentStatus) return null;
-    return { planName: planName, status: status, paymentStatus: paymentStatus, startsAt: timestamp(value.starts_at), expiresAt: timestamp(value.expires_at) };
+    return { planName: planName, deviceLabel: text(value.device_label, 120), deviceMAC: mac(value.device_mac), status: status, paymentStatus: paymentStatus, startsAt: timestamp(value.starts_at), expiresAt: timestamp(value.expires_at) };
   }
 
   function payment(value) {
