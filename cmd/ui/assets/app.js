@@ -27,6 +27,7 @@ const logoutButton = document.querySelector("#logout-button");
 const adminConfig = window.NETCORE_ADMIN_CONFIG || {};
 const liveAdapterPaths = [
   "/live-page.js",
+  "/live-overview.js",
   "/live-list-config.js",
   "/live-list-controls.js",
   "/live-customers.js", "/live-subscriptions.js", "/live-plans.js", "/live-sessions.js",
@@ -80,7 +81,7 @@ function dashboard() {
   return `${accessHeading("Operations overview", "Only verified, authorised data is displayed in this workspace.")}
     <div class="status"><i></i><strong>Authorised session established</strong><span>Dashboard summaries are awaiting their live data source.</span><span class="updated">Secure session</span></div>
     ${metrics([["Active customers", "—"], ["Online sessions", "—"], ["Collected today", "—"], ["Needs attention", "—"]])}
-    <section class="dashboard-grid"><article class="panel"><div class="panel-header"><div><h2>Collection trend</h2><p>Verified payment data will appear here when the reporting endpoint is enabled.</p></div></div><p class="description">No representative values are shown in the production control dashboard.</p></article><article class="panel"><div class="panel-header"><div><h2>Activity</h2><p>Recent authorised activity will appear here.</p></div></div><p class="description">No verified activity is available yet.</p></article></section>
+    <section class="dashboard-grid"><article class="panel"><div class="panel-header"><div><h2>Collection trend</h2><p>Verified payment data will appear here when the reporting endpoint is enabled.</p></div></div><p class="description">No representative values are shown in the production control dashboard.</p></article><article class="panel"><div class="panel-header"><div><h2>Activity</h2><p>Recent authorised activity.</p></div></div><ul class="activity" data-overview-activity><li><div><strong>Loading activity</strong><span>Authorised events will appear shortly.</span></div></li></ul></article></section>
     <section class="bottom-grid"><article class="panel"><div class="panel-header"><div><h2>Network health</h2><p>Live network health endpoint required.</p></div></div><p class="description">Awaiting verified service status.</p></article><article class="panel"><div class="panel-header"><div><h2>Today’s work</h2><p>Live operational queue required.</p></div></div><p class="description">No verified queue is available yet.</p></article><article class="panel"><div class="panel-header"><div><h2>Production controls</h2><p>Server-side permissions remain authoritative.</p></div></div><p class="description">Actions are enabled only as their audited API workflows are delivered.</p></article></section>`;
 }
 

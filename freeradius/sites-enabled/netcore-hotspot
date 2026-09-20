@@ -17,7 +17,12 @@ server netcore-hotspot {
 	}
 
 	authorize {
-		netcore_portal_handoff
+		if (&User-Name =~ /^[0-9A-Fa-f:-]{12,17}$/) {
+			netcore_device_mac_auto
+		}
+		else {
+			netcore_portal_handoff
+		}
 	}
 
 	authenticate {

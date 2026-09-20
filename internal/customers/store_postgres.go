@@ -63,31 +63,35 @@ func (s *PostgresStore) List(ctx context.Context, tenantID string, options ListO
 
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-SELECT id::text,
-       customer_number,
-       status,
-       COALESCE(first_name, ''),
-       COALESCE(last_name, ''),
-       COALESCE(phone, ''),
-       COALESCE(email::text, ''),
-       created_at,
-       updated_at
+SELECT customers.id::text,
+       customers.customer_number,
+       customers.status,
+       COALESCE(customers.first_name, ''),
+       COALESCE(customers.last_name, ''),
+       COALESCE(NULLIF(customers.phone, ''), NULLIF(account.phone, ''), ''),
+       COALESCE(customers.email::text, ''),
+       customers.created_at,
+       customers.updated_at
   FROM customers
- WHERE tenant_id = $1
+  LEFT JOIN users AS account
+    ON account.id = customers.user_id
+   AND account.tenant_id = customers.tenant_id
+ WHERE customers.tenant_id = $1
    AND (
        $2 = ''
-       OR customer_number ILIKE '%' || $2 || '%'
-       OR COALESCE(first_name, '') ILIKE '%' || $2 || '%'
-       OR COALESCE(last_name, '') ILIKE '%' || $2 || '%'
-       OR COALESCE(phone, '') ILIKE '%' || $2 || '%'
-       OR COALESCE(email::text, '') ILIKE '%' || $2 || '%'
+       OR customers.customer_number ILIKE '%' || $2 || '%'
+       OR COALESCE(customers.first_name, '') ILIKE '%' || $2 || '%'
+       OR COALESCE(customers.last_name, '') ILIKE '%' || $2 || '%'
+       OR COALESCE(customers.phone, '') ILIKE '%' || $2 || '%'
+       OR COALESCE(account.phone, '') ILIKE '%' || $2 || '%'
+       OR COALESCE(customers.email::text, '') ILIKE '%' || $2 || '%'
    )
-   AND status <> 'CLOSED'
+   AND customers.status <> 'CLOSED'
    AND (
        $3::timestamptz IS NULL
-       OR (created_at, id) < ($3::timestamptz, $4::uuid)
+       OR (customers.created_at, customers.id) < ($3::timestamptz, $4::uuid)
    )
- ORDER BY created_at DESC, id DESC
+ ORDER BY customers.created_at DESC, customers.id DESC
  LIMIT $5`,
 			tenantID,
 			options.Search,

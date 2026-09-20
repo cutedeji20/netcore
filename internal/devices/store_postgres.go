@@ -56,3 +56,22 @@ func (s *PostgresStore) Register(ctx context.Context, tenantID, userID string, i
 	})
 	return device, err
 }
+func (s *PostgresStore) RegisterForCustomer(ctx context.Context, tenantID, actorID, customerID string, input Registration) (device Device, err error) {
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM customers WHERE tenant_id=$1 AND id=$2::uuid AND status='ACTIVE')`, tenantID, customerID).Scan(&exists); err != nil || !exists {
+			return ErrUnavailable
+		}
+		err := tx.QueryRow(ctx, `INSERT INTO devices (tenant_id, customer_id, mac_address, normalized_mac, hostname) VALUES ($1,$2::uuid,$3,$3,NULLIF($4,'')) RETURNING id::text, normalized_mac, COALESCE(hostname,''), status, created_at`, tenantID, customerID, input.NormalizedMAC, input.Label).Scan(&device.ID, &device.NormalizedMAC, &device.Label, &device.Status, &device.CreatedAt)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				return ErrDuplicateMAC
+			}
+			return fmt.Errorf("devices: staff register: %w", err)
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata) VALUES ($1,'USER',$2::uuid,'DEVICE_REGISTERED_BY_STAFF','device',$3::uuid,jsonb_build_object('customer_id',$4::uuid))`, tenantID, actorID, device.ID, customerID)
+		return err
+	})
+	return device, err
+}

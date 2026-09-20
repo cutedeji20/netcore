@@ -15,6 +15,7 @@
 :local hotspotProfile "__HOTSPOT_PROFILE__"
 :local hotspotUserProfile "__HOTSPOT_USER_PROFILE__"
 :local hotspotHtmlDir "__HOTSPOT_HTML_DIR__"
+:local macAuthPassword "__RADIUS_MAC_AUTH_PASSWORD__"
 
 :if (($radiusAddress = "") || ($radiusSecret = "") || ($coaSourceAddress = "") || ($portalHost = "") || ($portalAddress = "") || ($hotspotHtmlDir = "")) do={
     :error "NetCore HotSpot placeholders were not rendered"
@@ -29,6 +30,10 @@
     radius-accounting=yes \
     radius-interim-update=received \
     html-directory-override=$hotspotHtmlDir
+
+# MAC auto-auth remains disabled by default. After the RADIUS deployment has
+# NETCORE_RADIUS_MAC_AUTH_PASSWORD set and a Safe Mode pilot succeeds, an
+# operator may add `mac` to login-by and set mac-auth-password=$macAuthPassword.
 
 # One short MAC cookie improves reconnects but bounds any stale local login to
 # a minute. This property belongs to the HotSpot *user* profile, not the

@@ -24,7 +24,40 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	}
 	mux.Handle("GET /api/v1/portal/devices", sessions.RequireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("POST /api/v1/portal/devices", sessions.RequireAuth(sessions.RequireAllowedOrigin(http.HandlerFunc(h.register))))
+	mux.Handle("POST /api/v1/customers/{id}/devices", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("customer.write", http.HandlerFunc(h.registerForCustomer)))))
 	return nil
+}
+func (h *HTTP) registerForCustomer(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.principal(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		MAC   string `json:"mac"`
+		Label string `json:"label"`
+	}
+	d := json.NewDecoder(io.LimitReader(r.Body, 32<<10))
+	d.DisallowUnknownFields()
+	if d.Decode(&input) != nil || d.Decode(&struct{}{}) != io.EOF {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_DEVICE", "Device details are invalid.")
+		return
+	}
+	device, err := h.service.RegisterForCustomer(r.Context(), p.TenantID, p.UserID, r.PathValue("id"), input.MAC, input.Label)
+	if errors.Is(err, ErrInvalidRegistration) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_DEVICE", "Device details are invalid.")
+		return
+	}
+	if errors.Is(err, ErrDuplicateMAC) {
+		security.WriteError(w, r, http.StatusConflict, "DEVICE_ALREADY_REGISTERED", "This device is already registered.")
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "DEVICES_UNAVAILABLE", "Device registration is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusCreated, struct {
+		Data Device `json:"data"`
+	}{device})
 }
 func (h *HTTP) principal(w http.ResponseWriter, r *http.Request) (auth.Principal, bool) {
 	p, ok := auth.PrincipalFromContext(r.Context())

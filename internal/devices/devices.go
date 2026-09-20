@@ -37,6 +37,18 @@ func NewRegistration(mac, label string) (Registration, error) {
 type Store interface {
 	List(context.Context, string, string) ([]Device, error)
 	Register(context.Context, string, string, Registration) (Device, error)
+	RegisterForCustomer(context.Context, string, string, string, Registration) (Device, error)
+}
+
+func (s *Service) RegisterForCustomer(ctx context.Context, tenantID, actorID, customerID, mac, label string) (Device, error) {
+	if s == nil || s.store == nil || !validUUID(tenantID) || !validUUID(actorID) || !validUUID(customerID) {
+		return Device{}, ErrUnavailable
+	}
+	input, err := NewRegistration(mac, label)
+	if err != nil {
+		return Device{}, err
+	}
+	return s.store.RegisterForCustomer(ctx, tenantID, actorID, customerID, input)
 }
 
 type Service struct{ store Store }

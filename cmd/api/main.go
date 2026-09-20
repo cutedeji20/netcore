@@ -288,6 +288,17 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	overviewStore, err := security.NewOverviewPostgresStore(postgres)
+	if err != nil {
+		return err
+	}
+	overviewHTTP, err := security.NewOverviewHTTP(overviewStore, func(ctx context.Context) (string, bool) {
+		principal, ok := auth.PrincipalFromContext(ctx)
+		return principal.TenantID, ok
+	})
+	if err != nil {
+		return err
+	}
 	automationStore, err := automations.NewPostgresStore(postgres)
 	if err != nil {
 		return err
@@ -413,6 +424,9 @@ func run() error {
 		return err
 	}
 	if err := activityHTTP.Routes(mux, authHTTP.RequireAuth, auth.RequirePermission); err != nil {
+		return err
+	}
+	if err := overviewHTTP.Routes(mux, authHTTP.RequireAuth, auth.RequirePermission); err != nil {
 		return err
 	}
 	if err := automationHTTP.Routes(mux, authHTTP); err != nil {
