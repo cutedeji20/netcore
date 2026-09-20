@@ -47,3 +47,14 @@ test("builds checkout payloads only when both plan and selected device are UUIDs
   assert.equal(checkout.paymentRequest("not-a-plan", deviceID), null);
   assert.deepEqual(checkout.paymentRequest(planID, deviceID), { plan_id: planID, device_id: deviceID });
 });
+
+test("excludes removed devices from checkout choices", () => {
+  const activeID = "44444444-4444-4444-8444-444444444444";
+  const removedID = "55555555-5555-4555-8555-555555555555";
+
+  assert.deepEqual(checkout.activeDevices([
+    { id: activeID, status: "ACTIVE", normalized_mac: "aabbccddeeff" },
+    { id: removedID, status: "REMOVED", normalized_mac: "001122334455" },
+    { id: "not-a-device", status: "ACTIVE" }
+  ]), [{ id: activeID, status: "ACTIVE", normalized_mac: "aabbccddeeff" }]);
+});

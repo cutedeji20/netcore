@@ -724,6 +724,7 @@
       if (!result.response.ok) throw new Error(humanError(result.body, "We could not load your devices."));
       return Array.isArray(result.body.data) ? result.body.data : [];
     }).then(function (devices) {
+      devices = checkoutStorage && checkoutStorage.activeDevices ? checkoutStorage.activeDevices(devices) : [];
       var currentMAC = connection ? normalizeMAC(connection.client_mac) : "";
       var current = devices.find(function (device) { return String(device.normalized_mac || "") === currentMAC; });
       if (current || !currentMAC) return devices;

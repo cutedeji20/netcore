@@ -39,6 +39,13 @@
     return { plan_id: planID, device_id: deviceID };
   }
 
+  function activeDevices(devices) {
+    if (!Array.isArray(devices)) return [];
+    return devices.filter(function (device) {
+      return device && typeof device === "object" && validUUID(device.id) && String(device.status || "").toUpperCase() === "ACTIVE";
+    });
+  }
+
   function rememberPaymentReturn(storage, reference, connection) {
     if (!validReference(reference) || !validConnection(connection)) return false;
     try {
@@ -95,6 +102,7 @@
     storageKey: storageKey,
     validReference: validReference,
     paymentRequest: paymentRequest,
+    activeDevices: activeDevices,
     rememberPaymentReturn: rememberPaymentReturn,
     readPaymentReturn: readPaymentReturn,
     clearPaymentReturn: clearPaymentReturn
