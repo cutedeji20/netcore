@@ -2,6 +2,7 @@ package devices
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,5 +57,15 @@ func TestDeviceHTTPRegistersOnlyForAuthenticatedCustomer(t *testing.T) {
 	h.register(response, request)
 	if response.Code != http.StatusCreated || store.tenantID != testTenant || store.userID != testUser || store.registered.NormalizedMAC != "aabbccddeeff" {
 		t.Fatalf("status=%d scope=%q/%q registration=%+v", response.Code, store.tenantID, store.userID, store.registered)
+	}
+	raw := response.Body.String()
+	if !strings.Contains(raw, `"normalized_mac":"aabbccddeeff"`) || strings.Contains(raw, `"NormalizedMAC"`) {
+		t.Fatalf("unsafe device JSON projection: %s", raw)
+	}
+	var body struct {
+		Data Device `json:"data"`
+	}
+	if err := json.NewDecoder(strings.NewReader(raw)).Decode(&body); err != nil || body.Data.ID == "" || body.Data.NormalizedMAC != "aabbccddeeff" {
+		t.Fatalf("response=%s decoded=%+v err=%v", raw, body, err)
 	}
 }

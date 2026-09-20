@@ -38,3 +38,12 @@ test("rejects malformed payment return state instead of restoring it", () => {
   assert.equal(checkout.readPaymentReturn(storage), null);
   assert.equal(storage.getItem(checkout.storageKey), null);
 });
+
+test("builds checkout payloads only when both plan and selected device are UUIDs", () => {
+  const planID = "33333333-3333-4333-8333-333333333333";
+  const deviceID = "44444444-4444-4444-8444-444444444444";
+
+  assert.equal(checkout.paymentRequest(planID, ""), null);
+  assert.equal(checkout.paymentRequest("not-a-plan", deviceID), null);
+  assert.deepEqual(checkout.paymentRequest(planID, deviceID), { plan_id: planID, device_id: deviceID });
+});

@@ -90,7 +90,7 @@ SELECT c.id::text,
   FROM customers AS c
   JOIN users AS u ON u.id = c.user_id AND u.tenant_id = c.tenant_id
   JOIN plans AS p ON p.tenant_id = c.tenant_id
-	  JOIN customer_devices AS d ON d.tenant_id = c.tenant_id AND d.customer_id = c.id AND d.id = $4 AND d.status = 'ACTIVE'
+	  JOIN devices AS d ON d.tenant_id = c.tenant_id AND d.customer_id = c.id AND d.id = $4 AND d.status = 'ACTIVE'
   JOIN tenant_billing_settings AS bs ON bs.tenant_id = c.tenant_id
  WHERE c.tenant_id = $1
    AND c.user_id = $2

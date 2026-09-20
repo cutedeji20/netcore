@@ -18,8 +18,11 @@ var (
 
 type Registration struct{ NormalizedMAC, Label string }
 type Device struct {
-	ID, NormalizedMAC, Label, Status string
-	CreatedAt                        time.Time
+	ID            string    `json:"id"`
+	NormalizedMAC string    `json:"normalized_mac"`
+	Label         string    `json:"label,omitempty"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 func NewRegistration(mac, label string) (Registration, error) {

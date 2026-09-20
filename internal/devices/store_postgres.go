@@ -20,7 +20,7 @@ func NewPostgresStore(db *database.Pool) (*PostgresStore, error) {
 }
 func (s *PostgresStore) List(ctx context.Context, tenantID, userID string) (devices []Device, err error) {
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT d.id::text, d.normalized_mac, COALESCE(d.label, ''), d.status, d.created_at FROM customer_devices d JOIN customers c ON c.id = d.customer_id AND c.tenant_id = d.tenant_id WHERE d.tenant_id = $1 AND c.user_id = $2 AND c.status = 'ACTIVE' ORDER BY d.created_at DESC, d.id DESC`, tenantID, userID)
+		rows, err := tx.Query(ctx, `SELECT d.id::text, d.normalized_mac, COALESCE(d.hostname, ''), d.status, d.created_at FROM devices d JOIN customers c ON c.id = d.customer_id AND c.tenant_id = d.tenant_id WHERE d.tenant_id = $1 AND c.user_id = $2 AND c.status = 'ACTIVE' ORDER BY d.created_at DESC, d.id DESC`, tenantID, userID)
 		if err != nil {
 			return fmt.Errorf("devices: list: %w", err)
 		}
@@ -44,7 +44,7 @@ func (s *PostgresStore) Register(ctx context.Context, tenantID, userID string, i
 		} else if err != nil {
 			return fmt.Errorf("devices: customer: %w", err)
 		}
-		err := tx.QueryRow(ctx, `INSERT INTO customer_devices (tenant_id, customer_id, normalized_mac, label) VALUES ($1, $2, $3, NULLIF($4, '')) RETURNING id::text, normalized_mac, COALESCE(label, ''), status, created_at`, tenantID, customerID, input.NormalizedMAC, input.Label).Scan(&device.ID, &device.NormalizedMAC, &device.Label, &device.Status, &device.CreatedAt)
+		err := tx.QueryRow(ctx, `INSERT INTO devices (tenant_id, customer_id, mac_address, normalized_mac, hostname) VALUES ($1, $2, $3, $3, NULLIF($4, '')) RETURNING id::text, normalized_mac, COALESCE(hostname, ''), status, created_at`, tenantID, customerID, input.NormalizedMAC, input.Label).Scan(&device.ID, &device.NormalizedMAC, &device.Label, &device.Status, &device.CreatedAt)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "23505" {

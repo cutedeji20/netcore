@@ -64,7 +64,7 @@ SELECT plan.name,
   JOIN plans AS plan
     ON plan.id = subscription.plan_id
    AND plan.tenant_id = subscription.tenant_id
-	 LEFT JOIN customer_devices AS device
+	 LEFT JOIN devices AS device
 	    ON device.id = subscription.device_id
 	   AND device.tenant_id = subscription.tenant_id
  WHERE subscription.tenant_id = $1
