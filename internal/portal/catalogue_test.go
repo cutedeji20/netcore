@@ -35,7 +35,7 @@ func TestCatalogueUsesConfiguredTenantAndReturnsPublicFieldsOnly(t *testing.T) {
 		found:    true,
 		plans: []PublicPlan{{
 			ID: "33333333-3333-4333-8333-333333333333", Name: "Day pass", Description: "Fast access",
-			PriceMinor: 50000, Currency: "NGN", DurationSeconds: 86400,
+			PriceMinor: 50000, BankChargeMinor: 1500, TotalMinor: 51500, Currency: "NGN", DurationSeconds: 86400,
 			DownloadBPS: 20_000_000, UploadBPS: 10_000_000, MaxDevices: 2, MaxConcurrentSessions: 1,
 		}},
 	}
@@ -60,7 +60,7 @@ func TestCatalogueUsesConfiguredTenantAndReturnsPublicFieldsOnly(t *testing.T) {
 			t.Fatalf("public catalogue leaked %q: %s", forbidden, response.Body)
 		}
 	}
-	for _, required := range []string{"Day pass", "price_minor", "duration_seconds", "download_bps", "max_devices"} {
+	for _, required := range []string{"Day pass", "price_minor", "bank_charge_minor", "total_minor", "51500", "duration_seconds", "download_bps", "max_devices"} {
 		if !strings.Contains(response.Body.String(), required) {
 			t.Fatalf("public catalogue omitted %q: %s", required, response.Body)
 		}

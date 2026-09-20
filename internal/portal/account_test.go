@@ -32,7 +32,7 @@ func TestCustomerAccountUsesOnlyTheAuthenticatedPrincipalScope(t *testing.T) {
 		found: true,
 		account: CustomerAccount{
 			Subscriptions: []CustomerSubscription{{
-				PlanName: "Weekly access", Status: "ACTIVE", PaymentStatus: "PAID", ExpiresAt: &expiresAt,
+				PlanName: "Weekly access", DeviceLabel: "Laptop", DeviceMAC: "aabbccddeeff", Status: "ACTIVE", PaymentStatus: "PAID", ExpiresAt: &expiresAt,
 			}},
 			Payments: []CustomerPayment{{
 				Reference: "pay-0123456789abcdef0123456789abcdef", AmountMinor: 250000, Currency: "NGN", Status: "SUCCESS", CreatedAt: expiresAt,
@@ -68,6 +68,9 @@ func TestCustomerAccountUsesOnlyTheAuthenticatedPrincipalScope(t *testing.T) {
 	}
 	if len(body.Data.Subscriptions) != 1 || body.Data.Subscriptions[0].PlanName != "Weekly access" || body.Data.Subscriptions[0].ExpiresAt == nil || !body.Data.Subscriptions[0].ExpiresAt.Equal(expiresAt) {
 		t.Fatalf("subscriptions=%+v", body.Data.Subscriptions)
+	}
+	if body.Data.Subscriptions[0].DeviceLabel != "Laptop" || body.Data.Subscriptions[0].DeviceMAC != "aabbccddeeff" {
+		t.Fatalf("device projection=%+v", body.Data.Subscriptions[0])
 	}
 	if len(body.Data.Payments) != 1 || body.Data.Payments[0].Reference != "pay-0123456789abcdef0123456789abcdef" || body.Data.Payments[0].AmountMinor != 250000 {
 		t.Fatalf("payments=%+v", body.Data.Payments)

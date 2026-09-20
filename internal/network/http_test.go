@@ -22,6 +22,52 @@ type memoryStore struct {
 	err      error
 }
 
+type memoryTetheringStore struct {
+	policy TetheringPolicy
+	actor  MutationActor
+	saved  bool
+}
+
+func (s *memoryTetheringStore) LoadTetheringPolicy(context.Context, string) (TetheringPolicy, error) {
+	return s.policy, nil
+}
+func (s *memoryTetheringStore) SaveTetheringPolicy(_ context.Context, _ string, actor MutationActor, policy TetheringPolicy) error {
+	s.policy, s.actor, s.saved = policy, actor, true
+	return nil
+}
+
+func TestTetheringPolicyRequiresNetworkWriteAuditsAndBoundsTTL(t *testing.T) {
+	store := &memoryTetheringStore{}
+	service, err := NewTetheringService(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _ := newTestHTTP(t)
+	handler.ConfigureTethering(service)
+	principal := auth.Principal{TenantID: networkTestTenantID, UserID: "44444444-4444-4444-8444-444444444444", Permissions: map[string]struct{}{"network.write": {}}}
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/network/tethering-policy", strings.NewReader(`{"enabled":true,"expected_client_ttl":64}`))
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), principal))
+	response := httptest.NewRecorder()
+	handler.putTetheringPolicy(response, request)
+	if response.Code != http.StatusOK || !store.saved || !store.policy.Enabled || store.policy.ExpectedClientTTL != 64 || store.actor.UserID != principal.UserID {
+		t.Fatalf("status=%d policy=%+v actor=%+v", response.Code, store.policy, store.actor)
+	}
+	request = httptest.NewRequest(http.MethodPut, "/api/v1/network/tethering-policy", strings.NewReader(`{"enabled":true,"expected_client_ttl":256}`))
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), principal))
+	response = httptest.NewRecorder()
+	handler.putTetheringPolicy(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("ttl above range status=%d", response.Code)
+	}
+	request = httptest.NewRequest(http.MethodPut, "/api/v1/network/tethering-policy", strings.NewReader(`{"enabled":true,"expected_client_ttl":64}`))
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: networkTestTenantID, UserID: principal.UserID}))
+	response = httptest.NewRecorder()
+	handler.putTetheringPolicy(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("missing permission status=%d", response.Code)
+	}
+}
+
 func TestExportReturnsNoStoreAttachmentWithoutSecretInErrors(t *testing.T) {
 	store := &lifecycleStoreStub{loaded: AAAConfiguration{RouterID: "22222222-2222-4222-8222-222222222222", NASID: "33333333-3333-4333-8333-333333333333", NASIPAddress: "172.16.0.4", RadiusSourceIP: "172.16.1.9", ShortName: "RB5009-LK-01"}}
 	service, err := NewService(store, credentialTestWrapper{keyID: "https://vault.example/keys/netcore-provider-kek/version"}, stepUpStub{}, "172.16.0.4")

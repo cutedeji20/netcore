@@ -87,4 +87,19 @@ func TestPortalDeploymentTemplatesPreserveHandoffBoundaries(t *testing.T) {
 			t.Fatalf("corrected RADIUS authorization migration missing qualified %q", want)
 		}
 	}
+
+	deviceBoundLimits := read("db", "migrations", "0051_radius_device_bound_subscriptions.up.sql")
+	for name, want := range map[string]string{
+		"bound matching device":    "subscription.device_id IS NOT NULL",
+		"bound device identity":    "device_row.id = v_subscription_device_id",
+		"bound device MAC":         "device_row.normalized_mac = v_mac",
+		"bound device ownership":   "device_row.customer_id = v_customer_id",
+		"bound device is active":   "device_row.status = 'ACTIVE'",
+		"legacy unbound subscription": "IF v_subscription_device_id IS NOT NULL THEN",
+		"RouterOS MAC normalization": "regexp_replace(COALESCE(p_client_mac, ''), '[^0-9A-Fa-f]', '', 'g')",
+	} {
+		if !strings.Contains(deviceBoundLimits, want) {
+			t.Fatalf("RADIUS device-bound authorization missing %s: %q", name, want)
+		}
+	}
 }

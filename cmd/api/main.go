@@ -26,6 +26,7 @@ import (
 	"github.com/netcore-isp/netcore/internal/config"
 	"github.com/netcore-isp/netcore/internal/customers"
 	"github.com/netcore-isp/netcore/internal/database"
+	"github.com/netcore-isp/netcore/internal/devices"
 	"github.com/netcore-isp/netcore/internal/health"
 	"github.com/netcore-isp/netcore/internal/integrations"
 	"github.com/netcore-isp/netcore/internal/logger"
@@ -174,6 +175,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	deviceStore, err := devices.NewPostgresStore(postgres)
+	if err != nil {
+		return err
+	}
+	deviceService, err := devices.NewService(deviceStore)
+	if err != nil {
+		return err
+	}
+	deviceHTTP, err := devices.NewHTTP(deviceService)
+	if err != nil {
+		return err
+	}
 	subscriptionStore, err := subscriptions.NewPostgresStore(postgres)
 	if err != nil {
 		return err
@@ -211,6 +224,14 @@ func run() error {
 		return fmt.Errorf("billing payment-attempt service: %w", err)
 	}
 	billingHTTP.ConfigureLifecycle(billingService)
+	billingSettingsService, err := billing.NewSettingsService(billingStore, authService)
+	if err != nil {
+		return fmt.Errorf("billing settings service: %w", err)
+	}
+	billingSettingsHTTP, err := billing.NewSettingsHTTP(billingSettingsService)
+	if err != nil {
+		return err
+	}
 	networkStore, err := network.NewPostgresStore(postgres)
 	if err != nil {
 		return err
@@ -224,6 +245,11 @@ func run() error {
 		return fmt.Errorf("network AAA service: %w", err)
 	}
 	networkHTTP.ConfigureLifecycle(networkService)
+	tetheringService, err := network.NewTetheringService(networkStore)
+	if err != nil {
+		return fmt.Errorf("network tethering service: %w", err)
+	}
+	networkHTTP.ConfigureTethering(tetheringService)
 	voucherStore, err := vouchers.NewPostgresStore(postgres)
 	if err != nil {
 		return err
@@ -359,6 +385,9 @@ func run() error {
 	if err := customerHTTP.Routes(mux, authHTTP); err != nil {
 		return err
 	}
+	if err := deviceHTTP.Routes(mux, authHTTP); err != nil {
+		return err
+	}
 	if err := subscriptionHTTP.Routes(mux, authHTTP); err != nil {
 		return err
 	}
@@ -369,6 +398,9 @@ func run() error {
 		return err
 	}
 	if err := billingHTTP.Routes(mux, authHTTP); err != nil {
+		return err
+	}
+	if err := billingSettingsHTTP.Routes(mux, authHTTP); err != nil {
 		return err
 	}
 	if err := networkHTTP.Routes(mux, authHTTP); err != nil {

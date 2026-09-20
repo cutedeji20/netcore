@@ -51,3 +51,10 @@ intentional.
 
 Do not enable this on a production NAS until the FreeRADIUS durable detail
 spool/replay path is configured and these checks pass.
+
+## Optional tethering policy pilot
+
+The tenant tethering setting renders a separate, operator-reviewed RouterOS
+artifact. It never imports rules automatically. See
+[`tethering-policy.md`](tethering-policy.md) for the strict TTL heuristic,
+scoped pilot procedure, protected traffic boundaries, and exact rollback.

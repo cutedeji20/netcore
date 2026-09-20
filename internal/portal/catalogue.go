@@ -19,6 +19,8 @@ type PublicPlan struct {
 	Name                  string
 	Description           string
 	PriceMinor            int64
+	BankChargeMinor       int64
+	TotalMinor            int64
 	Currency              string
 	DurationSeconds       int64
 	DownloadBPS           int64

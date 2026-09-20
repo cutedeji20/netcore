@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="/portal.css" />
     <script src="/portal-config.js"></script>
     <script src="/portal-checkout.js" defer></script>
+	<script src="/portal-pricing.js" defer></script>
     <script src="/portal-account.js" defer></script>
     <script src="/portal-recovery.js" defer></script>
     <script src="/portal-navigation.js" defer></script>
@@ -54,6 +55,10 @@
           <h1 id="plans-title">Simple plans for this connection.</h1>
           <p class="lead compact">Pick a plan to continue to secure payment. Your access starts only after payment is verified.</p>
           <div class="plan-grid" id="portal-plans" aria-live="polite"></div>
+          <label id="checkout-device-field" hidden>Device
+            <select id="checkout-device" required aria-describedby="plan-status"></select>
+          </label>
+          <button class="primary-action" id="checkout-submit" type="button" data-action="checkout" hidden disabled>Continue to secure payment <span>→</span></button>
           <p class="form-status" id="plan-status" role="status"></p>
         </section>
 

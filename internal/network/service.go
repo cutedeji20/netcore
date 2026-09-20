@@ -21,6 +21,32 @@ type StepUpVerifier interface {
 	VerifyStepUp(context.Context, auth.StepUpInput) error
 }
 
+// TetheringService keeps the public API independent from the RADIUS secret
+// lifecycle: policy updates are permission-checked and audit-backed by store.
+type TetheringService struct{ store TetheringStore }
+
+func NewTetheringService(store TetheringStore) (*TetheringService, error) {
+	if store == nil {
+		return nil, ErrServiceUnavailable
+	}
+	return &TetheringService{store: store}, nil
+}
+
+func (s *TetheringService) Get(ctx context.Context, tenantID string) (TetheringPolicy, error) {
+	if s == nil || s.store == nil || !validNetworkID(tenantID) {
+		return TetheringPolicy{}, ErrServiceUnavailable
+	}
+	return s.store.LoadTetheringPolicy(ctx, tenantID)
+}
+
+func (s *TetheringService) Update(ctx context.Context, principal auth.Principal, actor MutationActor, policy TetheringPolicy) error {
+	if s == nil || s.store == nil || !validNetworkID(principal.TenantID) || !validNetworkID(principal.UserID) || policy.ExpectedClientTTL < 64 || policy.ExpectedClientTTL > 255 {
+		return ErrServiceUnavailable
+	}
+	actor.UserID = principal.UserID
+	return s.store.SaveTetheringPolicy(ctx, principal.TenantID, actor, policy)
+}
+
 // Service coordinates MFA-gated router lifecycle work. It does not own the
 // RADIUS runtime and never persists a plaintext secret.
 type Service struct {

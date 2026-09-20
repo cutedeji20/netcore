@@ -10,6 +10,8 @@ test("builds a customer-only account display model from the portal response", ()
       customer_id: "must-not-reach-the-page",
       subscriptions: [{
         plan_name: "Weekly access",
+		device_label: "Phone A",
+		device_mac: "aabbccddeeff",
         status: "ACTIVE",
         payment_status: "PAID",
         starts_at: "2026-08-23T12:00:00Z",
@@ -30,6 +32,8 @@ test("builds a customer-only account display model from the portal response", ()
   assert.deepEqual(value, {
     subscriptions: [{
       planName: "Weekly access",
+		deviceLabel: "Phone A",
+		deviceMAC: "aabbccddeeff",
       status: "ACTIVE",
       paymentStatus: "PAID",
       startsAt: "2026-08-23T12:00:00Z",

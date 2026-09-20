@@ -25,6 +25,42 @@ func NewPostgresStore(db *database.Pool) (*PostgresStore, error) {
 	return &PostgresStore{db: db}, nil
 }
 
+func (s *PostgresStore) LoadTetheringPolicy(ctx context.Context, tenantID string) (policy TetheringPolicy, err error) {
+	if !validNetworkID(tenantID) {
+		return TetheringPolicy{}, ErrServiceUnavailable
+	}
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT enabled, expected_client_ttl FROM tenant_hotspot_tethering_policies WHERE tenant_id=$1`, tenantID).Scan(&policy.Enabled, &policy.ExpectedClientTTL)
+	})
+	return policy, err
+}
+
+func (s *PostgresStore) SaveTetheringPolicy(ctx context.Context, tenantID string, actor MutationActor, policy TetheringPolicy) error {
+	if !validNetworkID(tenantID) || !validNetworkID(actor.UserID) || policy.ExpectedClientTTL < 64 || policy.ExpectedClientTTL > 255 {
+		return ErrServiceUnavailable
+	}
+	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return saveTetheringPolicyTx(ctx, tx, tenantID, actor, policy)
+	})
+}
+
+// saveTetheringPolicyTx keeps the policy update and its audit record in the
+// same tenant transaction, so either both durable facts commit or neither does.
+func saveTetheringPolicyTx(ctx context.Context, tx pgx.Tx, tenantID string, actor MutationActor, policy TetheringPolicy) error {
+	var oldEnabled bool
+	var oldTTL int
+	if err := tx.QueryRow(ctx, `SELECT enabled, expected_client_ttl FROM tenant_hotspot_tethering_policies WHERE tenant_id=$1 FOR UPDATE`, tenantID).Scan(&oldEnabled, &oldTTL); err != nil {
+		return fmt.Errorf("load tethering policy: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE tenant_hotspot_tethering_policies SET enabled=$2, expected_client_ttl=$3, updated_at=now(), updated_by=$4::uuid WHERE tenant_id=$1`, tenantID, policy.Enabled, policy.ExpectedClientTTL, actor.UserID); err != nil {
+		return fmt.Errorf("save tethering policy: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata) VALUES ($1,'STAFF',$2::uuid,'HOTSPOT_TETHERING_POLICY_UPDATED','tenant',$1::uuid,jsonb_build_object('old_enabled',$3::boolean,'old_expected_client_ttl',$4::integer,'new_enabled',$5::boolean,'new_expected_client_ttl',$6::integer))`, tenantID, actor.UserID, oldEnabled, oldTTL, policy.Enabled, policy.ExpectedClientTTL); err != nil {
+		return fmt.Errorf("write tethering policy audit record: %w", err)
+	}
+	return nil
+}
+
 func (s *PostgresStore) List(ctx context.Context, tenantID string, options ListOptions) (page Page, err error) {
 	if tenantID == "" || options.Limit < 1 || (options.Status != "" && !IsValidRouterStatus(options.Status)) {
 		return Page{}, ErrInvalidPage

@@ -82,6 +82,7 @@ type Initiation struct {
 	TenantID       string
 	UserID         string
 	PlanID         string
+	DeviceID       string
 	Gateway        string
 	Reference      string
 	IdempotencyKey string
@@ -89,12 +90,14 @@ type Initiation struct {
 }
 
 type PendingPayment struct {
-	ID             string
-	SubscriptionID string
-	Reference      string
-	AmountMinor    int64
-	Currency       string
-	CustomerEmail  string
+	ID              string
+	SubscriptionID  string
+	Reference       string
+	AmountMinor     int64
+	PlanAmountMinor int64
+	BankChargeMinor int64
+	Currency        string
+	CustomerEmail   string
 }
 
 // Checkout is safe to return to a browser. It contains no gateway secret,
@@ -105,13 +108,15 @@ type Checkout struct {
 }
 
 type Payment struct {
-	ID             string
-	SubscriptionID string
-	Gateway        string
-	Reference      string
-	AmountMinor    int64
-	Currency       string
-	Status         string
+	ID              string
+	SubscriptionID  string
+	Gateway         string
+	Reference       string
+	AmountMinor     int64
+	PlanAmountMinor int64
+	BankChargeMinor int64
+	Currency        string
+	Status          string
 }
 
 type Activation struct {
@@ -160,8 +165,8 @@ func NewService(store Store, gateway Gateway, callbackURLs ...string) (*Service,
 
 // Initiate freezes the plan price in a PENDING payment, then begins checkout.
 // The key binds a customer retry to exactly one frozen payment.
-func (s *Service) Initiate(ctx context.Context, tenantID, userID, planID, idempotencyKey string) (Checkout, error) {
-	if s == nil || s.store == nil || s.gateway == nil || !validUUID(tenantID) || !validUUID(userID) || !validUUID(planID) || !validIdempotencyKey(idempotencyKey) {
+func (s *Service) Initiate(ctx context.Context, tenantID, userID, planID, deviceID, idempotencyKey string) (Checkout, error) {
+	if s == nil || s.store == nil || s.gateway == nil || !validUUID(tenantID) || !validUUID(userID) || !validUUID(planID) || !validUUID(deviceID) || !validIdempotencyKey(idempotencyKey) {
 		return Checkout{}, ErrInvalidRequest
 	}
 	if !s.gateway.Available() {
@@ -176,9 +181,9 @@ func (s *Service) Initiate(ctx context.Context, tenantID, userID, planID, idempo
 	if err != nil {
 		return Checkout{}, fmt.Errorf("%w: generate provider reference", ErrGatewayUnavailable)
 	}
-	requestHash := initiationHash(planID)
+	requestHash := initiationHash(planID, deviceID)
 	pending, replay, err := s.store.PrepareInitiation(ctx, Initiation{
-		TenantID: tenantID, UserID: userID, PlanID: planID, Gateway: s.gateway.Name(),
+		TenantID: tenantID, UserID: userID, PlanID: planID, DeviceID: deviceID, Gateway: s.gateway.Name(),
 		Reference: reference, IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 	})
 	if err != nil {
@@ -260,11 +265,11 @@ func sameCurrency(a, b string) bool {
 	return strings.ToUpper(strings.TrimSpace(a)) == strings.ToUpper(strings.TrimSpace(b)) && len(strings.TrimSpace(a)) == 3
 }
 
-func initiationHash(planID string) []byte {
-	// The request has one mutable business input.  Hashing this canonical value
+func initiationHash(planID, deviceID string) []byte {
+	// The request has two mutable business inputs. Hashing their canonical values
 	// lets the database distinguish a retry from a different purchase reused
 	// under the same key.
-	sum := sha256.Sum256([]byte("plan_id=" + planID))
+	sum := sha256.Sum256([]byte("plan_id=" + strings.ToLower(planID) + "&device_id=" + strings.ToLower(deviceID)))
 	return sum[:]
 }
 

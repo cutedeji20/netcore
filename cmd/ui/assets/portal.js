@@ -9,6 +9,7 @@
   var accountsEnabled = liveMode && portalConfig.accountsEnabled === true;
   var paymentsEnabled = liveMode && portalConfig.paymentsEnabled === true;
   var checkoutStorage = window.NetCorePortalCheckout || null;
+	var pricing = window.NetCorePortalPricing || null;
   var accountPresentation = window.NetCorePortalAccount || null;
   var recovery = window.NetCorePortalRecovery || null;
   var postLoginNavigation = window.NetCorePortalNavigation || null;
@@ -30,6 +31,9 @@
   };
   var planStatus = document.querySelector("#plan-status");
   var planGrid = document.querySelector("#portal-plans");
+  var checkoutDeviceField = document.querySelector("#checkout-device-field");
+  var checkoutDevice = document.querySelector("#checkout-device");
+  var checkoutSubmit = document.querySelector("#checkout-submit");
   var registerStatus = document.querySelector("#register-status");
   var verifyStatus = document.querySelector("#verify-status");
   var loginStatus = document.querySelector("#login-status");
@@ -48,6 +52,7 @@
   var catalogueLoaded = false;
   var selectedPlanName = "";
   var selectedPlanID = "";
+  var selectedDeviceID = "";
   var pendingRegistration = null;
   var pendingPasswordReset = null;
   var customerAuthenticated = false;
@@ -89,6 +94,7 @@
         accountRequested = false;
         showView("plans");
       }
+      if (action.dataset.action === "checkout") beginCheckout();
     }
 
     var plan = event.target.closest("[data-plan-id]");
@@ -104,7 +110,7 @@
       selectedPlanID = String(plan.dataset.planId || "");
       selectedPlanName = plan.dataset.planName || "your selected plan";
       if (customerAuthenticated) {
-        beginCheckout();
+        loadCheckoutDevices();
         return;
       }
       showView("register");
@@ -356,11 +362,15 @@
       duration.textContent = formatDuration(plan.duration_seconds);
       top.append(name, duration);
 
+      var amounts = pricing && pricing.breakdown ? pricing.breakdown(plan) : null;
+      if (!amounts) return;
       var price = document.createElement("strong");
-      price.textContent = formatMoney(plan.price_minor, plan.currency);
+      price.textContent = formatMoney(amounts.totalMinor, amounts.currency);
+	  var breakdown = document.createElement("small");
+	  breakdown.textContent = "Plan " + formatMoney(amounts.priceMinor, amounts.currency) + " · Bank charge " + formatMoney(amounts.bankChargeMinor, amounts.currency) + " · Total " + formatMoney(amounts.totalMinor, amounts.currency);
       var detail = document.createElement("small");
       detail.textContent = plan.description || accessHighlight(plan);
-      option.append(top, price, detail);
+	  option.append(top, price, breakdown, detail);
       planGrid.append(option);
     });
     planStatus.textContent = "";
@@ -412,7 +422,7 @@
       account.subscriptions.forEach(function (subscription) {
         var row = accountRow(subscription.planName, subscription.status, subscription.status === "ACTIVE" && subscription.expiresAt ? "Expires " + formatPortalDate(subscription.expiresAt) : subscription.startsAt ? "Starts " + formatPortalDate(subscription.startsAt) : "Waiting for payment confirmation");
         var detail = document.createElement("small");
-        detail.textContent = "Payment: " + formatState(subscription.paymentStatus);
+        detail.textContent = "Device: " + (subscription.deviceLabel || subscription.deviceMAC || "Not assigned") + " · Payment: " + formatState(subscription.paymentStatus);
         row.append(detail);
         accountSubscriptions.append(row);
       });
@@ -561,7 +571,8 @@
         return confirmReturnedPayment();
       }
       if (destination === "checkout") {
-        return beginCheckout();
+        showView("plans");
+        return loadCheckoutDevices();
       }
       if (destination === "account") {
         showView("account");
@@ -588,11 +599,16 @@
       planStatus.textContent = "Open this page from NetCore Wi-Fi to purchase access for this device.";
       return Promise.resolve();
     }
+    var request = checkoutStorage && checkoutStorage.paymentRequest ? checkoutStorage.paymentRequest(selectedPlanID, selectedDeviceID) : null;
+    if (!request) {
+      planStatus.textContent = "Choose the device this plan is for before continuing to payment.";
+      return Promise.resolve();
+    }
     if (checkoutPending) return Promise.resolve();
     checkoutPending = true;
     planStatus.textContent = "Preparing secure payment for " + selectedPlanName + "…";
-    var idempotencyKey = paymentIdempotencyKey(selectedPlanID);
-    return postJSON("/api/v1/payments", { plan_id: selectedPlanID }, { "Idempotency-Key": idempotencyKey }).then(function (result) {
+    var idempotencyKey = paymentIdempotencyKey(selectedPlanID, selectedDeviceID);
+    return postJSON("/api/v1/payments", request, { "Idempotency-Key": idempotencyKey }).then(function (result) {
       if (!result.response.ok || !result.body.reference || !result.body.authorization_url) {
         throw new Error(humanError(result.body, "We could not start secure payment. Please try again."));
       }
@@ -659,15 +675,15 @@
     });
   }
 
-  function paymentIdempotencyKey(planID) {
+  function paymentIdempotencyKey(planID, deviceID) {
     var storageKey = "netcore.portal.payment.attempt.v1";
     try {
       var existing = JSON.parse(window.sessionStorage.getItem(storageKey) || "null");
-      if (existing && existing.plan_id === planID && typeof existing.key === "string" && existing.key.length >= 16 && existing.key.length <= 200) {
+      if (existing && existing.plan_id === planID && existing.device_id === deviceID && typeof existing.key === "string" && existing.key.length >= 16 && existing.key.length <= 200) {
         return existing.key;
       }
       var key = newBrowserKey();
-      window.sessionStorage.setItem(storageKey, JSON.stringify({ plan_id: planID, key: key }));
+      window.sessionStorage.setItem(storageKey, JSON.stringify({ plan_id: planID, device_id: deviceID, key: key }));
       return key;
     } catch (_) {
       return newBrowserKey();
@@ -680,6 +696,72 @@
     } catch (_) {
       // The server still protects the payment boundary if browser storage fails.
     }
+  }
+
+  checkoutDevice.addEventListener("change", function () {
+    selectedDeviceID = String(checkoutDevice.value || "");
+    checkoutSubmit.disabled = !selectedDeviceID;
+  });
+
+  function normalizeMAC(value) {
+    var normalized = String(value || "").replace(/[^0-9a-f]/gi, "").toLowerCase();
+    return normalized.length === 12 ? normalized : "";
+  }
+
+  function loadCheckoutDevices() {
+    if (!customerAuthenticated || !selectedPlanID) return Promise.resolve();
+    checkoutDeviceField.hidden = false;
+    checkoutSubmit.hidden = false;
+    checkoutSubmit.disabled = true;
+    planStatus.textContent = "Loading your devices…";
+    return window.fetch(endpoint("/api/v1/portal/devices"), {
+      credentials: "include",
+      headers: { "Accept": "application/json" }
+    }).then(function (response) {
+      return responseBody(response).then(function (body) { return { response: response, body: body }; });
+    }).then(function (result) {
+      if (result.response.status === 401) {
+        customerAuthenticated = false;
+        showView("login");
+        loginStatus.textContent = "Sign in to choose the device for this plan.";
+        return [];
+      }
+      if (!result.response.ok) throw new Error(humanError(result.body, "We could not load your devices."));
+      return Array.isArray(result.body.data) ? result.body.data : [];
+    }).then(function (devices) {
+      devices = checkoutStorage && checkoutStorage.activeDevices ? checkoutStorage.activeDevices(devices) : [];
+      var currentMAC = connection ? normalizeMAC(connection.client_mac) : "";
+      var current = devices.find(function (device) { return String(device.normalized_mac || "") === currentMAC; });
+      if (current || !currentMAC) return devices;
+      return postJSON("/api/v1/portal/devices", { mac: connection.client_mac, label: "" }).then(function (result) {
+        if (!result.response.ok || !result.body.data) throw new Error(humanError(result.body, "We could not register this Wi-Fi device."));
+        devices.push(result.body.data);
+        return devices;
+      });
+    }).then(function (devices) {
+      if (!devices.length) throw new Error("Register a device before continuing to payment.");
+      renderCheckoutDevices(devices);
+      planStatus.textContent = "Choose the device this plan is for, then continue to payment.";
+    }).catch(function (error) {
+      planStatus.textContent = error && error.message ? error.message : "We could not load your devices.";
+    });
+  }
+
+  function renderCheckoutDevices(devices) {
+    checkoutDevice.replaceChildren();
+    var currentMAC = connection ? normalizeMAC(connection.client_mac) : "";
+    devices.forEach(function (device) {
+      var id = String(device.id || "");
+      if (!id) return;
+      var option = document.createElement("option");
+      option.value = id;
+      option.textContent = String(device.label || device.normalized_mac || "Registered device");
+      if (!selectedDeviceID && String(device.normalized_mac || "") === currentMAC) selectedDeviceID = id;
+      checkoutDevice.append(option);
+    });
+    if (!selectedDeviceID && checkoutDevice.options.length) selectedDeviceID = checkoutDevice.options[0].value;
+    checkoutDevice.value = selectedDeviceID;
+    checkoutSubmit.disabled = !selectedDeviceID;
   }
 
   function newBrowserKey() {

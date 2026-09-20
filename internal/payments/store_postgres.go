@@ -38,7 +38,7 @@ func NewPostgresStore(db *database.Pool, receiptEnabled ...bool) (*PostgresStore
 }
 
 func (s *PostgresStore) PrepareInitiation(ctx context.Context, input Initiation) (pending PendingPayment, replay *Checkout, err error) {
-	if !validUUID(input.TenantID) || !validUUID(input.UserID) || !validUUID(input.PlanID) || strings.TrimSpace(input.Gateway) == "" || !validReference(input.Reference) || !validIdempotencyKey(input.IdempotencyKey) || len(input.RequestHash) != 32 {
+	if !validUUID(input.TenantID) || !validUUID(input.UserID) || !validUUID(input.PlanID) || !validUUID(input.DeviceID) || strings.TrimSpace(input.Gateway) == "" || !validReference(input.Reference) || !validIdempotencyKey(input.IdempotencyKey) || len(input.RequestHash) != 32 {
 		return PendingPayment{}, nil, ErrInvalidRequest
 	}
 	err = s.db.InTenantTx(ctx, input.TenantID, func(tx pgx.Tx) error {
@@ -80,21 +80,25 @@ SELECT user_id::text, request_hash, response_status, COALESCE(response_body::tex
 		}
 
 		var customerID, customerEmail, currency string
-		var amountMinor int64
+		var planAmountMinor, bankChargeMinor, amountMinor int64
 		planErr := tx.QueryRow(ctx, `
 SELECT c.id::text,
        COALESCE(NULLIF(c.email::text, ''), u.email::text, ''),
        p.price_minor,
-       p.currency
+       p.currency,
+       bs.fixed_bank_charge_minor
   FROM customers AS c
   JOIN users AS u ON u.id = c.user_id AND u.tenant_id = c.tenant_id
   JOIN plans AS p ON p.tenant_id = c.tenant_id
+	  JOIN devices AS d ON d.tenant_id = c.tenant_id AND d.customer_id = c.id AND d.id = $4 AND d.status = 'ACTIVE'
+  JOIN tenant_billing_settings AS bs ON bs.tenant_id = c.tenant_id
  WHERE c.tenant_id = $1
    AND c.user_id = $2
    AND c.status = 'ACTIVE'
    AND p.id = $3
    AND p.status = 'ACTIVE'
-   AND p.price_minor > 0`, input.TenantID, input.UserID, input.PlanID).Scan(&customerID, &customerEmail, &amountMinor, &currency)
+	   AND p.price_minor > 0
+ FOR UPDATE OF p, bs, d`, input.TenantID, input.UserID, input.PlanID, input.DeviceID).Scan(&customerID, &customerEmail, &planAmountMinor, &currency, &bankChargeMinor)
 		if errors.Is(planErr, pgx.ErrNoRows) {
 			return ErrPaymentNotFound
 		}
@@ -104,12 +108,16 @@ SELECT c.id::text,
 		if strings.TrimSpace(customerEmail) == "" {
 			return ErrInvalidRequest
 		}
+		if bankChargeMinor < 0 || planAmountMinor > int64(^uint64(0)>>1)-bankChargeMinor {
+			return ErrInvalidRequest
+		}
+		amountMinor = planAmountMinor + bankChargeMinor
 
 		var subscriptionID string
 		if err := tx.QueryRow(ctx, `
-INSERT INTO subscriptions (tenant_id, customer_id, plan_id, status, payment_status)
-VALUES ($1, $2, $3, 'PENDING', 'UNPAID')
-RETURNING id::text`, input.TenantID, customerID, input.PlanID).Scan(&subscriptionID); err != nil {
+INSERT INTO subscriptions (tenant_id, customer_id, plan_id, device_id, status, payment_status)
+VALUES ($1, $2, $3, $4, 'PENDING', 'UNPAID')
+RETURNING id::text`, input.TenantID, customerID, input.PlanID, input.DeviceID).Scan(&subscriptionID); err != nil {
 			return fmt.Errorf("payments: create pending subscription: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
@@ -121,9 +129,9 @@ VALUES ($1, $2, NULL, 'PENDING', 'PAYMENT', 'CUSTOMER', $3, '{}'::jsonb)`, input
 		var paymentID string
 		if err := tx.QueryRow(ctx, `
 INSERT INTO payments
-    (tenant_id, customer_id, subscription_id, gateway, provider_reference, amount_minor, currency, status)
-VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING')
-RETURNING id::text`, input.TenantID, customerID, subscriptionID, input.Gateway, input.Reference, amountMinor, strings.ToUpper(currency)).Scan(&paymentID); err != nil {
+    (tenant_id, customer_id, subscription_id, gateway, provider_reference, amount_minor, plan_amount_minor, bank_charge_minor, currency, status)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'PENDING')
+RETURNING id::text`, input.TenantID, customerID, subscriptionID, input.Gateway, input.Reference, amountMinor, planAmountMinor, bankChargeMinor, strings.ToUpper(currency)).Scan(&paymentID); err != nil {
 			return fmt.Errorf("payments: create pending payment: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
@@ -136,7 +144,7 @@ VALUES ($1, $2, 'POST /api/v1/payments', $3, $4,
 			// second pending subscription and lets the browser safely retry.
 			return fmt.Errorf("payments: reserve idempotency key: %w", err)
 		}
-		pending = PendingPayment{ID: paymentID, SubscriptionID: subscriptionID, Reference: input.Reference, AmountMinor: amountMinor, Currency: strings.ToUpper(currency), CustomerEmail: customerEmail}
+		pending = PendingPayment{ID: paymentID, SubscriptionID: subscriptionID, Reference: input.Reference, PlanAmountMinor: planAmountMinor, BankChargeMinor: bankChargeMinor, AmountMinor: amountMinor, Currency: strings.ToUpper(currency), CustomerEmail: customerEmail}
 		return nil
 	})
 	if isIdempotencyConflict(err) {
@@ -156,7 +164,7 @@ func isIdempotencyConflict(err error) bool {
 func loadPending(ctx context.Context, tx pgx.Tx, tenantID, userID, gateway, reference string) (PendingPayment, error) {
 	var pending PendingPayment
 	err := tx.QueryRow(ctx, `
-SELECT p.id::text, p.subscription_id::text, p.provider_reference, p.amount_minor, p.currency,
+SELECT p.id::text, p.subscription_id::text, p.provider_reference, p.amount_minor, p.plan_amount_minor, p.bank_charge_minor, p.currency,
        COALESCE(NULLIF(c.email::text, ''), u.email::text, '')
   FROM payments AS p
   JOIN customers AS c ON c.id = p.customer_id AND c.tenant_id = p.tenant_id
@@ -166,7 +174,7 @@ SELECT p.id::text, p.subscription_id::text, p.provider_reference, p.amount_minor
    AND p.gateway = $3
    AND p.provider_reference = $4
    AND p.status = 'PENDING'`, tenantID, userID, gateway, reference).Scan(
-		&pending.ID, &pending.SubscriptionID, &pending.Reference, &pending.AmountMinor, &pending.Currency, &pending.CustomerEmail,
+		&pending.ID, &pending.SubscriptionID, &pending.Reference, &pending.AmountMinor, &pending.PlanAmountMinor, &pending.BankChargeMinor, &pending.Currency, &pending.CustomerEmail,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PendingPayment{}, ErrPaymentNotPending
@@ -211,14 +219,14 @@ func (s *PostgresStore) PaymentForVerification(ctx context.Context, tenantID, us
 	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
 SELECT p.id::text, p.subscription_id::text, p.gateway, p.provider_reference,
-       p.amount_minor, p.currency, p.status
+       p.amount_minor, p.plan_amount_minor, p.bank_charge_minor, p.currency, p.status
   FROM payments AS p
   JOIN customers AS c ON c.id = p.customer_id AND c.tenant_id = p.tenant_id
  WHERE p.tenant_id = $1
    AND c.user_id = $2
    AND p.provider_reference = $3`, tenantID, userID, reference).Scan(
 			&payment.ID, &payment.SubscriptionID, &payment.Gateway, &payment.Reference,
-			&payment.AmountMinor, &payment.Currency, &payment.Status,
+			&payment.AmountMinor, &payment.PlanAmountMinor, &payment.BankChargeMinor, &payment.Currency, &payment.Status,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrPaymentNotFound

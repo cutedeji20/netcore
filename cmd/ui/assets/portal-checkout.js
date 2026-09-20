@@ -30,6 +30,22 @@
     }
   }
 
+  function validUUID(value) {
+    return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  }
+
+  function paymentRequest(planID, deviceID) {
+    if (!validUUID(planID) || !validUUID(deviceID)) return null;
+    return { plan_id: planID, device_id: deviceID };
+  }
+
+  function activeDevices(devices) {
+    if (!Array.isArray(devices)) return [];
+    return devices.filter(function (device) {
+      return device && typeof device === "object" && validUUID(device.id) && String(device.status || "").toUpperCase() === "ACTIVE";
+    });
+  }
+
   function rememberPaymentReturn(storage, reference, connection) {
     if (!validReference(reference) || !validConnection(connection)) return false;
     try {
@@ -85,6 +101,8 @@
   return {
     storageKey: storageKey,
     validReference: validReference,
+    paymentRequest: paymentRequest,
+    activeDevices: activeDevices,
     rememberPaymentReturn: rememberPaymentReturn,
     readPaymentReturn: readPaymentReturn,
     clearPaymentReturn: clearPaymentReturn

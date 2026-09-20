@@ -30,14 +30,14 @@ const liveAdapterPaths = [
   "/live-list-config.js",
   "/live-list-controls.js",
   "/live-customers.js", "/live-subscriptions.js", "/live-plans.js", "/live-sessions.js",
-  "/live-billing.js", "/live-network.js", "/live-vouchers.js", "/live-team.js",
+  "/live-billing.js", "/billing-settings.js", "/live-billing-settings.js", "/live-network.js", "/live-vouchers.js", "/live-team.js",
   "/live-security.js", "/live-automations.js", "/live-workspace.js", "/live-payment-readiness.js", "/integration-display.js", "/live-integrations.js", "/session-expiry.js"
 ];
 const hasLiveConfig = adminConfig.mode === "live" && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(String(adminConfig.tenant || ""));
 let adminState = { authorised: false, adaptersLoaded: false, identity: null };
 let cancelSessionExpiry = () => {};
 let toastTimer;
-const readOnlyOperationalPages = new Set(["subscriptions", "sessions", "vouchers", "billing", "security", "automations", "settings"]);
+const readOnlyOperationalPages = new Set(["subscriptions", "sessions", "vouchers", "security", "automations", "settings"]);
 
 const tag = (item) => {
   const [label, type = "gray"] = item.split("|");

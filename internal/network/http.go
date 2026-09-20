@@ -21,6 +21,7 @@ const maxSearchLength = 120
 type HTTP struct {
 	store           Store
 	lifecycle       *Service
+	tethering       *TetheringService
 	defaultPageSize int
 	maxPageSize     int
 	clientIP        func(*http.Request) string
@@ -28,7 +29,8 @@ type HTTP struct {
 
 // ConfigureLifecycle adds secret-bearing routes only after the API has a
 // configured Key Vault wrapper and private RADIUS address.
-func (h *HTTP) ConfigureLifecycle(service *Service) { h.lifecycle = service }
+func (h *HTTP) ConfigureLifecycle(service *Service)          { h.lifecycle = service }
+func (h *HTTP) ConfigureTethering(service *TetheringService) { h.tethering = service }
 
 func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
 	if store == nil {
@@ -60,8 +62,77 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	mux.Handle("POST /api/v1/network/routers/{routerID}/aaa/verify", sessions.RequireAuth(auth.RequirePermission("network.write", http.HandlerFunc(h.verifyAAA))))
 	mux.Handle("POST /api/v1/network/routers/{routerID}/aaa/activate", sessions.RequireAuth(auth.RequirePermission("network.write", h.changeNASStatus(NASStatusActive))))
 	mux.Handle("POST /api/v1/network/routers/{routerID}/aaa/disable", sessions.RequireAuth(auth.RequirePermission("network.write", h.changeNASStatus(NASStatusDisabled))))
+	mux.Handle("GET /api/v1/network/tethering-policy", sessions.RequireAuth(auth.RequirePermission("network.read", http.HandlerFunc(h.getTetheringPolicy))))
+	mux.Handle("PUT /api/v1/network/tethering-policy", sessions.RequireAuth(auth.RequirePermission("network.write", http.HandlerFunc(h.putTetheringPolicy))))
 	h.clientIP = sessions.ClientIP
 	return nil
+}
+
+func (h *HTTP) getTetheringPolicy(w http.ResponseWriter, r *http.Request) {
+	p, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || p.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if h.tethering == nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_UNAVAILABLE", "Tethering policy is not configured.")
+		return
+	}
+	policy, err := h.tethering.Get(r.Context(), p.TenantID)
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_UNAVAILABLE", "Tethering policy is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Data struct {
+			Enabled           bool `json:"enabled"`
+			ExpectedClientTTL int  `json:"expected_client_ttl"`
+		} `json:"data"`
+	}{Data: struct {
+		Enabled           bool `json:"enabled"`
+		ExpectedClientTTL int  `json:"expected_client_ttl"`
+	}{policy.Enabled, policy.ExpectedClientTTL}})
+}
+
+func (h *HTTP) putTetheringPolicy(w http.ResponseWriter, r *http.Request) {
+	p, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || p.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if !p.HasPermission("network.write") {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "You do not have permission to change tethering policy.")
+		return
+	}
+	if h.tethering == nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_UNAVAILABLE", "Tethering policy is not configured.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
+	var in struct {
+		Enabled           bool `json:"enabled"`
+		ExpectedClientTTL int  `json:"expected_client_ttl"`
+	}
+	d := json.NewDecoder(r.Body)
+	d.DisallowUnknownFields()
+	if err := d.Decode(&in); err != nil || d.Decode(&struct{}{}) != io.EOF || in.ExpectedClientTTL < 64 || in.ExpectedClientTTL > 255 {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Expected client TTL must be between 64 and 255.")
+		return
+	}
+	if err := h.tethering.Update(r.Context(), p, h.mutationActor(r, p.UserID), TetheringPolicy{Enabled: in.Enabled, ExpectedClientTTL: in.ExpectedClientTTL}); err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "NETWORK_UNAVAILABLE", "Tethering policy could not be saved.")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Data struct {
+			Enabled           bool `json:"enabled"`
+			ExpectedClientTTL int  `json:"expected_client_ttl"`
+		} `json:"data"`
+	}{Data: struct {
+		Enabled           bool `json:"enabled"`
+		ExpectedClientTTL int  `json:"expected_client_ttl"`
+	}{in.Enabled, in.ExpectedClientTTL}})
 }
 
 func (h *HTTP) mutationActor(r *http.Request, userID string) MutationActor {
