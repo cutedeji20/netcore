@@ -15,6 +15,8 @@ var (
 // identifiers, enforcement data, and usage records remain server-side.
 type CustomerSubscription struct {
 	PlanName      string
+	DeviceLabel   string
+	DeviceMAC     string
 	Status        string
 	PaymentStatus string
 	StartsAt      *time.Time

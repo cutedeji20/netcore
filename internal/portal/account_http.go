@@ -50,6 +50,7 @@ func (h *AccountHTTP) account(w http.ResponseWriter, r *http.Request) {
 	for _, subscription := range account.Subscriptions {
 		response.Data.Subscriptions = append(response.Data.Subscriptions, customerSubscriptionResponse{
 			PlanName: subscription.PlanName, Status: subscription.Status, PaymentStatus: subscription.PaymentStatus,
+			DeviceLabel: subscription.DeviceLabel, DeviceMAC: subscription.DeviceMAC,
 			StartsAt: subscription.StartsAt, ExpiresAt: subscription.ExpiresAt,
 		})
 	}
@@ -73,6 +74,8 @@ type customerAccountData struct {
 
 type customerSubscriptionResponse struct {
 	PlanName      string     `json:"plan_name"`
+	DeviceLabel   string     `json:"device_label,omitempty"`
+	DeviceMAC     string     `json:"device_mac,omitempty"`
 	Status        string     `json:"status"`
 	PaymentStatus string     `json:"payment_status"`
 	StartsAt      *time.Time `json:"starts_at,omitempty"`

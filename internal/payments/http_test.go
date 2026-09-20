@@ -16,7 +16,7 @@ func TestInitiateRejectsBrowserAmountAndRequiresIdempotencyKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(`{"plan_id":"`+paymentTestPlan+`","amount_minor":1}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(`{"plan_id":"`+paymentTestPlan+`","device_id":"`+paymentTestDevice+`","amount_minor":1}`))
 	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: paymentTestTenant, UserID: paymentTestUser}))
 	response := httptest.NewRecorder()
 	h.initiate(response, request)
@@ -24,7 +24,7 @@ func TestInitiateRejectsBrowserAmountAndRequiresIdempotencyKey(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body)
 	}
 
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(`{"plan_id":"`+paymentTestPlan+`"}`))
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(`{"plan_id":"`+paymentTestPlan+`","device_id":"`+paymentTestDevice+`"}`))
 	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: paymentTestTenant, UserID: paymentTestUser}))
 	response = httptest.NewRecorder()
 	h.initiate(response, request)
@@ -38,7 +38,7 @@ func TestInitiateRejectsCrossSiteOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(`{"plan_id":"`+paymentTestPlan+`"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(`{"plan_id":"`+paymentTestPlan+`","device_id":"`+paymentTestDevice+`"}`))
 	request.Header.Set("Origin", "https://attacker.example")
 	request.Header.Set("Idempotency-Key", "payment-retry-key-0001")
 	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: paymentTestTenant, UserID: paymentTestUser}))
@@ -46,5 +46,21 @@ func TestInitiateRejectsCrossSiteOrigin(t *testing.T) {
 	h.initiate(response, request)
 	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "CSRF_REJECTED") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+}
+
+func TestInitiateRequiresDeviceID(t *testing.T) {
+	store := &memoryPaymentStore{}
+	h, err := NewHTTP(newPaymentService(t, store, &memoryGateway{available: true}), []string{"https://portal.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/payments", strings.NewReader(`{"plan_id":"`+paymentTestPlan+`"}`))
+	request.Header.Set("Idempotency-Key", "payment-retry-key-0001")
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: paymentTestTenant, UserID: paymentTestUser}))
+	response := httptest.NewRecorder()
+	h.initiate(response, request)
+	if response.Code != http.StatusBadRequest || store.prepareCalls != 0 {
+		t.Fatalf("status=%d prepare=%d body=%s", response.Code, store.prepareCalls, response.Body)
 	}
 }

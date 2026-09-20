@@ -44,7 +44,8 @@ func (h *HTTP) initiate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		PlanID string `json:"plan_id"`
+		PlanID   string `json:"plan_id"`
+		DeviceID string `json:"device_id"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Choose a valid internet plan.")
@@ -55,7 +56,7 @@ func (h *HTTP) initiate(w http.ResponseWriter, r *http.Request) {
 		security.WriteError(w, r, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Please retry from the payment page.")
 		return
 	}
-	checkout, err := h.service.Initiate(r.Context(), principal.TenantID, principal.UserID, input.PlanID, key)
+	checkout, err := h.service.Initiate(r.Context(), principal.TenantID, principal.UserID, input.PlanID, input.DeviceID, key)
 	switch {
 	case errors.Is(err, ErrInvalidRequest):
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Choose a valid internet plan.")

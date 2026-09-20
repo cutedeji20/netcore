@@ -38,7 +38,7 @@ func NewPostgresStore(db *database.Pool, receiptEnabled ...bool) (*PostgresStore
 }
 
 func (s *PostgresStore) PrepareInitiation(ctx context.Context, input Initiation) (pending PendingPayment, replay *Checkout, err error) {
-	if !validUUID(input.TenantID) || !validUUID(input.UserID) || !validUUID(input.PlanID) || strings.TrimSpace(input.Gateway) == "" || !validReference(input.Reference) || !validIdempotencyKey(input.IdempotencyKey) || len(input.RequestHash) != 32 {
+	if !validUUID(input.TenantID) || !validUUID(input.UserID) || !validUUID(input.PlanID) || !validUUID(input.DeviceID) || strings.TrimSpace(input.Gateway) == "" || !validReference(input.Reference) || !validIdempotencyKey(input.IdempotencyKey) || len(input.RequestHash) != 32 {
 		return PendingPayment{}, nil, ErrInvalidRequest
 	}
 	err = s.db.InTenantTx(ctx, input.TenantID, func(tx pgx.Tx) error {
@@ -90,6 +90,7 @@ SELECT c.id::text,
   FROM customers AS c
   JOIN users AS u ON u.id = c.user_id AND u.tenant_id = c.tenant_id
   JOIN plans AS p ON p.tenant_id = c.tenant_id
+	  JOIN customer_devices AS d ON d.tenant_id = c.tenant_id AND d.customer_id = c.id AND d.id = $4 AND d.status = 'ACTIVE'
   JOIN tenant_billing_settings AS bs ON bs.tenant_id = c.tenant_id
  WHERE c.tenant_id = $1
    AND c.user_id = $2
@@ -97,7 +98,7 @@ SELECT c.id::text,
    AND p.id = $3
    AND p.status = 'ACTIVE'
 	   AND p.price_minor > 0
- FOR UPDATE OF p, bs`, input.TenantID, input.UserID, input.PlanID).Scan(&customerID, &customerEmail, &planAmountMinor, &currency, &bankChargeMinor)
+ FOR UPDATE OF p, bs, d`, input.TenantID, input.UserID, input.PlanID, input.DeviceID).Scan(&customerID, &customerEmail, &planAmountMinor, &currency, &bankChargeMinor)
 		if errors.Is(planErr, pgx.ErrNoRows) {
 			return ErrPaymentNotFound
 		}
@@ -114,9 +115,9 @@ SELECT c.id::text,
 
 		var subscriptionID string
 		if err := tx.QueryRow(ctx, `
-INSERT INTO subscriptions (tenant_id, customer_id, plan_id, status, payment_status)
-VALUES ($1, $2, $3, 'PENDING', 'UNPAID')
-RETURNING id::text`, input.TenantID, customerID, input.PlanID).Scan(&subscriptionID); err != nil {
+INSERT INTO subscriptions (tenant_id, customer_id, plan_id, device_id, status, payment_status)
+VALUES ($1, $2, $3, $4, 'PENDING', 'UNPAID')
+RETURNING id::text`, input.TenantID, customerID, input.PlanID, input.DeviceID).Scan(&subscriptionID); err != nil {
 			return fmt.Errorf("payments: create pending subscription: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `

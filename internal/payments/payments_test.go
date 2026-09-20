@@ -11,6 +11,7 @@ const (
 	paymentTestTenant = "11111111-1111-4111-8111-111111111111"
 	paymentTestUser   = "22222222-2222-4222-8222-222222222222"
 	paymentTestPlan   = "33333333-3333-4333-8333-333333333333"
+	paymentTestDevice = "44444444-4444-4444-8444-444444444444"
 )
 
 type memoryPaymentStore struct {
@@ -92,14 +93,14 @@ func TestInitiateFreezesServerPaymentAndReturnsOnlyCheckout(t *testing.T) {
 	gateway := &memoryGateway{available: true, checkout: GatewayCheckout{AuthorizationURL: "https://checkout.example.test/pay"}}
 	service := newPaymentService(t, store, gateway)
 
-	checkout, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001")
+	checkout, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, paymentTestDevice, "payment-retry-key-0001")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !validReference(checkout.Reference) || checkout.AuthorizationURL != "https://checkout.example.test/pay" {
 		t.Fatalf("checkout = %+v", checkout)
 	}
-	if store.prepareInput.PlanID != paymentTestPlan || len(store.prepareInput.RequestHash) != 32 || store.prepareInput.Gateway != "paystack" {
+	if store.prepareInput.PlanID != paymentTestPlan || store.prepareInput.DeviceID != paymentTestDevice || len(store.prepareInput.RequestHash) != 32 || store.prepareInput.Gateway != "paystack" {
 		t.Fatalf("initiation was not server-bound: %+v", store.prepareInput)
 	}
 	if gateway.initialization.AmountMinor != 500000 || gateway.initialization.Currency != "NGN" || gateway.initialization.CustomerEmail != "a@example.test" || gateway.initialization.Reference != checkout.Reference {
@@ -114,7 +115,7 @@ func TestInitiateSendsFrozenPlanAndBankChargeTotalToGateway(t *testing.T) {
 	store := &memoryPaymentStore{pending: PendingPayment{ID: "payment", SubscriptionID: "subscription", PlanAmountMinor: 50000, BankChargeMinor: 1500, AmountMinor: 51500, Currency: "NGN", CustomerEmail: "a@example.test"}}
 	gateway := &memoryGateway{available: true, checkout: GatewayCheckout{AuthorizationURL: "https://checkout.example.test/pay"}}
 	service := newPaymentService(t, store, gateway)
-	if _, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001"); err != nil {
+	if _, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, paymentTestDevice, "payment-retry-key-0001"); err != nil {
 		t.Fatal(err)
 	}
 	if gateway.initialization.AmountMinor != 51500 {
@@ -126,7 +127,7 @@ func TestIdempotentRetryRetainsFrozenBankChargeAfterSettingsChange(t *testing.T)
 	store := &memoryPaymentStore{pending: PendingPayment{ID: "payment", SubscriptionID: "subscription", PlanAmountMinor: 50000, BankChargeMinor: 1500, AmountMinor: 51500, Currency: "NGN", CustomerEmail: "a@example.test"}}
 	gateway := &memoryGateway{available: true, checkout: GatewayCheckout{AuthorizationURL: "https://checkout.example.test/pay"}}
 	service := newPaymentService(t, store, gateway)
-	checkout, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001")
+	checkout, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, paymentTestDevice, "payment-retry-key-0001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,9 +135,16 @@ func TestIdempotentRetryRetainsFrozenBankChargeAfterSettingsChange(t *testing.T)
 	// idempotency response must be returned instead of starting a 50000-kobo retry.
 	store.pending = PendingPayment{PlanAmountMinor: 50000, AmountMinor: 50000, Currency: "NGN", CustomerEmail: "a@example.test"}
 	store.replay = &checkout
-	retry, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001")
+	retry, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, paymentTestDevice, "payment-retry-key-0001")
 	if err != nil || retry != checkout || gateway.initCalls != 1 {
 		t.Fatalf("retry=%+v err=%v initialize_calls=%d", retry, err, gateway.initCalls)
+	}
+}
+
+func TestInitiateRequestHashBindsTheSelectedDevice(t *testing.T) {
+	otherDevice := "55555555-5555-4555-8555-555555555555"
+	if string(initiationHash(paymentTestPlan, paymentTestDevice)) == string(initiationHash(paymentTestPlan, otherDevice)) {
+		t.Fatal("changing the selected device did not change the idempotency request hash")
 	}
 }
 
@@ -148,7 +156,7 @@ func TestInitiatePassesConfiguredCallbackURLToGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001"); err != nil {
+	if _, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, paymentTestDevice, "payment-retry-key-0001"); err != nil {
 		t.Fatal(err)
 	}
 	if gateway.initialization.CallbackURL != "https://portal.example.test/portal.html" {
@@ -159,7 +167,7 @@ func TestInitiatePassesConfiguredCallbackURLToGateway(t *testing.T) {
 func TestInitiateFailsBeforeCreatingPaymentWhenGatewayDisabled(t *testing.T) {
 	store := &memoryPaymentStore{}
 	service := newPaymentService(t, store, &memoryGateway{})
-	_, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001")
+	_, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, paymentTestDevice, "payment-retry-key-0001")
 	if !errors.Is(err, ErrGatewayUnavailable) || store.prepareCalls != 0 {
 		t.Fatalf("err=%v prepare_calls=%d", err, store.prepareCalls)
 	}
@@ -170,7 +178,7 @@ func TestInitiateDoesNotPersistPaymentWhenCredentialProbeFails(t *testing.T) {
 	// subscription before the gateway can prove that it is usable.
 	store := &memoryPaymentStore{}
 	service := newPaymentService(t, store, &memoryGateway{available: true, checkErr: errors.New("credential unavailable")})
-	_, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, "payment-retry-key-0001")
+	_, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, paymentTestDevice, "payment-retry-key-0001")
 	if !errors.Is(err, ErrGatewayUnavailable) || store.prepareCalls != 0 {
 		t.Fatalf("err=%v prepare_calls=%d", err, store.prepareCalls)
 	}

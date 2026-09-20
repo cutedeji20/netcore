@@ -51,6 +51,8 @@ SELECT 1
 
 		subscriptions, err := tx.Query(ctx, `
 SELECT plan.name,
+	       COALESCE(device.label, ''),
+	       COALESCE(device.normalized_mac, ''),
        subscription.status,
        subscription.payment_status,
        subscription.starts_at,
@@ -62,6 +64,9 @@ SELECT plan.name,
   JOIN plans AS plan
     ON plan.id = subscription.plan_id
    AND plan.tenant_id = subscription.tenant_id
+	 LEFT JOIN customer_devices AS device
+	    ON device.id = subscription.device_id
+	   AND device.tenant_id = subscription.tenant_id
  WHERE subscription.tenant_id = $1
    AND customer.user_id = $2
    AND customer.status = 'ACTIVE'
@@ -74,7 +79,7 @@ SELECT plan.name,
 		for subscriptions.Next() {
 			var subscription CustomerSubscription
 			var startsAt, expiresAt *time.Time
-			if err := subscriptions.Scan(&subscription.PlanName, &subscription.Status, &subscription.PaymentStatus, &startsAt, &expiresAt); err != nil {
+			if err := subscriptions.Scan(&subscription.PlanName, &subscription.DeviceLabel, &subscription.DeviceMAC, &subscription.Status, &subscription.PaymentStatus, &startsAt, &expiresAt); err != nil {
 				return fmt.Errorf("scan portal subscription: %w", err)
 			}
 			if startsAt != nil {

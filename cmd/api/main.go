@@ -26,6 +26,7 @@ import (
 	"github.com/netcore-isp/netcore/internal/config"
 	"github.com/netcore-isp/netcore/internal/customers"
 	"github.com/netcore-isp/netcore/internal/database"
+	"github.com/netcore-isp/netcore/internal/devices"
 	"github.com/netcore-isp/netcore/internal/health"
 	"github.com/netcore-isp/netcore/internal/integrations"
 	"github.com/netcore-isp/netcore/internal/logger"
@@ -171,6 +172,18 @@ func run() error {
 		return err
 	}
 	customerHTTP, err := customers.NewHTTP(customerStore, cfg.Limits.DefaultPageSize, cfg.Limits.MaxPageSize)
+	if err != nil {
+		return err
+	}
+	deviceStore, err := devices.NewPostgresStore(postgres)
+	if err != nil {
+		return err
+	}
+	deviceService, err := devices.NewService(deviceStore)
+	if err != nil {
+		return err
+	}
+	deviceHTTP, err := devices.NewHTTP(deviceService)
 	if err != nil {
 		return err
 	}
@@ -370,6 +383,9 @@ func run() error {
 		accountHTTP.Routes(mux)
 	}
 	if err := customerHTTP.Routes(mux, authHTTP); err != nil {
+		return err
+	}
+	if err := deviceHTTP.Routes(mux, authHTTP); err != nil {
 		return err
 	}
 	if err := subscriptionHTTP.Routes(mux, authHTTP); err != nil {
