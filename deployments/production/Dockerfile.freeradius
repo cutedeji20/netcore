@@ -23,6 +23,7 @@ COPY freeradius/mods-enabled/netcore_sql /opt/netcore-radius/writer/mods-enabled
 COPY freeradius/mods-enabled/netcore_sql /opt/netcore-radius/replay/mods-enabled/netcore_sql
 COPY freeradius/mods-enabled/netcore_accounting_spool /opt/netcore-radius/writer/mods-enabled/netcore_accounting_spool
 COPY freeradius/policy.d/netcore_portal /opt/netcore-radius/writer/policy.d/netcore_portal
+COPY freeradius/policy.d/netcore_device_mac_auto /opt/netcore-radius/writer/policy.d/netcore_device_mac_auto
 COPY freeradius/policy.d/netcore_accounting /opt/netcore-radius/writer/policy.d/netcore_accounting
 COPY freeradius/policy.d/netcore_accounting /opt/netcore-radius/replay/policy.d/netcore_accounting
 COPY freeradius/sites-enabled/netcore-hotspot /opt/netcore-radius/writer/sites-enabled/netcore-hotspot

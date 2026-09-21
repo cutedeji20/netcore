@@ -34,7 +34,7 @@ const liveAdapterPaths = [
   "/live-billing.js", "/billing-settings.js", "/live-billing-settings.js", "/live-network.js", "/live-vouchers.js", "/live-team.js",
   "/live-security.js", "/live-automations.js", "/live-workspace.js", "/live-payment-readiness.js", "/integration-display.js", "/live-integrations.js", "/session-expiry.js"
 ];
-const assetVersion = "20260921-1";
+const assetVersion = "20260921-2";
 const hasLiveConfig = adminConfig.mode === "live" && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(String(adminConfig.tenant || ""));
 let adminState = { authorised: false, adaptersLoaded: false, identity: null };
 let cancelSessionExpiry = () => {};

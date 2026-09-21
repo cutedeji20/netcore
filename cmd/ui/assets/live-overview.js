@@ -41,17 +41,19 @@
     });
   }
   function load() {
-    if (location.hash.slice(1) && location.hash.slice(1) !== "overview") return;
-    Promise.all([fetch(apiBase + "/api/v1/operations/overview", { credentials: "same-origin", cache: "no-store" }), fetch(apiBase + "/api/v1/security/events?limit=4", { credentials: "same-origin", cache: "no-store" })]).then(function (responses) { if (!responses[0].ok || !responses[1].ok) throw new Error(); return Promise.all([responses[0].json(), responses[1].json()]); }).then(function (payload) {
-      var data = payload[0];
+    var page = location.hash.slice(1) || "overview";
+    if (["overview", "customers", "plans", "subscriptions"].indexOf(page) === -1) return;
+    fetch(apiBase + "/api/v1/operations/overview", { credentials: "same-origin", cache: "no-store" }).then(function (response) { if (!response.ok) throw new Error(); return response.json(); }).then(function (data) {
       setMetric("Active customers", String(data.active_customers));
       setMetric("Online sessions", String(data.online_sessions));
       setMetric("Collected today", money(data.collected_today_minor));
       setMetric("Needs attention", String(data.attention));
-	  setPageMetrics(data);
+      setPageMetrics(data);
       var status = document.querySelector("#page-content .status span");
       if (status) status.textContent = "Live tenant data refreshed just now.";
-      showActivity(payload[1].data);
+      if (page === "overview") {
+        return fetch(apiBase + "/api/v1/security/events?limit=4", { credentials: "same-origin", cache: "no-store" }).then(function (response) { if (!response.ok) throw new Error(); return response.json(); }).then(function (payload) { showActivity(payload.data); });
+      }
     }).catch(function () { /* retain safe empty state */ });
   }
   window.addEventListener("netcore:page-rendered", function (event) {

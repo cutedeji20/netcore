@@ -280,6 +280,12 @@ func TestRadiusMACAuthenticationSecretIsFileMounted(t *testing.T) {
 	requireContains(t, string(entrypoint), "export NETCORE_RADIUS_MAC_AUTH_PASSWORD")
 }
 
+func TestRadiusImageIncludesMACAuthenticationPolicy(t *testing.T) {
+	dockerfile, err := os.ReadFile("Dockerfile.freeradius")
+	if err != nil { t.Fatal(err) }
+	requireContains(t, string(dockerfile), "COPY freeradius/policy.d/netcore_device_mac_auto /opt/netcore-radius/writer/policy.d/netcore_device_mac_auto")
+}
+
 func TestRadiusImageDisablesUnusedEAPModule(t *testing.T) {
 	dockerfile, err := os.ReadFile("Dockerfile.freeradius")
 	if err != nil {
