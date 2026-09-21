@@ -23,6 +23,7 @@ import (
 	"github.com/netcore-isp/netcore/internal/logger"
 	"github.com/netcore-isp/netcore/internal/notify"
 	"github.com/netcore-isp/netcore/internal/payments"
+	"github.com/netcore-isp/netcore/internal/subscriptions"
 )
 
 func main() {
@@ -62,6 +63,13 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	tenant, found, err := postgres.ResolveActiveTenant(startupCtx, cfg.Portal.TenantSlug)
+	if err != nil {
+		return fmt.Errorf("resolve expiry portal tenant: %w", err)
+	}
+	if !found || tenant.ID == "" {
+		return fmt.Errorf("expiry portal tenant is not active")
+	}
 
 	webhookProcessor, err := configuredWebhookProcessor(startupCtx, cfg, postgres)
 	if err != nil {
@@ -71,17 +79,29 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if webhookProcessor == nil && receiptProcessor == nil {
-		log.Info("worker started", slog.String("queue", "payment queues disabled"))
-		<-ctx.Done()
-		log.Info("worker shutdown signal received")
-		return nil
+	expiryStore, err := subscriptions.NewPostgresStore(postgres)
+	if err != nil {
+		return err
 	}
-	log.Info("worker started", slog.Bool("webhooks_enabled", webhookProcessor != nil), slog.Bool("receipts_enabled", receiptProcessor != nil))
+	expiryProcessor, err := subscriptions.NewExpiryProcessor(expiryStore)
+	if err != nil {
+		return err
+	}
+	log.Info("worker started", slog.Bool("webhooks_enabled", webhookProcessor != nil), slog.Bool("receipts_enabled", receiptProcessor != nil), slog.Bool("expiry_enforcement_enabled", true))
 	ticker := time.NewTicker(cfg.Payments.WebhookPollInterval)
 	defer ticker.Stop()
+	nextExpiry := time.Time{}
 	for {
 		worked := false
+		if nextExpiry.IsZero() || !time.Now().Before(nextExpiry) {
+			expired, err := expiryProcessor.Process(ctx, tenant.ID)
+			if err != nil {
+				log.Error("subscription expiry processing failed", slog.String("error", err.Error()))
+			} else if expired > 0 {
+				log.Info("subscriptions expired", slog.Int("count", expired))
+			}
+			nextExpiry = time.Now().Add(time.Minute)
+		}
 		if webhookProcessor != nil {
 			webhookWorked, err := webhookProcessor.ProcessOne(ctx)
 			if err != nil {

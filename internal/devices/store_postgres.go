@@ -36,6 +36,24 @@ func (s *PostgresStore) List(ctx context.Context, tenantID, userID string) (devi
 	})
 	return devices, err
 }
+func (s *PostgresStore) ListForCustomer(ctx context.Context, tenantID, customerID string) (devices []Device, err error) {
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id::text, normalized_mac, COALESCE(hostname,''), status, created_at FROM devices WHERE tenant_id=$1 AND customer_id=$2::uuid ORDER BY created_at DESC,id DESC`, tenantID, customerID)
+		if err != nil {
+			return fmt.Errorf("devices: list customer: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var d Device
+			if err := rows.Scan(&d.ID, &d.NormalizedMAC, &d.Label, &d.Status, &d.CreatedAt); err != nil {
+				return fmt.Errorf("devices: scan customer: %w", err)
+			}
+			devices = append(devices, d)
+		}
+		return rows.Err()
+	})
+	return devices, err
+}
 func (s *PostgresStore) Register(ctx context.Context, tenantID, userID string, input Registration) (device Device, err error) {
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var customerID string

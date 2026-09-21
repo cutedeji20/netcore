@@ -63,3 +63,17 @@ type Page struct {
 type Store interface {
 	List(ctx context.Context, tenantID string, options ListOptions) (Page, error)
 }
+
+// GrantStore is deliberately separate from the read store so older read-only
+// adapters cannot accidentally issue entitlement.
+type GrantStore interface {
+	Grant(ctx context.Context, tenantID string, actor GrantActor, input GrantInput) (Subscription, error)
+}
+
+type GrantActor struct{ UserID, IPAddress, UserAgent string }
+type GrantInput struct{ CustomerID, PlanID, DeviceID, Reason string }
+
+var (
+	ErrInvalidGrant        = errors.New("subscriptions: invalid grant")
+	ErrGrantTargetNotFound = errors.New("subscriptions: grant target not found")
+)

@@ -54,6 +54,8 @@ SELECT p.id::text,
         FROM subscriptions
        WHERE tenant_id = $1
          AND status = 'ACTIVE'
+         AND starts_at <= now()
+         AND expires_at > now()
        GROUP BY plan_id
   ) AS counts
     ON counts.plan_id = p.id

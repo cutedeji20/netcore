@@ -38,6 +38,14 @@ type Store interface {
 	List(context.Context, string, string) ([]Device, error)
 	Register(context.Context, string, string, Registration) (Device, error)
 	RegisterForCustomer(context.Context, string, string, string, Registration) (Device, error)
+	ListForCustomer(context.Context, string, string) ([]Device, error)
+}
+
+func (s *Service) ListForCustomer(ctx context.Context, tenantID, customerID string) ([]Device, error) {
+	if s == nil || s.store == nil || !validUUID(tenantID) || !validUUID(customerID) {
+		return nil, ErrUnavailable
+	}
+	return s.store.ListForCustomer(ctx, tenantID, customerID)
 }
 
 func (s *Service) RegisterForCustomer(ctx context.Context, tenantID, actorID, customerID, mac, label string) (Device, error) {

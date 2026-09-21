@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ const maxSearchLength = 120
 // HTTP exposes staff-only subscription read endpoints.
 type HTTP struct {
 	store           Store
+	grantStore      GrantStore
 	defaultPageSize int
 	maxPageSize     int
 }
@@ -33,6 +35,7 @@ func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
 	}
 	return &HTTP{
 		store:           store,
+		grantStore:      func() GrantStore { value, _ := store.(GrantStore); return value }(),
 		defaultPageSize: defaultPageSize,
 		maxPageSize:     maxPageSize,
 	}, nil
@@ -48,7 +51,50 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"GET /api/v1/subscriptions",
 		sessions.RequireAuth(auth.RequirePermission("subscription.read", http.HandlerFunc(h.list))),
 	)
+	mux.Handle("POST /api/v1/customers/{id}/subscriptions/grant", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("subscription.write", http.HandlerFunc(h.grant)))))
 	return nil
+}
+
+func (h *HTTP) grant(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if h.grantStore == nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "SUBSCRIPTIONS_UNAVAILABLE", "Subscription access is temporarily unavailable.")
+		return
+	}
+	var input GrantInput
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 32<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_GRANT", "Choose an active plan, registered device, and grant reason.")
+		return
+	}
+	input.CustomerID = r.PathValue("id")
+	grant, err := h.grantStore.Grant(r.Context(), principal.TenantID, GrantActor{UserID: principal.UserID, IPAddress: sessionsClientIP(r), UserAgent: r.UserAgent()}, input)
+	if errors.Is(err, ErrInvalidGrant) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_GRANT", "Choose an active plan, registered device, and grant reason.")
+		return
+	}
+	if errors.Is(err, ErrGrantTargetNotFound) {
+		security.WriteError(w, r, http.StatusNotFound, "GRANT_TARGET_NOT_FOUND", "The customer, plan, or device is not available.")
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "SUBSCRIPTIONS_UNAVAILABLE", "Subscription access is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusCreated, responseSubscription(grant))
+}
+
+func sessionsClientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return ""
 }
 
 func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {

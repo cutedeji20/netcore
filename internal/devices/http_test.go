@@ -39,6 +39,10 @@ func (s *memoryStore) RegisterForCustomer(_ context.Context, tenantID, actorID, 
 	}
 	return Device{ID: "44444444-4444-4444-8444-444444444444", NormalizedMAC: input.NormalizedMAC, Label: input.Label, Status: "ACTIVE"}, nil
 }
+func (s *memoryStore) ListForCustomer(_ context.Context, tenantID, customerID string) ([]Device, error) {
+	s.tenantID, s.userID = tenantID, customerID
+	return s.values, s.err
+}
 
 func TestDeviceHTTPRegistersOnlyForAuthenticatedCustomer(t *testing.T) {
 	store := &memoryStore{}

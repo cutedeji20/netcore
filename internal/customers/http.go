@@ -309,6 +309,7 @@ type customerResponse struct {
 	Email          string    `json:"email,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+	ActiveSessions int64     `json:"active_sessions"`
 }
 
 func responseCustomer(customer Customer) customerResponse {
@@ -322,6 +323,7 @@ func responseCustomer(customer Customer) customerResponse {
 		Email:          customer.Email,
 		CreatedAt:      customer.CreatedAt,
 		UpdatedAt:      customer.UpdatedAt,
+		ActiveSessions: customer.ActiveSessions,
 	}
 }
 

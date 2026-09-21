@@ -35,10 +35,13 @@ func (h *OverviewHTTP) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeActivityJSON(w, http.StatusOK, struct {
-		ActiveCustomers     int64     `json:"active_customers"`
-		OnlineSessions      int64     `json:"online_sessions"`
-		CollectedTodayMinor int64     `json:"collected_today_minor"`
-		Attention           int64     `json:"attention"`
-		UpdatedAt           time.Time `json:"updated_at"`
-	}{o.ActiveCustomers, o.OnlineSessions, o.CollectedTodayMinor, o.Attention, time.Now().UTC()})
+		ActiveCustomers     int64               `json:"active_customers"`
+		OnlineSessions      int64               `json:"online_sessions"`
+		CollectedTodayMinor int64               `json:"collected_today_minor"`
+		Attention           int64               `json:"attention"`
+		UpdatedAt           time.Time           `json:"updated_at"`
+		Customers           CustomerMetrics     `json:"customers"`
+		Plans               PlanMetrics         `json:"plans"`
+		Subscriptions       SubscriptionMetrics `json:"subscriptions"`
+	}{o.ActiveCustomers, o.OnlineSessions, o.CollectedTodayMinor, o.Attention, time.Now().UTC(), o.CustomerMetrics, o.PlanMetrics, o.SubscriptionMetrics})
 }

@@ -25,7 +25,22 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	mux.Handle("GET /api/v1/portal/devices", sessions.RequireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("POST /api/v1/portal/devices", sessions.RequireAuth(sessions.RequireAllowedOrigin(http.HandlerFunc(h.register))))
 	mux.Handle("POST /api/v1/customers/{id}/devices", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("customer.write", http.HandlerFunc(h.registerForCustomer)))))
+	mux.Handle("GET /api/v1/customers/{id}/devices", sessions.RequireAuth(auth.RequirePermission("customer.read", http.HandlerFunc(h.listForCustomer))))
 	return nil
+}
+func (h *HTTP) listForCustomer(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.principal(w, r)
+	if !ok {
+		return
+	}
+	values, err := h.service.ListForCustomer(r.Context(), p.TenantID, r.PathValue("id"))
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "DEVICES_UNAVAILABLE", "Devices are temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Data []Device `json:"data"`
+	}{values})
 }
 func (h *HTTP) registerForCustomer(w http.ResponseWriter, r *http.Request) {
 	p, ok := h.principal(w, r)

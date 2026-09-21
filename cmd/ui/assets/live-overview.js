@@ -8,6 +8,19 @@
       if (card.querySelector(".metric-label") && card.querySelector(".metric-label").textContent === label) card.querySelector(".metric-value").textContent = value;
     });
   }
+  function lifetime(seconds) { var days = Math.round(Number(seconds || 0) / 86400); return days ? days + " days" : "—"; }
+  function setPageMetrics(data) {
+    if (!data) return;
+    if (location.hash.slice(1) === "customers" && data.customers) {
+      setMetric("Active customers", data.customers.active); setMetric("New this month", data.customers.new_this_month); setMetric("Needs review", data.customers.needs_review); setMetric("Support queue", data.customers.without_active_plan);
+    }
+    if (location.hash.slice(1) === "plans" && data.plans) {
+      setMetric("Published plans", data.plans.published); setMetric("Most selected", data.plans.most_selected); setMetric("Highest growth", data.plans.highest_growth); setMetric("Draft changes", data.plans.retired);
+    }
+    if (location.hash.slice(1) === "subscriptions" && data.subscriptions) {
+      setMetric("Active", data.subscriptions.active); setMetric("Renewing this week", data.subscriptions.renewing_this_week); setMetric("On hold", data.subscriptions.on_hold); setMetric("Average lifetime", lifetime(data.subscriptions.average_lifetime_seconds));
+    }
+  }
   function text(value) { return String(value || ""); }
   function showActivity(events) {
     var list = document.querySelector("[data-overview-activity]");
@@ -35,6 +48,7 @@
       setMetric("Online sessions", String(data.online_sessions));
       setMetric("Collected today", money(data.collected_today_minor));
       setMetric("Needs attention", String(data.attention));
+	  setPageMetrics(data);
       var status = document.querySelector("#page-content .status span");
       if (status) status.textContent = "Live tenant data refreshed just now.";
       showActivity(payload[1].data);
@@ -42,6 +56,6 @@
   }
   window.addEventListener("netcore:page-rendered", function (event) {
     clearInterval(timer);
-    if (event.detail === "overview") { load(); timer = setInterval(load, 15000); }
+    if (["overview", "customers", "plans", "subscriptions"].indexOf(event.detail) !== -1) { load(); timer = setInterval(load, 15000); }
   });
 }());

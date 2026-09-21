@@ -35,6 +35,14 @@ if (typeof window !== "undefined") (function () {
     form.addEventListener("submit", function (event) { event.preventDefault(); if (submit.disabled) return; submit.disabled = true; feedback.textContent = ""; request(path, method, Object.fromEntries(new FormData(form))).then(function (response) { return response.ok ? undefined : errorMessage(response).then(Promise.reject.bind(Promise)); }).then(function () { form.reset(); backdrop.remove(); requestCustomers(true); }).catch(function (message) { feedback.textContent = message; }).finally(function () { submit.disabled = false; }); });
   }
   function bindHeaderAction() { if (!canWrite() || currentPage() !== "customers") return; var actions = document.querySelector("#page-content .heading-actions"); if (!actions || actions.querySelector(".customer-create")) return; actions.insertAdjacentHTML("beforeend", renderCustomerActions(window.NETCORE_PRINCIPAL)); actions.querySelector(".customer-create").onclick = function () { customerDialog("Create customer", null, "POST", "/api/v1/customers"); }; }
+  function grantDialog(customer) {
+    var backdrop=document.createElement("div"), form=document.createElement("form"), feedback=document.createElement("p"); backdrop.className="customer-dialog-backdrop"; form.className="customer-dialog"; form.innerHTML="<h2>Grant internet access</h2><p>This gives the selected device a normal, time- and quota-limited plan. No payment is recorded.</p>";
+    var plan=document.createElement("select"), device=document.createElement("select"), reason=document.createElement("input"); reason.placeholder="Reason for grant"; reason.required=true;
+    [["Plan",plan],["Registered device",device],["Reason",reason]].forEach(function(pair){var label=document.createElement("label");label.className="customer-field";label.append(document.createTextNode(pair[0]),pair[1]);form.appendChild(label);});
+    var cancel=document.createElement("button"), submit=document.createElement("button"); cancel.type="button";cancel.className="button";cancel.textContent="Cancel";cancel.onclick=function(){backdrop.remove();};submit.type="submit";submit.className="button primary";submit.textContent="Grant access";form.append(feedback,cancel,submit);backdrop.appendChild(form);document.body.appendChild(backdrop);
+    Promise.all([fetch(apiBase+"/api/v1/plans?limit=100&status=ACTIVE",{credentials:"include"}),fetch(apiBase+"/api/v1/customers/"+customer.id+"/devices",{credentials:"include"})]).then(function(values){if(!values[0].ok||!values[1].ok)throw new Error();return Promise.all(values.map(function(v){return v.json();}));}).then(function(values){(values[0].data||[]).forEach(function(v){var o=document.createElement("option");o.value=v.id;o.textContent=v.name;plan.appendChild(o);});(values[1].data||[]).filter(function(v){return v.status==="ACTIVE";}).forEach(function(v){var o=document.createElement("option");o.value=v.id;o.textContent=(v.label||"Device")+" · "+v.normalized_mac;device.appendChild(o);});if(!plan.options.length||!device.options.length){submit.disabled=true;feedback.textContent="An active plan and registered device are required.";}}).catch(function(){submit.disabled=true;feedback.textContent="Grant options could not be loaded.";});
+    form.onsubmit=function(event){event.preventDefault();submit.disabled=true;fetch(apiBase+"/api/v1/customers/"+customer.id+"/subscriptions/grant",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({plan_id:plan.value,device_id:device.value,reason:reason.value})}).then(function(r){return r.ok?null:errorMessage(r).then(Promise.reject.bind(Promise));}).then(function(){backdrop.remove();requestCustomers(true);}).catch(function(message){feedback.textContent=message;}).finally(function(){submit.disabled=false;});};
+  }
 
   function currentPage() {
     return livePage.current();
@@ -105,6 +113,14 @@ if (typeof window !== "undefined") (function () {
     row.appendChild(cell);
   }
 
+  function appendAccessCell(row, customer) {
+    var cell = document.createElement("td"), label = document.createElement("span");
+    var sessions = Number(customer.active_sessions || 0);
+    label.className = "tag " + (sessions > 0 ? "green" : "gray");
+    label.textContent = sessions > 0 ? "Online · " + sessions : "Offline";
+    cell.appendChild(label); row.appendChild(cell);
+  }
+
   function appendSelectionCell(row, customer) {
     var cell = document.createElement("td"), input = document.createElement("input");
     var identifier = customer.id || customer.customer_number;
@@ -126,7 +142,7 @@ if (typeof window !== "undefined") (function () {
     var table = document.querySelector("#page-content .data-table");
     if (!table) return;
 
-    var headings = ["Customer", "Phone", "Email", "Joined", "Status"];
+    var headings = ["Customer", "Phone", "Email", "Joined", "Status", "Access"];
     if (canWrite()) { headings.push("Select", "Actions"); }
     var headingRow = table.querySelector("thead tr");
     headingRow.replaceChildren();
@@ -145,8 +161,9 @@ if (typeof window !== "undefined") (function () {
       appendTextCell(row, customer.email);
       appendTextCell(row, new Date(customer.created_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }));
       appendStatusCell(row, customer.status);
+      appendAccessCell(row, customer);
       if (canWrite()) appendSelectionCell(row, customer);
-      if (canWrite()) { var actions = document.createElement("td"); var identifier = customer.id || customer.customer_number; var edit = document.createElement("button"); edit.type = "button"; edit.className = "button customer-row-action"; edit.textContent = "Edit"; edit.onclick = function () { customerDialog("Edit customer", customer, "PUT", "/api/v1/customers/" + identifier); }; var lifecycle = document.createElement("button"); lifecycle.type = "button"; lifecycle.className = "button customer-row-action"; lifecycle.textContent = customer.status === "SUSPENDED" ? "Restore" : "Suspend"; lifecycle.onclick = function () { var restoring = customer.status === "SUSPENDED"; if (!window.confirm((restoring ? "Restore" : "Suspend") + " this customer?")) return; lifecycle.disabled = true; fetch(apiBase + "/api/v1/customers/" + identifier + (restoring ? "/restore" : "/deactivate"), { method: "POST", credentials: "same-origin", cache: "no-store" }).then(function (response) { return response.ok ? undefined : errorMessage(response).then(Promise.reject.bind(Promise)); }).then(function () { requestCustomers(true); }).catch(function (message) { window.alert(message); }).finally(function () { lifecycle.disabled = false; }); }; actions.append(edit, lifecycle); row.appendChild(actions); }
+      if (canWrite()) { var actions = document.createElement("td"); var identifier = customer.id || customer.customer_number; var edit = document.createElement("button"); edit.type = "button"; edit.className = "button customer-row-action"; edit.textContent = "Edit"; edit.onclick = function () { customerDialog("Edit customer", customer, "PUT", "/api/v1/customers/" + identifier); }; var grant=document.createElement("button");grant.type="button";grant.className="button customer-row-action";grant.textContent="Grant access";grant.onclick=function(){grantDialog(customer);}; var lifecycle = document.createElement("button"); lifecycle.type = "button"; lifecycle.className = "button customer-row-action"; lifecycle.textContent = customer.status === "SUSPENDED" ? "Restore" : "Suspend"; lifecycle.onclick = function () { var restoring = customer.status === "SUSPENDED"; if (!window.confirm((restoring ? "Restore" : "Suspend") + " this customer?")) return; lifecycle.disabled = true; fetch(apiBase + "/api/v1/customers/" + identifier + (restoring ? "/restore" : "/deactivate"), { method: "POST", credentials: "same-origin", cache: "no-store" }).then(function (response) { return response.ok ? undefined : errorMessage(response).then(Promise.reject.bind(Promise)); }).then(function () { requestCustomers(true); }).catch(function (message) { window.alert(message); }).finally(function () { lifecycle.disabled = false; }); }; actions.append(edit, grant, lifecycle); row.appendChild(actions); }
       body.appendChild(row);
     });
     showState("records");

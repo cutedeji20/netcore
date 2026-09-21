@@ -12,7 +12,7 @@
       .then(function (r) { return r.json().catch(function () { return {}; }).then(function (b) { if (!r.ok) throw new Error(safeError(b, "Billing settings could not be loaded.")); return b.data; }); });
   }
   function render() {
-    if (page.current() !== "billing") return;
+    if (page.current() !== "billing" && page.current() !== "settings") return;
     var host = document.querySelector("#page-content");
     if (!host || host.querySelector(".bank-charge-control")) return;
     var panel = document.createElement("section"); panel.className = "panel bank-charge-control";

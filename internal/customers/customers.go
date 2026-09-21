@@ -28,6 +28,7 @@ type Customer struct {
 	Email          string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	ActiveSessions int64
 }
 
 // ListOptions is intentionally a small keyset pagination contract. The

@@ -71,11 +71,18 @@ SELECT customers.id::text,
        COALESCE(NULLIF(customers.phone, ''), NULLIF(account.phone, ''), ''),
        COALESCE(customers.email::text, ''),
        customers.created_at,
-       customers.updated_at
+       customers.updated_at,
+       COALESCE(live.active_sessions, 0)
   FROM customers
   LEFT JOIN users AS account
     ON account.id = customers.user_id
    AND account.tenant_id = customers.tenant_id
+  LEFT JOIN (
+    SELECT customer_id, count(*) AS active_sessions
+      FROM sessions
+     WHERE tenant_id = $1 AND status = 'ACTIVE'
+     GROUP BY customer_id
+  ) AS live ON live.customer_id = customers.id
  WHERE customers.tenant_id = $1
    AND (
        $2 = ''
@@ -116,6 +123,7 @@ SELECT customers.id::text,
 				&customer.Email,
 				&customer.CreatedAt,
 				&customer.UpdatedAt,
+				&customer.ActiveSessions,
 			); err != nil {
 				return fmt.Errorf("scan customer: %w", err)
 			}
