@@ -9,15 +9,15 @@
     });
   }
   function lifetime(seconds) { var days = Math.round(Number(seconds || 0) / 86400); return days ? days + " days" : "—"; }
-  function setPageMetrics(data) {
+  function setPageMetrics(page, data) {
     if (!data) return;
-    if (location.hash.slice(1) === "customers" && data.customers) {
+    if (page === "customers" && data.customers) {
       setMetric("Active customers", data.customers.active); setMetric("New this month", data.customers.new_this_month); setMetric("Needs review", data.customers.needs_review); setMetric("Support queue", data.customers.without_active_plan);
     }
-    if (location.hash.slice(1) === "plans" && data.plans) {
+    if (page === "plans" && data.plans) {
       setMetric("Published plans", data.plans.published); setMetric("Most selected", data.plans.most_selected); setMetric("Highest growth", data.plans.highest_growth); setMetric("Draft changes", data.plans.retired);
     }
-    if (location.hash.slice(1) === "subscriptions" && data.subscriptions) {
+    if (page === "subscriptions" && data.subscriptions) {
       setMetric("Active", data.subscriptions.active); setMetric("Renewing this week", data.subscriptions.renewing_this_week); setMetric("On hold", data.subscriptions.on_hold); setMetric("Average lifetime", lifetime(data.subscriptions.average_lifetime_seconds));
     }
   }
@@ -40,15 +40,14 @@
       body.append(title, detail, when); item.appendChild(body); list.appendChild(item);
     });
   }
-  function load() {
-    var page = location.hash.slice(1) || "overview";
+  function load(page) {
     if (["overview", "customers", "plans", "subscriptions"].indexOf(page) === -1) return;
     fetch(apiBase + "/api/v1/operations/overview", { credentials: "same-origin", cache: "no-store" }).then(function (response) { if (!response.ok) throw new Error(); return response.json(); }).then(function (data) {
       setMetric("Active customers", String(data.active_customers));
       setMetric("Online sessions", String(data.online_sessions));
       setMetric("Collected today", money(data.collected_today_minor));
       setMetric("Needs attention", String(data.attention));
-      setPageMetrics(data);
+      setPageMetrics(page, data);
       var status = document.querySelector("#page-content .status span");
       if (status) status.textContent = "Live tenant data refreshed just now.";
       if (page === "overview") {
@@ -58,6 +57,6 @@
   }
   window.addEventListener("netcore:page-rendered", function (event) {
     clearInterval(timer);
-    if (["overview", "customers", "plans", "subscriptions"].indexOf(event.detail) !== -1) { load(); timer = setInterval(load, 15000); }
+    if (["overview", "customers", "plans", "subscriptions"].indexOf(event.detail) !== -1) { load(event.detail); timer = setInterval(function () { load(event.detail); }, 15000); }
   });
 }());
