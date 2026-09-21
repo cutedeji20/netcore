@@ -19,7 +19,7 @@ func (s *PostgresStore) Grant(ctx context.Context, tenantID string, actor GrantA
 	}
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var durationSeconds int64
-		var quotaBytes *int64
+		var quotaBytes int64
 		var customerOK, planOK, deviceOK bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM customers WHERE tenant_id=$1 AND id=$2::uuid AND status='ACTIVE'), EXISTS(SELECT 1 FROM plans WHERE tenant_id=$1 AND id=$3::uuid AND status='ACTIVE'), EXISTS(SELECT 1 FROM devices WHERE tenant_id=$1 AND id=$4::uuid AND customer_id=$2::uuid AND status='ACTIVE')`, tenantID, input.CustomerID, input.PlanID, input.DeviceID).Scan(&customerOK, &planOK, &deviceOK); err != nil {
 			return fmt.Errorf("subscriptions: validate grant: %w", err)
@@ -27,7 +27,7 @@ func (s *PostgresStore) Grant(ctx context.Context, tenantID string, actor GrantA
 		if !customerOK || !planOK || !deviceOK {
 			return ErrGrantTargetNotFound
 		}
-		if err := tx.QueryRow(ctx, `SELECT duration_seconds, quota_bytes FROM plans WHERE tenant_id=$1 AND id=$2::uuid AND status='ACTIVE'`, tenantID, input.PlanID).Scan(&durationSeconds, &quotaBytes); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT duration_seconds, COALESCE(quota_bytes, 0) FROM plans WHERE tenant_id=$1 AND id=$2::uuid AND status='ACTIVE'`, tenantID, input.PlanID).Scan(&durationSeconds, &quotaBytes); err != nil {
 			return fmt.Errorf("subscriptions: read grant plan: %w", err)
 		}
 		if err := tx.QueryRow(ctx, `INSERT INTO subscriptions (tenant_id,customer_id,plan_id,device_id,status,payment_status,starts_at,expires_at) VALUES ($1,$2::uuid,$3::uuid,$4::uuid,'ACTIVE','GRANTED',now(),now()+$5*interval '1 second') RETURNING id::text, customer_id::text, plan_id::text, status, starts_at, expires_at, auto_renew, payment_status, created_at, updated_at`, tenantID, input.CustomerID, input.PlanID, input.DeviceID, durationSeconds).Scan(&subscription.ID, &subscription.CustomerID, &subscription.PlanID, &subscription.Status, &subscription.StartsAt, &subscription.ExpiresAt, &subscription.AutoRenew, &subscription.PaymentStatus, &subscription.CreatedAt, &subscription.UpdatedAt); err != nil {
