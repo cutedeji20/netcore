@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -83,6 +84,9 @@ func (h *HTTP) grant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		// Keep the response generic, but retain the database error server-side so
+		// an operator can diagnose a failed audited grant without exposing it.
+		slog.Error("staff subscription grant failed", slog.String("error", err.Error()))
 		security.WriteError(w, r, http.StatusServiceUnavailable, "SUBSCRIPTIONS_UNAVAILABLE", "Subscription access is temporarily unavailable.")
 		return
 	}
