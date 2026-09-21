@@ -17,14 +17,23 @@ type Overview struct {
 	PlanMetrics                                PlanMetrics
 	SubscriptionMetrics                        SubscriptionMetrics
 }
-type CustomerMetrics struct{ Active, NewThisMonth, NeedsReview, WithoutActivePlan int64 }
+type CustomerMetrics struct {
+	Active            int64 `json:"active"`
+	NewThisMonth      int64 `json:"new_this_month"`
+	NeedsReview       int64 `json:"needs_review"`
+	WithoutActivePlan int64 `json:"without_active_plan"`
+}
 type PlanMetrics struct {
-	Published, Retired          int64
-	MostSelected, HighestGrowth string
+	Published     int64  `json:"published"`
+	Retired       int64  `json:"retired"`
+	MostSelected  string `json:"most_selected"`
+	HighestGrowth string `json:"highest_growth"`
 }
 type SubscriptionMetrics struct {
-	Active, RenewingThisWeek, OnHold int64
-	AverageLifetimeSeconds           float64
+	Active                 int64   `json:"active"`
+	RenewingThisWeek       int64   `json:"renewing_this_week"`
+	OnHold                 int64   `json:"on_hold"`
+	AverageLifetimeSeconds float64 `json:"average_lifetime_seconds"`
 }
 type OverviewStore interface {
 	Overview(context.Context, string) (Overview, error)

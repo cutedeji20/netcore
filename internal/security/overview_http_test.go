@@ -20,7 +20,7 @@ func (s *overviewMemoryStore) Overview(_ context.Context, tenantID string) (Over
 }
 
 func TestOverviewUsesAuthenticatedTenant(t *testing.T) {
-	store := &overviewMemoryStore{overview: Overview{ActiveCustomers: 4, OnlineSessions: 2, CollectedTodayMinor: 51500, Attention: 1}}
+	store := &overviewMemoryStore{overview: Overview{ActiveCustomers: 4, OnlineSessions: 2, CollectedTodayMinor: 51500, Attention: 1, CustomerMetrics: CustomerMetrics{Active: 4, NewThisMonth: 2}, PlanMetrics: PlanMetrics{Published: 3, MostSelected: "Phone Daily"}, SubscriptionMetrics: SubscriptionMetrics{Active: 4, RenewingThisWeek: 1, AverageLifetimeSeconds: 86400}}}
 	h, err := NewOverviewHTTP(store, func(ctx context.Context) (string, bool) {
 		id, ok := ctx.Value(activityTestTenantKey{}).(string)
 		return id, ok
@@ -43,11 +43,24 @@ func TestOverviewUsesAuthenticatedTenant(t *testing.T) {
 		OnlineSessions      int64 `json:"online_sessions"`
 		CollectedTodayMinor int64 `json:"collected_today_minor"`
 		Attention           int64 `json:"attention"`
+		Customers           struct {
+			Active       int64 `json:"active"`
+			NewThisMonth int64 `json:"new_this_month"`
+		} `json:"customers"`
+		Plans struct {
+			Published    int64  `json:"published"`
+			MostSelected string `json:"most_selected"`
+		} `json:"plans"`
+		Subscriptions struct {
+			Active   int64   `json:"active"`
+			Renewing int64   `json:"renewing_this_week"`
+			Average  float64 `json:"average_lifetime_seconds"`
+		} `json:"subscriptions"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body.ActiveCustomers != 4 || body.OnlineSessions != 2 || body.CollectedTodayMinor != 51500 || body.Attention != 1 {
+	if body.ActiveCustomers != 4 || body.OnlineSessions != 2 || body.CollectedTodayMinor != 51500 || body.Attention != 1 || body.Customers.Active != 4 || body.Customers.NewThisMonth != 2 || body.Plans.Published != 3 || body.Plans.MostSelected != "Phone Daily" || body.Subscriptions.Active != 4 || body.Subscriptions.Renewing != 1 || body.Subscriptions.Average != 86400 {
 		t.Fatalf("body = %+v", body)
 	}
 }
