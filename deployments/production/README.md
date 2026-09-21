@@ -134,6 +134,10 @@ set it to owner/group `101:101` with mode `0400`. Never put a broad subnet,
 file. The database independently checks that the NAS is active before it can
 write accounting data.
 
+`radius/mac_auth_password` is the separate base64url secret used only for
+device MAC auto-login. It must be readable by UID/GID `101:101`, mode `0400`,
+and never added to `.env`, rendered router scripts committed to Git, or logs.
+
 ### First staged start
 
 On a non-production Kamatera host with DNS already pointing at the server and

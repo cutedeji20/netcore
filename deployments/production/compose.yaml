@@ -173,6 +173,7 @@ services:
       - "${NETCORE_RADIUS_SERVER_ADDRESS:?set NETCORE_RADIUS_SERVER_ADDRESS in deployments/production/.env}:1813:1813/udp"
     volumes:
       - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/db_password:/run/netcore/runtime/radius_db_password:ro
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/mac_auth_password:/run/netcore/runtime/mac_auth_password:ro
       - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/clients.conf:/run/netcore/runtime/clients.conf:ro
       - ${NETCORE_RADIUS_SPOOL_DIR:?set NETCORE_RADIUS_SPOOL_DIR in deployments/production/.env}:/var/lib/netcore-radius/spool
       - postgres_tls:/run/netcore/postgres-tls:ro
@@ -208,6 +209,7 @@ services:
       RADIUS_DB_USER: netcore_radius_login
     volumes:
       - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/db_password:/run/netcore/runtime/radius_db_password:ro
+      - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/mac_auth_password:/run/netcore/runtime/mac_auth_password:ro
       - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/radius/clients.conf:/run/netcore/runtime/clients.conf:ro
       - ${NETCORE_RADIUS_SPOOL_DIR:?set NETCORE_RADIUS_SPOOL_DIR in deployments/production/.env}:/var/lib/netcore-radius/spool
       - postgres_tls:/run/netcore/postgres-tls:ro

@@ -270,6 +270,16 @@ func TestRadiusEntrypointPreservesUpstreamBinaryPath(t *testing.T) {
 	requireContains(t, text, "export PATH")
 }
 
+func TestRadiusMACAuthenticationSecretIsFileMounted(t *testing.T) {
+	compose, err := os.ReadFile("compose.yaml")
+	if err != nil { t.Fatal(err) }
+	entrypoint, err := os.ReadFile("radius-entrypoint.sh")
+	if err != nil { t.Fatal(err) }
+	requireContains(t, string(compose), "/radius/mac_auth_password:/run/netcore/runtime/mac_auth_password:ro")
+	requireContains(t, string(entrypoint), "mac_auth_password_file=/run/netcore/runtime/mac_auth_password")
+	requireContains(t, string(entrypoint), "export NETCORE_RADIUS_MAC_AUTH_PASSWORD")
+}
+
 func TestRadiusImageDisablesUnusedEAPModule(t *testing.T) {
 	dockerfile, err := os.ReadFile("Dockerfile.freeradius")
 	if err != nil {

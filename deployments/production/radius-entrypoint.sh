@@ -46,6 +46,27 @@ chmod 0600 "$PGPASSFILE"
 export PGPASSFILE
 unset RADIUS_DB_PASSWORD
 
+# MAC auto-login has its own deployment-managed secret. It is read from a
+# dedicated runtime file rather than Compose/.env so it cannot leak through
+# environment inspection or source control.
+mac_auth_password_file=/run/netcore/runtime/mac_auth_password
+if [ ! -r "$mac_auth_password_file" ]; then
+  echo "netcore radius: missing readable MAC authentication password file" >&2
+  exit 64
+fi
+NETCORE_RADIUS_MAC_AUTH_PASSWORD=$(tr -d '\r\n' < "$mac_auth_password_file")
+if [ -z "$NETCORE_RADIUS_MAC_AUTH_PASSWORD" ]; then
+  echo "netcore radius: MAC authentication password file is empty" >&2
+  exit 64
+fi
+case "$NETCORE_RADIUS_MAC_AUTH_PASSWORD" in
+  *[!A-Za-z0-9_-]*)
+    echo "netcore radius: MAC authentication password must be a base64url value" >&2
+    exit 64
+    ;;
+esac
+export NETCORE_RADIUS_MAC_AUTH_PASSWORD
+
 mode=${NETCORE_RADIUS_MODE:-writer}
 case "$mode" in
   replay)
