@@ -109,6 +109,16 @@ func TestListRejectsMissingPrincipal(t *testing.T) {
 	}
 }
 
+func TestGrantInputDecodesSnakeCaseIDs(t *testing.T) {
+	var input GrantInput
+	if err := json.Unmarshal([]byte(`{"plan_id":"44444444-4444-4444-8444-444444444444","device_id":"55555555-5555-4555-8555-555555555555","reason":"support grant"}`), &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.PlanID == "" || input.DeviceID == "" || input.Reason != "support grant" {
+		t.Fatalf("grant input did not decode: %+v", input)
+	}
+}
+
 func TestCursorRoundTripAndRejectsExtraFields(t *testing.T) {
 	cursor := Cursor{
 		CreatedAt: time.Date(2026, 8, 12, 10, 0, 0, 123, time.UTC),

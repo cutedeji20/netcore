@@ -71,7 +71,12 @@ type GrantStore interface {
 }
 
 type GrantActor struct{ UserID, IPAddress, UserAgent string }
-type GrantInput struct{ CustomerID, PlanID, DeviceID, Reason string }
+type GrantInput struct {
+	CustomerID string `json:"-"`
+	PlanID     string `json:"plan_id"`
+	DeviceID   string `json:"device_id"`
+	Reason     string `json:"reason"`
+}
 
 var (
 	ErrInvalidGrant        = errors.New("subscriptions: invalid grant")
