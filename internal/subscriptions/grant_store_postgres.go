@@ -36,10 +36,10 @@ func (s *PostgresStore) Grant(ctx context.Context, tenantID string, actor GrantA
 		if _, err := tx.Exec(ctx, `INSERT INTO usage_counters (tenant_id,subscription_id,customer_id,period_start,period_end,quota_bytes) VALUES ($1,$2::uuid,$3::uuid,$4,$5,$6)`, tenantID, subscription.ID, input.CustomerID, *subscription.StartsAt, *subscription.ExpiresAt, quotaBytes); err != nil {
 			return fmt.Errorf("subscriptions: create grant usage: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO subscription_events (tenant_id,subscription_id,from_status,to_status,reason,actor_type,actor_id,metadata) VALUES ($1,$2::uuid,NULL,'ACTIVE','STAFF_GRANT','ADMIN',$3::uuid,jsonb_build_object('reason',$4))`, tenantID, subscription.ID, actor.UserID, input.Reason); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO subscription_events (tenant_id,subscription_id,from_status,to_status,reason,actor_type,actor_id,metadata) VALUES ($1,$2::uuid,NULL,'ACTIVE','STAFF_GRANT','ADMIN',$3::uuid,jsonb_build_object('reason',$4::text))`, tenantID, subscription.ID, actor.UserID, input.Reason); err != nil {
 			return fmt.Errorf("subscriptions: audit grant event: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id,actor_type,actor_id,action,resource_type,resource_id,ip_address,user_agent,metadata) VALUES ($1,'STAFF',$2::uuid,'SUBSCRIPTION_GRANTED_BY_STAFF','subscription',$3::uuid,NULLIF($4,'')::inet,NULLIF($5,''),jsonb_build_object('customer_id',$6::uuid,'plan_id',$7::uuid,'device_id',$8::uuid,'reason',$9))`, tenantID, actor.UserID, subscription.ID, actor.IPAddress, actor.UserAgent, input.CustomerID, input.PlanID, input.DeviceID, input.Reason); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id,actor_type,actor_id,action,resource_type,resource_id,ip_address,user_agent,metadata) VALUES ($1,'STAFF',$2::uuid,'SUBSCRIPTION_GRANTED_BY_STAFF','subscription',$3::uuid,NULLIF($4,'')::inet,NULLIF($5,''),jsonb_build_object('customer_id',$6::uuid,'plan_id',$7::uuid,'device_id',$8::uuid,'reason',$9::text))`, tenantID, actor.UserID, subscription.ID, actor.IPAddress, actor.UserAgent, input.CustomerID, input.PlanID, input.DeviceID, input.Reason); err != nil {
 			return fmt.Errorf("subscriptions: audit grant: %w", err)
 		}
 		return nil
