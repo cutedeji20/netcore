@@ -211,6 +211,10 @@ func (s *recordingSender) SendStaffInvitation(_ context.Context, _ string, invit
 	s.url = inviteURL
 	return s.err
 }
+func (s *recordingSender) SendStaffMFARecoveryForTenant(_ context.Context, _, _, recoveryURL string, _ time.Time, _ string) error {
+	s.url = recoveryURL
+	return s.err
+}
 
 type acceptingStepUp struct{}
 
@@ -338,8 +342,24 @@ func (s *memoryInvitationStore) ReactivateStaff(context.Context, string, string,
 	return nil
 }
 
-func (s *memoryInvitationStore) ResetStaffPassword(_ context.Context, _, _, _, passwordHash string) error {
+func (s *memoryInvitationStore) CreateMFARecovery(_ context.Context, tenantID, actorID, targetID string, _ []byte, expiresAt time.Time) (MFARecovery, error) {
+	return MFARecovery{ID: "55555555-5555-4555-8555-555555555555", TenantID: tenantID, UserID: targetID, Email: "staff@example.test", Status: "PENDING", CreatedBy: actorID, ExpiresAt: expiresAt}, nil
+}
+func (s *memoryInvitationStore) ActivateStaffPasswordReset(_ context.Context, _ MFARecovery, passwordHash string) error {
 	s.resetPasswordHash = passwordHash
 	s.sessionsInvalidated = true
+	return nil
+}
+func (s *memoryInvitationStore) RevokeMFARecovery(context.Context, string, string, string) error {
+	return nil
+}
+func (s *memoryInvitationStore) FindMFARecoveryByDigest(context.Context, []byte) (MFARecovery, bool, error) {
+	return MFARecovery{}, false, nil
+}
+func (s *memoryInvitationStore) CreateOrReuseMFARecoveryMFA(_ context.Context, r MFARecovery, _ []byte, m auth.MFASecretEnvelope) (auth.MFASecretEnvelope, error) {
+	r.MFA = m
+	return m, nil
+}
+func (s *memoryInvitationStore) CompleteMFARecovery(context.Context, MFARecovery, auth.MFASecretEnvelope, int64) error {
 	return nil
 }

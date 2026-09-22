@@ -69,6 +69,8 @@ func (h *HTTP) invitationRoutes(mux *http.ServeMux, sessions *auth.HTTP) {
 	mux.Handle("POST /api/v1/team/members/bulk-lifecycle", write(h.bulkLifecycle))
 	mux.HandleFunc("POST /api/v1/staff-invitations/prepare", h.publicNoStore(h.prepareInvitation(sessions)))
 	mux.HandleFunc("POST /api/v1/staff-invitations/complete", h.publicNoStore(h.completeInvitation(sessions)))
+	mux.HandleFunc("POST /api/v1/staff-mfa-recoveries/prepare", h.publicNoStore(h.prepareMFARecovery(sessions)))
+	mux.HandleFunc("POST /api/v1/staff-mfa-recoveries/complete", h.publicNoStore(h.completeMFARecovery(sessions)))
 }
 func (h *HTTP) listInvitations(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFromContext(r.Context())
@@ -299,6 +301,39 @@ func (h *HTTP) completeInvitation(sessions *auth.HTTP) http.HandlerFunc {
 			return
 		}
 		if err := h.invitations.CompleteAcceptance(r.Context(), input); err != nil {
+			h.invalidInvitation(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+func (h *HTTP) prepareMFARecovery(sessions *auth.HTTP) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Token string `json:"token"`
+		}
+		if !decodeInvitationJSON(w, r, &input) || !h.limitInvitation(r, input.Token, sessions) {
+			h.invalidInvitation(w, r)
+			return
+		}
+		setup, err := h.invitations.PrepareMFARecovery(r.Context(), input.Token)
+		if err != nil {
+			h.invalidInvitation(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, struct {
+			MFASetup MFASetup `json:"mfa_setup"`
+		}{setup})
+	}
+}
+func (h *HTTP) completeMFARecovery(sessions *auth.HTTP) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var input CompleteMFARecoveryInput
+		if !decodeInvitationJSON(w, r, &input) || !h.limitInvitation(r, input.Token, sessions) {
+			h.invalidInvitation(w, r)
+			return
+		}
+		if err := h.invitations.CompleteMFARecovery(r.Context(), input); err != nil {
 			h.invalidInvitation(w, r)
 			return
 		}

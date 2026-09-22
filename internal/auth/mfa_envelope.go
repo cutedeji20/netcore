@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	mfaAADPrefix           = "netcore/mfa/v1/"
-	staffInvitationSubject = "staff-invitation"
-	userTOTPMFASubject     = "user-mfa-totp"
+	mfaAADPrefix            = "netcore/mfa/v1/"
+	staffInvitationSubject  = "staff-invitation"
+	staffMFARecoverySubject = "staff-mfa-recovery"
+	userTOTPMFASubject      = "user-mfa-totp"
 )
 
 var ErrInvalidMFAEnvelope = errors.New("auth: invalid MFA envelope")
@@ -85,7 +86,7 @@ func validMFASubject(tenantID, subjectKind, subjectID string) bool {
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(subjectID) == "" {
 		return false
 	}
-	return subjectKind == staffInvitationSubject || subjectKind == userTOTPMFASubject
+	return subjectKind == staffInvitationSubject || subjectKind == staffMFARecoverySubject || subjectKind == userTOTPMFASubject
 }
 
 func mfaAAD(tenantID, subjectKind, subjectID string) []byte {

@@ -76,7 +76,7 @@ func newHandler() (http.Handler, error) {
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" || strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
-		if r.URL.Path == "/staff-invite.html" {
+		if r.URL.Path == "/staff-invite.html" || r.URL.Path == "/staff-mfa-recovery.html" {
 			// Invitation tokens live only in a URL fragment, so this page must not
 			// be cached or forwarded as a Referer.
 			w.Header().Set("Cache-Control", "no-store")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -207,23 +208,100 @@ func (s *PostgresStore) ReactivateStaff(ctx context.Context, tenantID, actorID, 
 	})
 }
 
-func (s *PostgresStore) ResetStaffPassword(ctx context.Context, tenantID, actorID, targetID, passwordHash string) error {
-	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+func (s *PostgresStore) CreateMFARecovery(ctx context.Context, tenantID, actorID, targetID string, digest []byte, expiresAt time.Time) (MFARecovery, error) {
+	var recovery MFARecovery
+	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var target string
 		if err := tx.QueryRow(ctx, lockedTenantStaffTargetSQL, tenantID, targetID).Scan(&target); err != nil {
 			return ErrInvitationInvalid
 		}
-		command, err := tx.Exec(ctx, `UPDATE users SET password_hash=$3,password_params='{}'::jsonb,updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`, tenantID, targetID, passwordHash)
-		if err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE staff_mfa_recoveries SET status='REVOKED',updated_at=now() WHERE tenant_id=$1 AND user_id=$2 AND status IN ('PENDING','DELIVERY_PENDING')`, tenantID, targetID); err != nil {
 			return err
 		}
-		if command.RowsAffected() != 1 {
-			return ErrInvitationInvalid
-		}
-		if _, err := tx.Exec(ctx, invalidateTargetSessionsSQL, tenantID, targetID); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO staff_mfa_recoveries(tenant_id,user_id,email,token_digest,status,expires_at,created_by) SELECT tenant_id,id,email,$3,'DELIVERY_PENDING',$4,$5::uuid FROM users WHERE tenant_id=$1 AND id=$2 RETURNING id::text,tenant_id::text,user_id::text,email::text,status,expires_at,created_by::text`, tenantID, targetID, digest, expiresAt, actorID).Scan(&recovery.ID, &recovery.TenantID, &recovery.UserID, &recovery.Email, &recovery.Status, &recovery.ExpiresAt, &recovery.CreatedBy); err != nil {
 			return err
 		}
-		return teamAudit(ctx, tx, tenantID, actorID, "STAFF_PASSWORD_RESET", "users", targetID)
+		return teamAudit(ctx, tx, tenantID, actorID, "STAFF_MFA_RECOVERY_ISSUED", "staff_mfa_recovery", recovery.ID)
+	})
+	return recovery, err
+}
+
+func (s *PostgresStore) ActivateStaffPasswordReset(ctx context.Context, recovery MFARecovery, passwordHash string) error {
+	return s.db.InTenantTx(ctx, recovery.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `UPDATE staff_mfa_recoveries SET status='PENDING',updated_at=now() WHERE tenant_id=$1 AND id=$2 AND user_id=$3 AND status='DELIVERY_PENDING' AND expires_at>now() RETURNING id::text`, recovery.TenantID, recovery.ID, recovery.UserID).Scan(&recovery.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE users SET password_hash=$3,password_params='{}'::jsonb,updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`, recovery.TenantID, recovery.UserID, passwordHash); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, invalidateTargetSessionsSQL, recovery.TenantID, recovery.UserID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE user_mfa_totp SET status='DISABLED',disabled_at=COALESCE(disabled_at,now()),updated_at=now() WHERE tenant_id=$1 AND user_id=$2 AND status='ACTIVE'`, recovery.TenantID, recovery.UserID); err != nil {
+			return err
+		}
+		return teamAudit(ctx, tx, recovery.TenantID, recovery.CreatedBy, "STAFF_PASSWORD_RESET", "users", recovery.UserID)
+	})
+}
+func (s *PostgresStore) RevokeMFARecovery(ctx context.Context, tenantID, id, actorID string) error {
+	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE staff_mfa_recoveries SET status='REVOKED',updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='DELIVERY_PENDING'`, tenantID, id)
+		return err
+	})
+}
+
+func (s *PostgresStore) FindMFARecoveryByDigest(ctx context.Context, digest []byte) (MFARecovery, bool, error) {
+	if s == nil || s.db == nil || len(digest) != 32 {
+		return MFARecovery{}, false, ErrStoreUnavailable
+	}
+	var tenantID string
+	err := s.db.InSystemTx(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT staff_mfa_recovery_tenant_for_digest($1)::text`, digest).Scan(&tenantID)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MFARecovery{}, false, nil
+	}
+	if err != nil || !validUUID(tenantID) {
+		return MFARecovery{}, false, err
+	}
+	var recovery MFARecovery
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT id::text,tenant_id::text,user_id::text,email::text,status,expires_at,created_by::text,secret_ciphertext,secret_nonce,wrapped_dek,COALESCE(kek_key_id,'') FROM staff_mfa_recoveries WHERE tenant_id=$1 AND token_digest=$2`, tenantID, digest).Scan(&recovery.ID, &recovery.TenantID, &recovery.UserID, &recovery.Email, &recovery.Status, &recovery.ExpiresAt, &recovery.CreatedBy, &recovery.MFA.Ciphertext, &recovery.MFA.Nonce, &recovery.MFA.WrappedDEK, &recovery.MFA.KEKKeyID)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MFARecovery{}, false, nil
+	}
+	return recovery, err == nil, err
+}
+
+func (s *PostgresStore) CreateOrReuseMFARecoveryMFA(ctx context.Context, recovery MFARecovery, digest []byte, mfa auth.MFASecretEnvelope) (auth.MFASecretEnvelope, error) {
+	var stored auth.MFASecretEnvelope
+	err := s.db.InTenantTx(ctx, recovery.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT secret_ciphertext,secret_nonce,wrapped_dek,COALESCE(kek_key_id,'') FROM staff_mfa_recoveries WHERE tenant_id=$1 AND id=$2 AND token_digest=$3 AND status='PENDING' AND expires_at>now() FOR UPDATE`, recovery.TenantID, recovery.ID, digest).Scan(&stored.Ciphertext, &stored.Nonce, &stored.WrappedDEK, &stored.KEKKeyID); err != nil {
+			return err
+		}
+		if presentEnvelope(stored) {
+			return nil
+		}
+		_, err := tx.Exec(ctx, `UPDATE staff_mfa_recoveries SET secret_ciphertext=$3,secret_nonce=$4,wrapped_dek=$5,kek_key_id=$6,updated_at=now() WHERE tenant_id=$1 AND id=$2`, recovery.TenantID, recovery.ID, mfa.Ciphertext, mfa.Nonce, mfa.WrappedDEK, mfa.KEKKeyID)
+		stored = mfa
+		return err
+	})
+	return stored, err
+}
+
+func (s *PostgresStore) CompleteMFARecovery(ctx context.Context, recovery MFARecovery, mfa auth.MFASecretEnvelope, counter int64) error {
+	return s.db.InTenantTx(ctx, recovery.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `UPDATE staff_mfa_recoveries SET status='REDEEMED',redeemed_at=now(),updated_at=now() WHERE tenant_id=$1 AND id=$2 AND user_id=$3 AND status='PENDING' AND expires_at>now() RETURNING id::text`, recovery.TenantID, recovery.ID, recovery.UserID).Scan(&recovery.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE user_mfa_totp SET status='DISABLED',disabled_at=COALESCE(disabled_at,now()),updated_at=now() WHERE tenant_id=$1 AND user_id=$2 AND status='ACTIVE'`, recovery.TenantID, recovery.UserID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO user_mfa_totp(tenant_id,user_id,secret_ref,secret_ciphertext,secret_nonce,wrapped_dek,kek_key_id,status,last_used_counter,enabled_at) VALUES($1,$2::uuid,NULL,$3,$4,$5,$6,'ACTIVE',$7,now())`, recovery.TenantID, recovery.UserID, mfa.Ciphertext, mfa.Nonce, mfa.WrappedDEK, mfa.KEKKeyID, counter); err != nil {
+			return err
+		}
+		return teamAudit(ctx, tx, recovery.TenantID, recovery.UserID, "STAFF_MFA_RECOVERY_COMPLETED", "staff_mfa_recovery", recovery.ID)
 	})
 }
 func (s *PostgresStore) mutateStaff(ctx context.Context, tenantID, actorID, targetID string, role BuiltInRole, deactivate bool) error {

@@ -32,6 +32,9 @@ const invitationLifetime = 24 * time.Hour
 type StaffInvitationSender interface {
 	SendStaffInvitation(context.Context, string, string, time.Time) error
 }
+type StaffMFARecoverySender interface {
+	SendStaffMFARecoveryForTenant(context.Context, string, string, string, time.Time, string) error
+}
 type TenantStaffInvitationSender interface {
 	SendStaffInvitationForTenant(context.Context, string, string, string, time.Time) error
 }
@@ -106,6 +109,12 @@ type CompleteInvitationInput struct {
 	Password string `json:"password"`
 	MFACode  string `json:"mfa_code"`
 }
+type MFARecovery struct {
+	ID, TenantID, UserID, Email, Status, CreatedBy string
+	ExpiresAt                                      time.Time
+	MFA                                            auth.MFASecretEnvelope
+}
+type CompleteMFARecoveryInput struct{ Token, MFACode string }
 
 // InvitationStore defines atomic tenant-scoped mutation boundaries. Methods
 // that receive a tenant must execute inside a tenant RLS transaction and keep
@@ -122,7 +131,12 @@ type InvitationStore interface {
 	ChangeStaffRole(context.Context, string, string, string, BuiltInRole) error
 	DeactivateStaff(context.Context, string, string, string) error
 	ReactivateStaff(context.Context, string, string, string) error
-	ResetStaffPassword(context.Context, string, string, string, string) error
+	CreateMFARecovery(context.Context, string, string, string, []byte, time.Time) (MFARecovery, error)
+	ActivateStaffPasswordReset(context.Context, MFARecovery, string) error
+	RevokeMFARecovery(context.Context, string, string, string) error
+	FindMFARecoveryByDigest(context.Context, []byte) (MFARecovery, bool, error)
+	CreateOrReuseMFARecoveryMFA(context.Context, MFARecovery, []byte, auth.MFASecretEnvelope) (auth.MFASecretEnvelope, error)
+	CompleteMFARecovery(context.Context, MFARecovery, auth.MFASecretEnvelope, int64) error
 }
 
 type Service struct {
@@ -314,7 +328,92 @@ func (s *Service) ResetStaffPassword(ctx context.Context, in PasswordResetInput)
 	if err != nil {
 		return ErrStoreUnavailable
 	}
-	return mapStoreError(s.store.ResetStaffPassword(ctx, in.Principal.TenantID, in.Principal.UserID, in.UserID, hash))
+	raw, digest, err := newInvitationToken()
+	if err != nil {
+		return ErrStoreUnavailable
+	}
+	recovery, err := s.store.CreateMFARecovery(ctx, in.Principal.TenantID, in.Principal.UserID, in.UserID, digest, s.now().UTC().Add(invitationLifetime))
+	if err != nil {
+		return mapStoreError(err)
+	}
+	sender, ok := s.sender.(StaffMFARecoverySender)
+	if !ok || sender.SendStaffMFARecoveryForTenant(ctx, recovery.TenantID, recovery.Email, recoveryURL(s.inviteURL)+"#token="+raw, recovery.ExpiresAt, recovery.ID) != nil {
+		_ = s.store.RevokeMFARecovery(ctx, recovery.TenantID, recovery.ID, in.Principal.UserID)
+		return ErrStoreUnavailable
+	}
+	return mapStoreError(s.store.ActivateStaffPasswordReset(ctx, recovery, hash))
+}
+
+func recoveryURL(inviteURL string) string {
+	u, err := url.Parse(inviteURL)
+	if err != nil {
+		return inviteURL
+	}
+	u.Path = "/staff-mfa-recovery.html"
+	return u.String()
+}
+
+// PrepareMFARecovery supplies a replacement authenticator secret only after a
+// password-reset recovery was issued. The token never reaches logs or storage.
+func (s *Service) PrepareMFARecovery(ctx context.Context, raw string) (MFASetup, error) {
+	recovery, ok, err := s.validMFARecovery(ctx, raw)
+	if err != nil || !ok {
+		return MFASetup{}, ErrInvitationInvalid
+	}
+	if !presentEnvelope(recovery.MFA) {
+		secret, err := totp.GenerateSecret()
+		if err != nil {
+			return MFASetup{}, ErrStoreUnavailable
+		}
+		sealed, err := auth.SealTOTPSecret(ctx, s.wrapper, recovery.TenantID, "staff-mfa-recovery", recovery.ID, secret)
+		if err != nil {
+			return MFASetup{}, ErrStoreUnavailable
+		}
+		stored, err := s.store.CreateOrReuseMFARecoveryMFA(ctx, recovery, invitationDigestBytes(raw), sealed)
+		if err != nil {
+			return MFASetup{}, ErrStoreUnavailable
+		}
+		if string(stored.Ciphertext) != string(sealed.Ciphertext) {
+			secret, err = auth.OpenTOTPSecret(ctx, s.wrapper, recovery.TenantID, "staff-mfa-recovery", recovery.ID, stored)
+			if err != nil {
+				return MFASetup{}, ErrInvitationInvalid
+			}
+		}
+		return mfaSetup(recovery.Email, secret), nil
+	}
+	secret, err := auth.OpenTOTPSecret(ctx, s.wrapper, recovery.TenantID, "staff-mfa-recovery", recovery.ID, recovery.MFA)
+	if err != nil {
+		return MFASetup{}, ErrInvitationInvalid
+	}
+	return mfaSetup(recovery.Email, secret), nil
+}
+
+func (s *Service) CompleteMFARecovery(ctx context.Context, in CompleteMFARecoveryInput) error {
+	recovery, ok, err := s.validMFARecovery(ctx, in.Token)
+	if err != nil || !ok || !presentEnvelope(recovery.MFA) {
+		return ErrInvitationInvalid
+	}
+	secret, err := auth.OpenTOTPSecret(ctx, s.wrapper, recovery.TenantID, "staff-mfa-recovery", recovery.ID, recovery.MFA)
+	if err != nil {
+		return ErrInvitationInvalid
+	}
+	counter, matched, err := totp.Verify(secret, strings.TrimSpace(in.MFACode), s.now(), totp.DefaultDigits, 1)
+	if err != nil || !matched {
+		return ErrInvitationInvalid
+	}
+	return mapStoreError(s.store.CompleteMFARecovery(ctx, recovery, recovery.MFA, counter))
+}
+
+func (s *Service) validMFARecovery(ctx context.Context, raw string) (MFARecovery, bool, error) {
+	digest, ok := invitationDigest(raw)
+	if !ok {
+		return MFARecovery{}, false, nil
+	}
+	recovery, found, err := s.store.FindMFARecoveryByDigest(ctx, digest)
+	if err != nil || !found || recovery.Status != "PENDING" || !recovery.ExpiresAt.After(s.now()) {
+		return MFARecovery{}, false, err
+	}
+	return recovery, true, nil
 }
 
 func (s *Service) BulkLifecycle(ctx context.Context, principal auth.Principal, userIDs []string, active bool, password, mfaCode string) (int, error) {

@@ -102,6 +102,13 @@ func (s *TenantInvitationSender) SendStaffInvitationForTenantWithID(ctx context.
 	}
 	return notifier.SendStaffInvitationWithID(ctx, to, inviteURL, expiresAt, invitationID)
 }
+func (s *TenantInvitationSender) SendStaffMFARecoveryForTenant(ctx context.Context, tenantID, to, recoveryURL string, expiresAt time.Time, recoveryID string) error {
+	notifier, err := NewTenantResendNotifier(s.resolver, tenantID, s.client)
+	if err != nil {
+		return err
+	}
+	return notifier.SendStaffMFARecovery(ctx, to, recoveryURL, expiresAt, recoveryID)
+}
 
 func NewTenantResendNotifier(resolver TenantResendCredentialResolver, tenantID string, client *http.Client) (*TenantResendNotifier, error) {
 	if resolver == nil || strings.TrimSpace(tenantID) == "" {
@@ -340,6 +347,38 @@ func (n *TenantResendNotifier) sendStaffInvitation(ctx context.Context, to, invi
 	// or recipient; the staff service always provides an invitation UUID.
 	digest := sha256.Sum256([]byte(link.String()))
 	return n.send(ctx, key, payload, "staff.invitation/"+hex.EncodeToString(digest[:]))
+}
+
+// SendStaffMFARecovery delivers a one-time replacement-authenticator link.
+// The raw token stays in the URL fragment and is never written to telemetry.
+func (n *TenantResendNotifier) SendStaffMFARecovery(ctx context.Context, to, recoveryURL string, expiresAt time.Time, recoveryID string) error {
+	if n == nil || n.resolver == nil || n.client == nil || !validInvitationUUID(recoveryID) {
+		return errors.New("notify: staff MFA recovery is invalid")
+	}
+	link, err := url.Parse(strings.TrimSpace(recoveryURL))
+	if err != nil || link.Scheme != "https" || link.Host == "" || link.RawQuery != "" || !strings.HasPrefix(link.Fragment, "token=") || len(strings.TrimPrefix(link.Fragment, "token=")) != 43 {
+		return errors.New("notify: staff MFA recovery is invalid")
+	}
+	destination := strings.TrimSpace(to)
+	parsed, err := mail.ParseAddress(destination)
+	if err != nil || parsed.Address != destination || expiresAt.IsZero() || !expiresAt.After(time.Now()) {
+		return errors.New("notify: staff MFA recovery is invalid")
+	}
+	key, metadata, err := n.resolver.Resolve(ctx, n.tenantID, integrations.ProviderResend)
+	if err != nil || len(key) == 0 || !validResendSender(metadata.SenderEmail) {
+		return errors.New("notify: Resend credential is unavailable")
+	}
+	defer clearCredential(key)
+	payload, err := json.Marshal(struct {
+		From    string `json:"from"`
+		To      string `json:"to"`
+		Subject string `json:"subject"`
+		Text    string `json:"text"`
+	}{From: strings.TrimSpace(metadata.SenderEmail), To: destination, Subject: "Reset your NetCore authenticator", Text: "An administrator reset your password and requested a new authenticator setup. Use this one-time secure link before " + expiresAt.UTC().Format(time.RFC3339) + ".\n\n" + link.String() + "\n\nIf you did not expect this, contact your administrator immediately."})
+	if err != nil {
+		return errors.New("notify: encode staff MFA recovery")
+	}
+	return n.send(ctx, key, payload, "staff.mfa-recovery/"+recoveryID)
 }
 
 // SendPaymentReceipt implements payments.ReceiptSender for a fixed tenant.
