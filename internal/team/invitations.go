@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"net/mail"
 	"net/url"
 	"strings"
@@ -393,17 +394,24 @@ func (s *Service) PrepareMFARecovery(ctx context.Context, raw string) (MFASetup,
 func (s *Service) CompleteMFARecovery(ctx context.Context, in CompleteMFARecoveryInput) error {
 	recovery, ok, err := s.validMFARecovery(ctx, in.Token)
 	if err != nil || !ok || !presentEnvelope(recovery.MFA) {
+		slog.Warn("staff MFA recovery rejected", "stage", "token_invalid")
 		return ErrInvitationInvalid
 	}
 	secret, err := auth.OpenTOTPSecret(ctx, s.wrapper, recovery.TenantID, "staff-mfa-recovery", recovery.ID, recovery.MFA)
 	if err != nil {
+		slog.Error("staff MFA recovery rejected", "stage", "secret_open_failed", "recovery_id", recovery.ID, "error", err.Error())
 		return ErrInvitationInvalid
 	}
 	counter, matched, err := totp.Verify(secret, strings.TrimSpace(in.MFACode), s.now(), totp.DefaultDigits, 1)
 	if err != nil || !matched {
+		slog.Warn("staff MFA recovery rejected", "stage", "totp_rejected", "recovery_id", recovery.ID)
 		return ErrInvitationInvalid
 	}
-	return mapStoreError(s.store.CompleteMFARecovery(ctx, recovery, recovery.MFA, counter))
+	if err := s.store.CompleteMFARecovery(ctx, recovery, recovery.MFA, counter); err != nil {
+		slog.Error("staff MFA recovery rejected", "stage", "activation_failed", "recovery_id", recovery.ID, "error", err.Error())
+		return mapStoreError(err)
+	}
+	return nil
 }
 
 func (s *Service) validMFARecovery(ctx context.Context, raw string) (MFARecovery, bool, error) {
