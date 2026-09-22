@@ -55,6 +55,27 @@ func TestRedeemInvitationOnce(t *testing.T) {
 	}
 }
 
+func TestCompleteInvitationRequiresSixteenCharacterPassword(t *testing.T) {
+	store := &memoryInvitationStore{}
+	sender := &recordingSender{}
+	service := newInvitationServiceWithStore(t, store, acceptingStepUp{}, sender)
+	if _, err := service.Invite(context.Background(), InviteInput{Principal: administrator(), Email: "ops@example.test", Role: RoleOperations, Password: "correct password", MFACode: "123456"}); err != nil {
+		t.Fatal(err)
+	}
+	token := strings.TrimPrefix(strings.Split(sender.url, "#")[1], "token=")
+	setup, err := service.PrepareAcceptance(context.Background(), token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := totp.Code(setup.ManualKey, time.Now(), totp.DefaultDigits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.CompleteAcceptance(context.Background(), CompleteInvitationInput{Token: token, Password: "too short", MFACode: code}); !errors.Is(err, ErrInvitationInvalid) {
+		t.Fatalf("short password = %v", err)
+	}
+}
+
 func TestCannotDeactivateFinalAdministrator(t *testing.T) {
 	store := &memoryInvitationStore{deactivateErr: ErrLastAdministrator}
 	service := newInvitationServiceWithStore(t, store, acceptingStepUp{}, &recordingSender{})

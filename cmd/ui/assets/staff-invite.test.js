@@ -26,6 +26,12 @@ test("invitation token is read from a fragment and immediately removed", () => {
   assert.equal(replaced, "/staff-invite.html");
 });
 
+test("staff invitation password uses the server minimum without a restrictive pattern", () => {
+  const html = fs.readFileSync(path.join(__dirname, "staff-invite.html"), "utf8");
+  assert.match(html, /name="password"[^>]*minlength="16"/);
+  assert.doesNotMatch(html, /name="password"[^>]*pattern=/);
+});
+
 test("browser flow consumes an emitted token fragment and API uri before completion", async () => {
   const rawToken = "A".repeat(43);
   const listeners = {};

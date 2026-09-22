@@ -34,6 +34,9 @@ if (typeof window !== "undefined") (function () {
   var uri = document.querySelector("#staff-mfa-uri");
 
   function invalid() { message.textContent = genericError; error.textContent = genericError; form.hidden = true; setup.hidden = true; }
+  function completionFailed() {
+    error.textContent = "We could not complete the invitation. Use a password with at least 16 characters and a fresh six-digit authenticator code. If it persists, ask an administrator for a new invitation.";
+  }
   if (!token) { invalid(); return; }
   fetch(prepareRequest(token).url, prepareRequest(token)).then(function (response) { if (!response.ok) throw new Error("invalid"); return response.json(); }).then(function (payload) {
     var mfa = payload && payload.mfa_setup;
@@ -42,6 +45,6 @@ if (typeof window !== "undefined") (function () {
   }).catch(invalid);
   form.addEventListener("submit", function (event) {
     event.preventDefault(); var submit = form.querySelector("button[type=submit]"); if (submit.disabled) return; submit.disabled = true; error.textContent = "";
-    acceptanceRequest(token, form.elements.password.value, form.elements.mfa_code.value).then(function (requestValue) { return fetch(requestValue.url, requestValue); }).then(function (response) { if (!response.ok) throw new Error("invalid"); form.reset(); key.value = ""; uri.value = ""; window.location.replace("/"); }).catch(invalid).finally(function () { submit.disabled = false; });
+    acceptanceRequest(token, form.elements.password.value, form.elements.mfa_code.value).then(function (requestValue) { return fetch(requestValue.url, requestValue); }).then(function (response) { if (!response.ok) throw new Error("incomplete"); form.reset(); key.value = ""; uri.value = ""; window.location.replace("/"); }).catch(completionFailed).finally(function () { submit.disabled = false; });
   });
 }());
