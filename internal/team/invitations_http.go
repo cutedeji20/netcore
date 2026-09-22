@@ -65,6 +65,7 @@ func (h *HTTP) invitationRoutes(mux *http.ServeMux, sessions *auth.HTTP) {
 	mux.Handle("PUT /api/v1/team/members/{id}/role", write(h.changeRole))
 	mux.Handle("POST /api/v1/team/members/{id}/deactivate", write(h.deactivate))
 	mux.Handle("POST /api/v1/team/members/{id}/reactivate", write(h.reactivate))
+	mux.Handle("POST /api/v1/team/members/{id}/password-reset", write(h.resetPassword))
 	mux.Handle("POST /api/v1/team/members/bulk-lifecycle", write(h.bulkLifecycle))
 	mux.HandleFunc("POST /api/v1/staff-invitations/prepare", h.publicNoStore(h.prepareInvitation(sessions)))
 	mux.HandleFunc("POST /api/v1/staff-invitations/complete", h.publicNoStore(h.completeInvitation(sessions)))
@@ -217,6 +218,28 @@ func (h *HTTP) reactivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.invitations.Reactivate(r.Context(), ReactivateInput{Principal: principal, UserID: userID, Password: input.Password, MFACode: input.MFACode}); err != nil {
+		h.writeMutationError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (h *HTTP) resetPassword(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	var input struct {
+		NewPassword string `json:"new_password"`
+		Password    string `json:"password"`
+		MFACode     string `json:"mfa_code"`
+	}
+	userID := r.PathValue("id")
+	if !decodeInvitationJSON(w, r, &input) || !validUUID(userID) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
+		return
+	}
+	if err := h.invitations.ResetStaffPassword(r.Context(), PasswordResetInput{Principal: principal, UserID: userID, NewPassword: input.NewPassword, Password: input.Password, MFACode: input.MFACode}); err != nil {
 		h.writeMutationError(w, r, err)
 		return
 	}

@@ -73,7 +73,7 @@ if (typeof window !== "undefined") (function () {
       input.name = field.name;
       input.required = field.required !== false;
       if (field.options) field.options.forEach(function (option) { var choice = document.createElement("option"); choice.value = option; choice.textContent = option; input.appendChild(choice); });
-      else { input.type = field.type || "text"; if (field.pattern) input.pattern = field.pattern; if (field.maxLength) input.maxLength = field.maxLength; }
+      else { input.type = field.type || "text"; if (field.pattern) input.pattern = field.pattern; if (field.minLength) input.minLength = field.minLength; if (field.maxLength) input.maxLength = field.maxLength; }
       label.appendChild(input); form.appendChild(label);
     });
     teamStepUpFields().forEach(function (field) {
@@ -246,12 +246,14 @@ if (typeof window !== "undefined") (function () {
       if (canWrite()) {
         var select=document.createElement("td"), checkbox=document.createElement("input"); checkbox.type="checkbox"; checkbox.checked=selectedMemberIDs.has(member.id); checkbox.setAttribute("aria-label","Select "+displayName(member)); checkbox.onchange=(function(input,id){return function(){if(input.checked)selectedMemberIDs.add(id);else selectedMemberIDs.delete(id);renderBulkActions();};})(checkbox,member.id); select.appendChild(checkbox); row.appendChild(select);
         var actions = document.createElement("td");
-        [
-          ["Change role", "PUT", "/api/v1/team/members/" + member.id + "/role", true],
-          [member.status === "DISABLED" ? "Reactivate" : "Deactivate", "POST", "/api/v1/team/members/" + member.id + (member.status === "DISABLED" ? "/reactivate" : "/deactivate"), false]
-        ].forEach(function (action) {
+        var memberActions = [
+          ["Change role", "PUT", "/api/v1/team/members/" + member.id + "/role", "role"],
+          [member.status === "DISABLED" ? "Reactivate" : "Deactivate", "POST", "/api/v1/team/members/" + member.id + (member.status === "DISABLED" ? "/reactivate" : "/deactivate"), ""]
+        ];
+        if (!window.NETCORE_PRINCIPAL || window.NETCORE_PRINCIPAL.id !== member.id) memberActions.push(["Reset password", "POST", "/api/v1/team/members/" + member.id + "/password-reset", "password"]);
+        memberActions.forEach(function (action) {
           var button = document.createElement("button"); button.type = "button"; button.className = "button team-row-action"; button.textContent = action[0];
-          button.addEventListener("click", function () { sensitiveDialog(action[0] + " member", action[3] ? [{ label: "New role", name: "role", options: ["Administrator", "Operations", "Billing", "Support"] }] : [], action[0], function (values) { return postJSON(action[2], action[1], values).then(function (response) { return response.ok ? undefined : safeError(response).then(Promise.reject.bind(Promise)); }); }); }); actions.appendChild(button);
+          button.addEventListener("click", function () { var fields = action[3] === "role" ? [{ label: "New role", name: "role", options: ["Administrator", "Operations", "Billing", "Support"] }] : action[3] === "password" ? [{ label: "New password (at least 16 characters)", name: "new_password", type: "password", minLength: 16, maxLength: 1024 }] : []; sensitiveDialog(action[0] + " member", fields, action[0], function (values) { return postJSON(action[2], action[1], values).then(function (response) { return response.ok ? undefined : safeError(response).then(Promise.reject.bind(Promise)); }); }); }); actions.appendChild(button);
         }); row.appendChild(actions);
       }
       body.appendChild(row);

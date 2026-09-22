@@ -187,6 +187,21 @@ func TestSuccessfulDeactivationInvalidatesAllTargetSessions(t *testing.T) {
 	}
 }
 
+func TestResetStaffPasswordRequiresStepUpAndInvalidatesSessions(t *testing.T) {
+	store := &memoryInvitationStore{}
+	service := newInvitationServiceWithStore(t, store, acceptingStepUp{}, &recordingSender{})
+	err := service.ResetStaffPassword(context.Background(), PasswordResetInput{
+		Principal: administrator(), UserID: "33333333-3333-4333-8333-333333333333",
+		NewPassword: "a sufficiently long replacement password", Password: "correct password", MFACode: "123456",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.sessionsInvalidated || store.resetPasswordHash == "" {
+		t.Fatal("password reset did not invalidate sessions and persist a hash")
+	}
+}
+
 type recordingSender struct {
 	url string
 	err error
@@ -243,6 +258,7 @@ type memoryInvitationStore struct {
 	archivedDigest      []byte
 	roleErr             error
 	sessionsInvalidated bool
+	resetPasswordHash   string
 }
 
 func (s *memoryInvitationStore) CreateInvitation(_ context.Context, invitation Invitation, digest []byte) (Invitation, error) {
@@ -319,5 +335,11 @@ func (s *memoryInvitationStore) DeactivateStaff(context.Context, string, string,
 }
 
 func (s *memoryInvitationStore) ReactivateStaff(context.Context, string, string, string) error {
+	return nil
+}
+
+func (s *memoryInvitationStore) ResetStaffPassword(_ context.Context, _, _, _, passwordHash string) error {
+	s.resetPasswordHash = passwordHash
+	s.sessionsInvalidated = true
 	return nil
 }

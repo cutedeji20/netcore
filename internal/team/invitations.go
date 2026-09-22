@@ -92,6 +92,11 @@ type ReactivateInput struct {
 	Password  string
 	MFACode   string
 }
+type PasswordResetInput struct {
+	Principal           auth.Principal
+	UserID, NewPassword string
+	Password, MFACode   string
+}
 type MFASetup struct {
 	URI       string `json:"uri"`
 	ManualKey string `json:"manual_key"`
@@ -117,6 +122,7 @@ type InvitationStore interface {
 	ChangeStaffRole(context.Context, string, string, string, BuiltInRole) error
 	DeactivateStaff(context.Context, string, string, string) error
 	ReactivateStaff(context.Context, string, string, string) error
+	ResetStaffPassword(context.Context, string, string, string, string) error
 }
 
 type Service struct {
@@ -292,6 +298,23 @@ func (s *Service) Reactivate(ctx context.Context, in ReactivateInput) error {
 		return ErrStepUpFailed
 	}
 	return mapStoreError(s.store.ReactivateStaff(ctx, in.Principal.TenantID, in.Principal.UserID, in.UserID))
+}
+
+// ResetStaffPassword replaces another active staff member's password after a
+// step-up challenge. MFA enrollment is deliberately retained and all existing
+// sessions are invalidated in the same tenant transaction.
+func (s *Service) ResetStaffPassword(ctx context.Context, in PasswordResetInput) error {
+	if s == nil || !validMutationPrincipal(in.Principal) || !validUUID(in.UserID) || in.UserID == in.Principal.UserID || len(in.NewPassword) < 16 || len(in.NewPassword) > 1024 {
+		return ErrInvitationInvalid
+	}
+	if err := s.stepUp.VerifyStepUp(ctx, auth.StepUpInput{Principal: in.Principal, Password: in.Password, MFACode: in.MFACode}); err != nil {
+		return ErrStepUpFailed
+	}
+	hash, err := s.hasher.Hash(in.NewPassword)
+	if err != nil {
+		return ErrStoreUnavailable
+	}
+	return mapStoreError(s.store.ResetStaffPassword(ctx, in.Principal.TenantID, in.Principal.UserID, in.UserID, hash))
 }
 
 func (s *Service) BulkLifecycle(ctx context.Context, principal auth.Principal, userIDs []string, active bool, password, mfaCode string) (int, error) {
