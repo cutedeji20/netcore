@@ -59,8 +59,34 @@ func TestRedeemInvitationOnce(t *testing.T) {
 	if err := service.CompleteAcceptance(context.Background(), in); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := auth.OpenTOTPSecret(context.Background(), testInvitationWrapper{}, store.invitation.TenantID, "user-mfa-totp", store.enrolledUserID, store.enrolledMFA); err != nil {
+		t.Fatalf("enrolled invitation MFA cannot be opened for the user: %v", err)
+	}
 	if err := service.CompleteAcceptance(context.Background(), in); !errors.Is(err, ErrInvitationInvalid) {
 		t.Fatalf("second redemption = %v", err)
+	}
+}
+
+func TestCompletedRecoveryEnrollsUserScopedMFA(t *testing.T) {
+	token, digest, err := newInvitationToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &memoryInvitationStore{recovery: MFARecovery{ID: "55555555-5555-4555-8555-555555555555", TenantID: teamTestTenantID, UserID: "33333333-3333-4333-8333-333333333333", Email: "staff@example.test", Status: "PENDING", ExpiresAt: time.Now().Add(time.Hour)}, recoveryDigest: digest}
+	service := newInvitationServiceWithStore(t, store, acceptingStepUp{}, &recordingSender{})
+	setup, err := service.PrepareMFARecovery(context.Background(), token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := totp.Code(setup.ManualKey, time.Now(), totp.DefaultDigits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.CompleteMFARecovery(context.Background(), CompleteMFARecoveryInput{Token: token, MFACode: code}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.OpenTOTPSecret(context.Background(), testInvitationWrapper{}, store.recovery.TenantID, "user-mfa-totp", store.recovery.UserID, store.enrolledMFA); err != nil {
+		t.Fatalf("enrolled recovery MFA cannot be opened for the user: %v", err)
 	}
 }
 
@@ -272,6 +298,10 @@ type memoryInvitationStore struct {
 	roleErr             error
 	sessionsInvalidated bool
 	resetPasswordHash   string
+	recovery            MFARecovery
+	recoveryDigest      []byte
+	enrolledMFA         auth.MFASecretEnvelope
+	enrolledUserID      string
 }
 
 func (s *memoryInvitationStore) CreateInvitation(_ context.Context, invitation Invitation, digest []byte) (Invitation, error) {
@@ -317,11 +347,13 @@ func (s *memoryInvitationStore) CreateOrReuseInvitationMFA(_ context.Context, in
 	s.invitation.MFA = mfa
 	return mfa, nil
 }
-func (s *memoryInvitationStore) CompleteInvitation(_ context.Context, invitation Invitation, _ string, _ auth.MFASecretEnvelope) error {
+func (s *memoryInvitationStore) CompleteInvitation(_ context.Context, invitation Invitation, userID, _ string, mfa auth.MFASecretEnvelope, _ int64) error {
 	if invitation.ID != s.invitation.ID || s.invitation.Status != "PENDING" {
 		return ErrInvitationInvalid
 	}
 	s.invitation.Status = "REDEEMED"
+	s.enrolledUserID = userID
+	s.enrolledMFA = mfa
 	return nil
 }
 func (s *memoryInvitationStore) RevokeInvitation(_ context.Context, _ string, id string, _ string) error {
@@ -362,13 +394,15 @@ func (s *memoryInvitationStore) ActivateStaffPasswordReset(_ context.Context, _ 
 func (s *memoryInvitationStore) RevokeMFARecovery(context.Context, string, string, string) error {
 	return nil
 }
-func (s *memoryInvitationStore) FindMFARecoveryByDigest(context.Context, []byte) (MFARecovery, bool, error) {
-	return MFARecovery{}, false, nil
+func (s *memoryInvitationStore) FindMFARecoveryByDigest(_ context.Context, digest []byte) (MFARecovery, bool, error) {
+	return s.recovery, string(digest) == string(s.recoveryDigest), nil
 }
 func (s *memoryInvitationStore) CreateOrReuseMFARecoveryMFA(_ context.Context, r MFARecovery, _ []byte, m auth.MFASecretEnvelope) (auth.MFASecretEnvelope, error) {
-	r.MFA = m
+	s.recovery.MFA = m
 	return m, nil
 }
-func (s *memoryInvitationStore) CompleteMFARecovery(context.Context, MFARecovery, auth.MFASecretEnvelope, int64) error {
+func (s *memoryInvitationStore) CompleteMFARecovery(_ context.Context, _ MFARecovery, m auth.MFASecretEnvelope, _ int64) error {
+	s.enrolledMFA = m
+	s.recovery.Status = "REDEEMED"
 	return nil
 }

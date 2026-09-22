@@ -144,14 +144,14 @@ func (s *PostgresStore) CreateOrReuseInvitationMFA(ctx context.Context, inv Invi
 	return stored, err
 }
 
-func (s *PostgresStore) CompleteInvitation(ctx context.Context, inv Invitation, passwordHash string, mfa auth.MFASecretEnvelope) error {
+func (s *PostgresStore) CompleteInvitation(ctx context.Context, inv Invitation, userID, passwordHash string, mfa auth.MFASecretEnvelope, counter int64) error {
 	return s.db.InTenantTx(ctx, inv.TenantID, func(tx pgx.Tx) error {
 		var invitationID string
 		if err := tx.QueryRow(ctx, `UPDATE staff_invitations SET status='REDEEMED',redeemed_at=now(),updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='PENDING' AND expires_at>now() RETURNING id::text`, inv.TenantID, inv.ID).Scan(&invitationID); err != nil {
 			return err
 		}
-		var userID, roleID string
-		if err := tx.QueryRow(ctx, `INSERT INTO users (tenant_id,email,password_hash,password_params,status,email_verified_at) VALUES ($1,$2,$3,'{}','ACTIVE',now()) RETURNING id::text`, inv.TenantID, inv.Email, passwordHash).Scan(&userID); err != nil {
+		var roleID string
+		if _, err := tx.Exec(ctx, `INSERT INTO users (id,tenant_id,email,password_hash,password_params,status,email_verified_at) VALUES ($1::uuid,$2,$3,$4,'{}','ACTIVE',now())`, userID, inv.TenantID, inv.Email, passwordHash); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(ctx, `SELECT id::text FROM roles WHERE tenant_id=$1 AND name=$2`, inv.TenantID, inv.Role).Scan(&roleID); err != nil {
@@ -160,7 +160,7 @@ func (s *PostgresStore) CompleteInvitation(ctx context.Context, inv Invitation, 
 		if _, err := tx.Exec(ctx, `INSERT INTO user_roles(user_id,role_id) VALUES($1::uuid,$2::uuid)`, userID, roleID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO user_mfa_totp(tenant_id,user_id,secret_ref,secret_ciphertext,secret_nonce,wrapped_dek,kek_key_id,status,enabled_at) VALUES($1,$2::uuid,NULL,$3,$4,$5,$6,'ACTIVE',now())`, inv.TenantID, userID, mfa.Ciphertext, mfa.Nonce, mfa.WrappedDEK, mfa.KEKKeyID); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO user_mfa_totp(tenant_id,user_id,secret_ref,secret_ciphertext,secret_nonce,wrapped_dek,kek_key_id,status,last_used_counter,enabled_at) VALUES($1,$2::uuid,NULL,$3,$4,$5,$6,'ACTIVE',$7,now())`, inv.TenantID, userID, mfa.Ciphertext, mfa.Nonce, mfa.WrappedDEK, mfa.KEKKeyID, counter); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM staff_invitation_mfa WHERE tenant_id=$1 AND invitation_id=$2`, inv.TenantID, inv.ID); err != nil {

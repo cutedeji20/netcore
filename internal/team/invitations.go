@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/netcore-isp/netcore/internal/auth"
 	"github.com/netcore-isp/netcore/pkg/crypto/argon2id"
 	"github.com/netcore-isp/netcore/pkg/crypto/envelope"
@@ -132,7 +133,7 @@ type InvitationStore interface {
 	FindInvitation(context.Context, string, string) (Invitation, bool, error)
 	FindInvitationByDigest(context.Context, []byte) (Invitation, bool, error)
 	CreateOrReuseInvitationMFA(context.Context, Invitation, []byte, auth.MFASecretEnvelope) (auth.MFASecretEnvelope, error)
-	CompleteInvitation(context.Context, Invitation, string, auth.MFASecretEnvelope) error
+	CompleteInvitation(context.Context, Invitation, string, string, auth.MFASecretEnvelope, int64) error
 	RevokeInvitation(context.Context, string, string, string) error
 	ChangeStaffRole(context.Context, string, string, string, BuiltInRole) error
 	DeactivateStaff(context.Context, string, string, string) error
@@ -410,7 +411,11 @@ func (s *Service) CompleteMFARecovery(ctx context.Context, in CompleteMFARecover
 		slog.Warn("staff MFA recovery rejected", "stage", "totp_rejected", "recovery_id", recovery.ID)
 		return ErrInvitationInvalid
 	}
-	if err := s.store.CompleteMFARecovery(ctx, recovery, recovery.MFA, counter); err != nil {
+	userMFA, err := auth.SealTOTPSecret(ctx, s.wrapper, recovery.TenantID, "user-mfa-totp", recovery.UserID, secret)
+	if err != nil {
+		return ErrStoreUnavailable
+	}
+	if err := s.store.CompleteMFARecovery(ctx, recovery, userMFA, counter); err != nil {
 		slog.Error("staff MFA recovery rejected", "stage", "activation_failed", "recovery_id", recovery.ID, "error", err.Error())
 		return mapStoreError(err)
 	}
@@ -505,14 +510,20 @@ func (s *Service) CompleteAcceptance(ctx context.Context, in CompleteInvitationI
 	if err != nil {
 		return ErrInvitationInvalid
 	}
-	if _, matched, err := totp.Verify(secret, strings.TrimSpace(in.MFACode), s.now(), totp.DefaultDigits, 1); err != nil || !matched {
+	counter, matched, err := totp.Verify(secret, strings.TrimSpace(in.MFACode), s.now(), totp.DefaultDigits, 1)
+	if err != nil || !matched {
 		return ErrInvitationInvalid
 	}
 	hash, err := s.hasher.Hash(in.Password)
 	if err != nil {
 		return ErrStoreUnavailable
 	}
-	if err := s.store.CompleteInvitation(ctx, inv, hash, inv.MFA); err != nil {
+	userID := uuid.NewString()
+	userMFA, err := auth.SealTOTPSecret(ctx, s.wrapper, inv.TenantID, "user-mfa-totp", userID, secret)
+	if err != nil {
+		return ErrStoreUnavailable
+	}
+	if err := s.store.CompleteInvitation(ctx, inv, userID, hash, userMFA, counter); err != nil {
 		return mapStoreError(err)
 	}
 	return nil
