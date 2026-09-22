@@ -117,7 +117,10 @@ type MFARecovery struct {
 	ExpiresAt                                      time.Time
 	MFA                                            auth.MFASecretEnvelope
 }
-type CompleteMFARecoveryInput struct{ Token, MFACode string }
+type CompleteMFARecoveryInput struct {
+	Token   string `json:"token"`
+	MFACode string `json:"mfa_code"`
+}
 
 // InvitationStore defines atomic tenant-scoped mutation boundaries. Methods
 // that receive a tenant must execute inside a tenant RLS transaction and keep

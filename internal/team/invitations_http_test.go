@@ -72,6 +72,18 @@ func TestCompleteInvitationAcceptsMFACodeJSONField(t *testing.T) {
 	}
 }
 
+func TestMFARecoveryCompletionAcceptsMFACodeJSONField(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/staff-mfa-recoveries/complete", strings.NewReader(`{"token":"test-token","mfa_code":"123456"}`))
+	response := httptest.NewRecorder()
+	var input CompleteMFARecoveryInput
+	if !decodeInvitationJSON(response, request, &input) {
+		t.Fatal("valid recovery completion body was rejected")
+	}
+	if input.Token != "test-token" || input.MFACode != "123456" {
+		t.Fatalf("decoded recovery fields = token %q, MFA code %q", input.Token, input.MFACode)
+	}
+}
+
 func TestInvitationProjectionRedactsCredentialMaterial(t *testing.T) {
 	inv := Invitation{ID: "33333333-3333-4333-8333-333333333333", Email: "ops@example.test", Role: RoleOperations, Status: "PENDING", ExpiresAt: time.Now(), MFA: auth.MFASecretEnvelope{Ciphertext: []byte("secret"), KEKKeyID: "key-id"}}
 	encoded, err := json.Marshal(invitationResponse{Invitation: invitationProjection(inv)})
