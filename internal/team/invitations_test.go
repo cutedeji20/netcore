@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,14 @@ import (
 	"github.com/netcore-isp/netcore/pkg/crypto/envelope"
 	"github.com/netcore-isp/netcore/pkg/crypto/totp"
 )
+
+func TestMFASetupIncludesLocalQRCode(t *testing.T) {
+	setup := mfaSetup("ops@example.test", "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+	field := reflect.ValueOf(setup).FieldByName("QRCode")
+	if !field.IsValid() || !strings.HasPrefix(field.String(), "data:image/png;base64,") {
+		t.Fatal("MFA setup must include a local PNG data URI")
+	}
+}
 
 // This catches a regression that puts invitation credentials in a query string,
 // where they would be sent in logs and Referer headers.

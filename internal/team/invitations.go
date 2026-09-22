@@ -15,6 +15,7 @@ import (
 	"github.com/netcore-isp/netcore/pkg/crypto/argon2id"
 	"github.com/netcore-isp/netcore/pkg/crypto/envelope"
 	"github.com/netcore-isp/netcore/pkg/crypto/totp"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 var (
@@ -103,6 +104,7 @@ type PasswordResetInput struct {
 type MFASetup struct {
 	URI       string `json:"uri"`
 	ManualKey string `json:"manual_key"`
+	QRCode    string `json:"qr_code"`
 }
 type CompleteInvitationInput struct {
 	Token    string `json:"token"`
@@ -568,7 +570,12 @@ func mapStoreError(err error) error {
 	return ErrStoreUnavailable
 }
 func mfaSetup(email, secret string) MFASetup {
-	return MFASetup{ManualKey: secret, URI: "otpauth://totp/NetCore:" + url.PathEscape(email) + "?secret=" + url.QueryEscape(secret) + "&issuer=NetCore&digits=6&period=30"}
+	uri := "otpauth://totp/NetCore:" + url.PathEscape(email) + "?secret=" + url.QueryEscape(secret) + "&issuer=NetCore&digits=6&period=30"
+	png, err := qrcode.Encode(uri, qrcode.Medium, 256)
+	if err != nil {
+		return MFASetup{ManualKey: secret, URI: uri}
+	}
+	return MFASetup{ManualKey: secret, URI: uri, QRCode: "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)}
 }
 func presentEnvelope(value auth.MFASecretEnvelope) bool {
 	return len(value.Ciphertext) > 0 || len(value.Nonce) > 0 || len(value.WrappedDEK) > 0 || strings.TrimSpace(value.KEKKeyID) != ""
