@@ -23,6 +23,7 @@ const maxSearchLength = 120
 type HTTP struct {
 	store           Store
 	grantStore      GrantStore
+	revocationStore GrantRevocationStore
 	defaultPageSize int
 	maxPageSize     int
 }
@@ -37,6 +38,7 @@ func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
 	return &HTTP{
 		store:           store,
 		grantStore:      func() GrantStore { value, _ := store.(GrantStore); return value }(),
+		revocationStore: func() GrantRevocationStore { value, _ := store.(GrantRevocationStore); return value }(),
 		defaultPageSize: defaultPageSize,
 		maxPageSize:     maxPageSize,
 	}, nil
@@ -53,7 +55,45 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		sessions.RequireAuth(auth.RequirePermission("subscription.read", http.HandlerFunc(h.list))),
 	)
 	mux.Handle("POST /api/v1/customers/{id}/subscriptions/grant", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("subscription.write", http.HandlerFunc(h.grant)))))
+	mux.Handle("POST /api/v1/subscriptions/{id}/revoke-grant", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("subscription.write", http.HandlerFunc(h.revokeGrant)))))
 	return nil
+}
+
+func (h *HTTP) revokeGrant(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if h.revocationStore == nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "SUBSCRIPTIONS_UNAVAILABLE", "Grant revocation is temporarily unavailable.")
+		return
+	}
+	var input struct {
+		Reason string `json:"reason"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REVOCATION", "A revocation reason is required.")
+		return
+	}
+	err := h.revocationStore.RevokeGrant(r.Context(), principal.TenantID, GrantActor{UserID: principal.UserID, IPAddress: sessionsClientIP(r), UserAgent: r.UserAgent()}, r.PathValue("id"), input.Reason)
+	switch {
+	case errors.Is(err, ErrInvalidGrant):
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REVOCATION", "A revocation reason is required.")
+	case errors.Is(err, ErrGrantTargetNotFound):
+		security.WriteError(w, r, http.StatusNotFound, "GRANT_NOT_FOUND", "An active staff grant was not found.")
+	case errors.Is(err, ErrGrantHasOpenSession):
+		security.WriteError(w, r, http.StatusConflict, "GRANT_SESSION_ACTIVE", "This device has an open network session. Disconnect it at the router before revoking the grant.")
+	case err != nil:
+		slog.Error("staff subscription grant revocation failed", slog.String("error", err.Error()))
+		security.WriteError(w, r, http.StatusServiceUnavailable, "SUBSCRIPTIONS_UNAVAILABLE", "Grant revocation is temporarily unavailable.")
+	default:
+		writeJSON(w, http.StatusOK, map[string]bool{"revoked": true})
+	}
 }
 
 func (h *HTTP) grant(w http.ResponseWriter, r *http.Request) {

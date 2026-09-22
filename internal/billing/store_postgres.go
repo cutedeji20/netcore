@@ -24,6 +24,24 @@ func NewPostgresStore(db *database.Pool) (*PostgresStore, error) {
 	return &PostgresStore{db: db}, nil
 }
 
+func (s *PostgresStore) Metrics(ctx context.Context, tenantID string) (result Metrics, err error) {
+	if !validUUID(tenantID) {
+		return Metrics{}, ErrUnavailable
+	}
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT
+  COALESCE((SELECT sum(amount_minor) FROM payments WHERE tenant_id=$1 AND status='SUCCESS' AND verified_at >= date_trunc('month', now()) AND verified_at < date_trunc('month', now()) + interval '1 month'),0),
+  COALESCE((SELECT sum(amount_minor) FROM invoices WHERE tenant_id=$1 AND status='ISSUED'),0),
+  (SELECT count(*) FROM payments WHERE tenant_id=$1 AND status='SUCCESS' AND created_at >= date_trunc('month', now())),
+  (SELECT count(*) FROM payments WHERE tenant_id=$1 AND status IN ('SUCCESS','FAILED') AND created_at >= date_trunc('month', now())),
+  (SELECT count(*) FROM payments WHERE tenant_id=$1 AND status='FAILED' AND cleared_at IS NULL)`, tenantID).Scan(&result.CollectedThisMonthMinor, &result.OpenInvoiceMinor, &result.SuccessfulPayments, &result.FinishedPayments, &result.NeedsReview)
+	})
+	if err != nil {
+		return Metrics{}, fmt.Errorf("billing metrics: %w", err)
+	}
+	return result, nil
+}
+
 func (s *PostgresStore) LoadSettings(ctx context.Context, tenantID string) (settings Settings, err error) {
 	if !validUUID(tenantID) {
 		return Settings{}, ErrUnavailable

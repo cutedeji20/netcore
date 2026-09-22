@@ -12,6 +12,10 @@
   var pendingQuery = "";
   var criteriaPending = false;
   var requestVersion = 0;
+  function canRevoke() {
+    var principal = window.NETCORE_PRINCIPAL || {};
+    return Array.isArray(principal.permissions) && principal.permissions.indexOf("subscription.write") !== -1;
+  }
 
   function currentPage() {
     return livePage.current();
@@ -88,7 +92,7 @@
 
   function setHeadings(table) {
     var headingRow = table.querySelector("thead tr");
-    var headings = ["Customer", "Plan", "Starts", "Expires", "Payment", "Service"];
+    var headings = ["Customer", "Plan", "Starts", "Expires", "Payment", "Service", "Action"];
     headingRow.replaceChildren();
     headings.forEach(function (value) {
       var heading = document.createElement("th");
@@ -118,6 +122,26 @@
       appendTextCell(row, formatDate(subscription.expires_at) + (subscription.auto_renew ? " · Auto-renew" : ""));
       appendStatusCell(row, subscription.payment_status);
       appendStatusCell(row, subscription.status);
+      var action = document.createElement("td");
+      if (canRevoke() && subscription.payment_status === "GRANTED" && (subscription.status === "ACTIVE" || subscription.status === "SUSPENDED")) {
+        var button = document.createElement("button");
+        button.type = "button"; button.className = "button"; button.textContent = "Revoke grant";
+        button.addEventListener("click", function () {
+          var reason = window.prompt("Revoke this staff-granted plan? This ends future authorisation. Enter a reason (up to 240 characters):");
+          if (!reason || !reason.trim()) return;
+          if (reason.trim().length > 240) { window.alert("Reason must be 240 characters or fewer."); return; }
+          button.disabled = true;
+          fetch(apiBase + "/api/v1/subscriptions/" + encodeURIComponent(subscription.id) + "/revoke-grant", {
+            method: "POST", credentials: "include", cache: "no-store", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason: reason.trim() })
+          }).then(function (response) { return response.json().catch(function () { return {}; }).then(function (body) { if (!response.ok) throw new Error((body.error && body.error.message) || "Grant could not be revoked."); }); })
+            .then(function () { if (window.NetCoreToast) window.NetCoreToast.show("Staff grant revoked."); requestSubscriptions(true); })
+            .catch(function (error) { window.alert(error.message || "Grant could not be revoked."); })
+            .finally(function () { button.disabled = false; });
+        });
+        action.appendChild(button);
+      } else action.textContent = "—";
+      row.appendChild(action);
       body.appendChild(row);
     });
     showState("records");

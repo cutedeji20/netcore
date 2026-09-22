@@ -14,6 +14,7 @@
   var requestVersion = 0;
   var selectedPaymentIDs = new Set();
   var clearBusy = false;
+  var metricsTimer = 0;
   var currencyExponents = {
     JPY: 0, KRW: 0, VND: 0, CLP: 0, ISK: 0, XAF: 0, XOF: 0,
     BHD: 3, KWD: 3, OMR: 3, TND: 3, JOD: 3
@@ -50,6 +51,30 @@
     var fraction = exponent ? "." + raw.slice(-exponent) : "";
     whole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
     return (negative ? "-" : "") + unit + " " + whole + fraction;
+  }
+
+  function setMetric(label, value) {
+    document.querySelectorAll("#page-content .metric, #page-content .detail-list li").forEach(function (card) {
+      var name = card.querySelector(".metric-label, span:first-child");
+      var target = card.querySelector(".metric-value, strong");
+      if (name && target && name.textContent.trim() === label) target.textContent = value;
+    });
+  }
+
+  function requestMetrics() {
+    if (currentPage() !== "billing") return;
+    fetch(apiBase + "/api/v1/billing/metrics", { credentials: "include", cache: "no-store" })
+      .then(function (response) { if (!response.ok) throw new Error(); return response.json(); })
+      .then(function (data) {
+        if (currentPage() !== "billing") return;
+        setMetric("Collected this month", formatPrice(data.collected_this_month_minor, "NGN"));
+        setMetric("Open invoices", formatPrice(data.open_invoice_minor, "NGN"));
+        var finished = Number(data.finished_payments || 0);
+        setMetric("Payment success", finished ? (100 * Number(data.successful_payments || 0) / finished).toFixed(1) + "%" : "—");
+        setMetric("Needs review", String(data.needs_review || 0));
+        var status = document.querySelector("#page-content .status span");
+        if (status) status.textContent = "Live tenant data refreshed just now.";
+      }).catch(function () { /* retain unknown values on failure */ });
   }
 
   function initials(customer) {
@@ -314,7 +339,10 @@
   }
 
   function onPageRendered(event) {
+    clearInterval(metricsTimer);
     if (event.detail !== "billing") return;
+    requestMetrics();
+    metricsTimer = setInterval(requestMetrics, 15000);
     renderControls();
     if (loadedTransactions) requestTransactions(true);
     else requestTransactions();

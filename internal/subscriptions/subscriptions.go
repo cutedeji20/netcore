@@ -70,6 +70,10 @@ type GrantStore interface {
 	Grant(ctx context.Context, tenantID string, actor GrantActor, input GrantInput) (Subscription, error)
 }
 
+type GrantRevocationStore interface {
+	RevokeGrant(ctx context.Context, tenantID string, actor GrantActor, subscriptionID, reason string) error
+}
+
 type GrantActor struct{ UserID, IPAddress, UserAgent string }
 type GrantInput struct {
 	CustomerID string `json:"-"`
@@ -81,4 +85,5 @@ type GrantInput struct {
 var (
 	ErrInvalidGrant        = errors.New("subscriptions: invalid grant")
 	ErrGrantTargetNotFound = errors.New("subscriptions: grant target not found")
+	ErrGrantHasOpenSession = errors.New("subscriptions: grant has an open network session")
 )

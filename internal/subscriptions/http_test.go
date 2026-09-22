@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,33 @@ type memoryStore struct {
 	options  ListOptions
 	page     Page
 	err      error
+}
+
+type revocationStub struct {
+	memoryStore
+	id, reason string
+	err        error
+}
+
+func (s *revocationStub) RevokeGrant(_ context.Context, tenantID string, _ GrantActor, id, reason string) error {
+	s.tenantID, s.id, s.reason = tenantID, id, reason
+	return s.err
+}
+
+func TestRevokeGrantReportsOpenNetworkSession(t *testing.T) {
+	store := &revocationStub{err: ErrGrantHasOpenSession}
+	handler, err := NewHTTP(store, 25, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions/22222222-2222-4222-8222-222222222222/revoke-grant", strings.NewReader(`{"reason":"support correction"}`))
+	request.SetPathValue("id", "22222222-2222-4222-8222-222222222222")
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: subscriptionTestTenantID, UserID: "33333333-3333-4333-8333-333333333333"}))
+	response := httptest.NewRecorder()
+	handler.revokeGrant(response, request)
+	if response.Code != http.StatusConflict || store.tenantID != subscriptionTestTenantID || store.reason != "support correction" {
+		t.Fatalf("status=%d tenant=%q reason=%q body=%s", response.Code, store.tenantID, store.reason, response.Body.String())
+	}
 }
 
 func (s *memoryStore) List(_ context.Context, tenantID string, options ListOptions) (Page, error) {

@@ -78,6 +78,19 @@ type Page struct {
 	HasMore      bool
 }
 
+// Metrics covers the whole tenant, independent of transaction pagination.
+type Metrics struct {
+	CollectedThisMonthMinor int64 `json:"collected_this_month_minor"`
+	OpenInvoiceMinor        int64 `json:"open_invoice_minor"`
+	SuccessfulPayments      int64 `json:"successful_payments"`
+	FinishedPayments        int64 `json:"finished_payments"`
+	NeedsReview             int64 `json:"needs_review"`
+}
+
+type MetricsStore interface {
+	Metrics(ctx context.Context, tenantID string) (Metrics, error)
+}
+
 // Store is the billing persistence boundary.
 type Store interface {
 	List(ctx context.Context, tenantID string, options ListOptions) (Page, error)

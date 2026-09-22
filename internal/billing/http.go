@@ -54,9 +54,29 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"GET /api/v1/billing/transactions",
 		sessions.RequireAuth(auth.RequirePermission("billing.read", http.HandlerFunc(h.list))),
 	)
+	mux.Handle("GET /api/v1/billing/metrics", sessions.RequireAuth(auth.RequirePermission("billing.read", http.HandlerFunc(h.metrics))))
 	mux.Handle("POST /api/v1/billing/payment-attempts/clear", sessions.RequireAuth(auth.RequirePermission("billing.write", http.HandlerFunc(h.clearAttempts))))
 	h.clientIP = sessions.ClientIP
 	return nil
+}
+
+func (h *HTTP) metrics(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	store, ok := h.store.(MetricsStore)
+	if !ok {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "BILLING_UNAVAILABLE", "Billing metrics are temporarily unavailable.")
+		return
+	}
+	metrics, err := store.Metrics(r.Context(), principal.TenantID)
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "BILLING_UNAVAILABLE", "Billing metrics are temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusOK, metrics)
 }
 
 func (h *HTTP) clearAttempts(w http.ResponseWriter, r *http.Request) {

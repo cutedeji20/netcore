@@ -24,6 +24,24 @@ type memoryStore struct {
 	clearRequest ClearRequest
 	clearActor   MutationActor
 	clearCount   int
+	metrics      Metrics
+}
+
+func (s *memoryStore) Metrics(_ context.Context, tenantID string) (Metrics, error) {
+	s.tenantID = tenantID
+	return s.metrics, s.err
+}
+
+func TestMetricsUsesTenantScopedAggregate(t *testing.T) {
+	handler, store := newTestHTTP(t)
+	store.metrics = Metrics{CollectedThisMonthMinor: 51500, OpenInvoiceMinor: 50000, SuccessfulPayments: 1, FinishedPayments: 2, NeedsReview: 1}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/billing/metrics", nil)
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: billingTestTenantID}))
+	response := httptest.NewRecorder()
+	handler.metrics(response, request)
+	if response.Code != http.StatusOK || store.tenantID != billingTestTenantID || !strings.Contains(response.Body.String(), `"collected_this_month_minor":51500`) {
+		t.Fatalf("metrics status=%d tenant=%q body=%s", response.Code, store.tenantID, response.Body.String())
+	}
 }
 
 func (s *memoryStore) List(_ context.Context, tenantID string, options ListOptions) (Page, error) {
