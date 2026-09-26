@@ -95,6 +95,13 @@ func TestResendNotifierSendsPasswordResetCode(t *testing.T) {
 	}
 }
 
+func TestDeviceReplacementEmailIsNotGenericLoginCode(t *testing.T) {
+	subject, body, ok := otpMessage(auth.OTPDeviceReplacement, "482913")
+	if !ok || !strings.Contains(subject, "device change") || !strings.Contains(body, "Only enter it if you requested") || !strings.Contains(body, "482913") {
+		t.Fatalf("device replacement message missing purpose or warning: %q %q", subject, body)
+	}
+}
+
 func TestResendNotifierSendsVerifiedPaymentReceipt(t *testing.T) {
 	var request struct {
 		From    string `json:"from"`

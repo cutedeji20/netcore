@@ -136,7 +136,8 @@ type Email struct {
 // Portal binds public customer routes to one tenant selected by deployment
 // configuration. A request must never provide its own tenant selector.
 type Portal struct {
-	TenantSlug string
+	TenantSlug               string
+	DeviceReplacementEnabled bool
 }
 
 // Payments selects a provider without putting a provider credential in
@@ -255,7 +256,8 @@ func Load(getenv func(string) string) (*Config, error) {
 			From:            getenv("NETCORE_EMAIL_FROM"),
 		},
 		Portal: Portal{
-			TenantSlug: getenv("NETCORE_PORTAL_TENANT_SLUG"),
+			TenantSlug:               getenv("NETCORE_PORTAL_TENANT_SLUG"),
+			DeviceReplacementEnabled: boolDefault(getenv("NETCORE_DEVICE_REPLACEMENT_ENABLED"), false),
 		},
 		Payments: Payments{
 			Gateway:             strDefault(getenv("NETCORE_PAYMENT_GATEWAY"), "disabled"),

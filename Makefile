@@ -39,6 +39,10 @@ test-cover: ## Run tests with coverage, enforcing the §74 floors
 test-db: ## Run the SQL invariant suite against PG_DSN (§8)
 	psql "$(PG_DSN)" -v ON_ERROR_STOP=1 -f tests/invariants.sql
 
+.PHONY: test-device-replacement
+test-device-replacement: ## Run rollback-only device replacement/RADIUS acceptance against an isolated migrated database
+	psql "$(PG_DSN)" -v ON_ERROR_STOP=1 -f tests/device_replacement.sql
+
 .PHONY: migrate
 migrate: ## Apply all up migrations
 	@for f in $(MIGRATIONS)/*.up.sql; do \

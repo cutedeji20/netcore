@@ -92,6 +92,32 @@ func TestIssueReturnsPlanChoiceWhenNoEntitlementExists(t *testing.T) {
 	}
 }
 
+func TestIssueExplainsActivePlanBoundToAnotherDevice(t *testing.T) {
+	handler := newTestHTTP(t, &memoryStore{err: ErrDeviceMismatch}, &memoryLimiter{allowed: true})
+	response := httptest.NewRecorder()
+	handler.issue(response, portalRequest(t))
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "PLAN_DEVICE_MISMATCH") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+}
+
+func TestDeviceReplacementEndpointsStayHiddenWhenFlagIsOff(t *testing.T) {
+	handler := newTestHTTP(t, &memoryStore{}, &memoryLimiter{allowed: true})
+	for _, path := range []string{"/api/v1/portal/device-replacement/request", "/api/v1/portal/device-replacement/verify"} {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: portalTestTenantID, UserID: portalTestUserID}))
+		response := httptest.NewRecorder()
+		if strings.HasSuffix(path, "/request") {
+			handler.requestReplacement(response, request)
+		} else {
+			handler.verifyReplacement(response, request)
+		}
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestIssueFailsClosedWhenLimiterUnavailable(t *testing.T) {
 	handler := newTestHTTP(t, &memoryStore{}, &memoryLimiter{err: errors.New("redis down")})
 	response := httptest.NewRecorder()

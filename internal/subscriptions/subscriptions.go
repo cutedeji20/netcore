@@ -24,6 +24,12 @@ type Subscription struct {
 	CustomerLastName  string
 	PlanID            string
 	PlanName          string
+	DeviceID          string
+	DeviceLabel       string
+	DeviceMAC         string
+	// RemainingBytes is nil for an unmetered plan or if no current quota
+	// period exists. It is informational; transfer eligibility is rechecked.
+	RemainingBytes    *int64
 	Status            Status
 	StartsAt          *time.Time
 	ExpiresAt         *time.Time
@@ -74,6 +80,10 @@ type GrantRevocationStore interface {
 	RevokeGrant(ctx context.Context, tenantID string, actor GrantActor, subscriptionID, reason string) error
 }
 
+type TransferStore interface {
+	Transfer(ctx context.Context, tenantID string, actor GrantActor, subscriptionID, targetDeviceID, reason string) error
+}
+
 type GrantActor struct{ UserID, IPAddress, UserAgent string }
 type GrantInput struct {
 	CustomerID string `json:"-"`
@@ -83,7 +93,10 @@ type GrantInput struct {
 }
 
 var (
-	ErrInvalidGrant        = errors.New("subscriptions: invalid grant")
-	ErrGrantTargetNotFound = errors.New("subscriptions: grant target not found")
-	ErrGrantHasOpenSession = errors.New("subscriptions: grant has an open network session")
+	ErrInvalidGrant           = errors.New("subscriptions: invalid grant")
+	ErrGrantTargetNotFound    = errors.New("subscriptions: grant target not found")
+	ErrGrantHasOpenSession    = errors.New("subscriptions: grant has an open network session")
+	ErrTransferTargetNotFound = errors.New("subscriptions: transfer target not found")
+	ErrTransferHasOpenSession = errors.New("subscriptions: transfer has an open network session")
+	ErrTransferNotEligible    = errors.New("subscriptions: transfer not eligible")
 )

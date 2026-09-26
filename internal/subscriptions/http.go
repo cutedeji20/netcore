@@ -1,6 +1,7 @@
 package subscriptions
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -24,8 +25,13 @@ type HTTP struct {
 	store           Store
 	grantStore      GrantStore
 	revocationStore GrantRevocationStore
-	defaultPageSize int
-	maxPageSize     int
+	transferStore   TransferStore
+	stepUp          interface {
+		VerifyStepUp(context.Context, auth.StepUpInput) error
+	}
+	transfersEnabled bool
+	defaultPageSize  int
+	maxPageSize      int
 }
 
 func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
@@ -39,9 +45,18 @@ func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
 		store:           store,
 		grantStore:      func() GrantStore { value, _ := store.(GrantStore); return value }(),
 		revocationStore: func() GrantRevocationStore { value, _ := store.(GrantRevocationStore); return value }(),
+		transferStore:   func() TransferStore { value, _ := store.(TransferStore); return value }(),
 		defaultPageSize: defaultPageSize,
 		maxPageSize:     maxPageSize,
 	}, nil
+}
+
+// ConfigureTransfers keeps device moves disabled unless explicitly enabled at startup.
+func (h *HTTP) ConfigureTransfers(verifier interface {
+	VerifyStepUp(context.Context, auth.StepUpInput) error
+}, enabled bool) {
+	h.stepUp = verifier
+	h.transfersEnabled = enabled
 }
 
 // Routes installs the subscription list behind both session authentication and
@@ -56,7 +71,50 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	)
 	mux.Handle("POST /api/v1/customers/{id}/subscriptions/grant", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("subscription.write", http.HandlerFunc(h.grant)))))
 	mux.Handle("POST /api/v1/subscriptions/{id}/revoke-grant", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("subscription.write", http.HandlerFunc(h.revokeGrant)))))
+	mux.Handle("POST /api/v1/subscriptions/{id}/transfer-device", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("subscription.write", http.HandlerFunc(h.transferDevice)))))
 	return nil
+}
+
+func (h *HTTP) transferDevice(w http.ResponseWriter, r *http.Request) {
+	if !h.transfersEnabled || h.stepUp == nil || h.transferStore == nil {
+		security.WriteError(w, r, http.StatusNotFound, "TRANSFER_UNAVAILABLE", "Device transfer is not available.")
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" || principal.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	var input struct {
+		TargetDeviceID string `json:"target_device_id"`
+		Reason         string `json:"reason"`
+		Password       string `json:"password"`
+		MFACode        string `json:"mfa_code"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || decoder.Decode(&struct{}{}) != io.EOF || !validUUID(input.TargetDeviceID) || !validUUID(r.PathValue("id")) || strings.TrimSpace(input.Reason) == "" || len(input.Reason) > 240 || input.Password == "" || input.MFACode == "" {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_TRANSFER", "Choose a registered device and enter a reason, password, and authenticator code.")
+		return
+	}
+	if err := h.stepUp.VerifyStepUp(r.Context(), auth.StepUpInput{Principal: principal, Password: input.Password, MFACode: input.MFACode}); err != nil {
+		security.WriteError(w, r, http.StatusForbidden, "STEP_UP_FAILED", "Password or authenticator code was not accepted.")
+		return
+	}
+	err := h.transferStore.Transfer(r.Context(), principal.TenantID, GrantActor{UserID: principal.UserID, IPAddress: sessionsClientIP(r), UserAgent: r.UserAgent()}, r.PathValue("id"), input.TargetDeviceID, input.Reason)
+	switch {
+	case errors.Is(err, ErrTransferHasOpenSession):
+		security.WriteError(w, r, http.StatusConflict, "TRANSFER_SESSION_ACTIVE", "This plan has an open network session. Disconnect the old device before transferring.")
+	case errors.Is(err, ErrTransferTargetNotFound), errors.Is(err, ErrTransferNotEligible):
+		security.WriteError(w, r, http.StatusConflict, "TRANSFER_NOT_ELIGIBLE", "This plan or device is not eligible for transfer.")
+	case err != nil:
+		slog.Error("staff device transfer failed", slog.String("error", err.Error()))
+		security.WriteError(w, r, http.StatusServiceUnavailable, "SUBSCRIPTIONS_UNAVAILABLE", "Device transfer is temporarily unavailable.")
+	default:
+		writeJSON(w, http.StatusOK, map[string]bool{"transferred": true})
+	}
 }
 
 func (h *HTTP) revokeGrant(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +223,7 @@ func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {
 
 	response := listResponse{
 		Data: make([]subscriptionResponse, 0, len(page.Subscriptions)),
-		Meta: pageMeta{HasMore: page.HasMore},
+		Meta: pageMeta{HasMore: page.HasMore, DeviceReplacementEnabled: h.transfersEnabled},
 	}
 	for _, subscription := range page.Subscriptions {
 		response.Data = append(response.Data, responseSubscription(subscription))
@@ -209,8 +267,9 @@ type listResponse struct {
 }
 
 type pageMeta struct {
-	NextCursor string `json:"next_cursor,omitempty"`
-	HasMore    bool   `json:"has_more"`
+	NextCursor               string `json:"next_cursor,omitempty"`
+	HasMore                  bool   `json:"has_more"`
+	DeviceReplacementEnabled bool   `json:"device_replacement_enabled"`
 }
 
 // subscriptionResponse allowlists data needed by the operations screen.
@@ -218,6 +277,8 @@ type subscriptionResponse struct {
 	ID            string                       `json:"id"`
 	Customer      subscriptionCustomerResponse `json:"customer"`
 	Plan          subscriptionPlanResponse     `json:"plan"`
+	Device        *subscriptionDeviceResponse  `json:"device"`
+	RemainingBytes *int64                    `json:"remaining_bytes"`
 	Status        Status                       `json:"status"`
 	StartsAt      *time.Time                   `json:"starts_at,omitempty"`
 	ExpiresAt     *time.Time                   `json:"expires_at,omitempty"`
@@ -239,8 +300,14 @@ type subscriptionPlanResponse struct {
 	Name string `json:"name"`
 }
 
+type subscriptionDeviceResponse struct {
+	ID            string `json:"id"`
+	Label         string `json:"label"`
+	NormalizedMAC string `json:"normalized_mac"`
+}
+
 func responseSubscription(subscription Subscription) subscriptionResponse {
-	return subscriptionResponse{
+	response := subscriptionResponse{
 		ID: subscription.ID,
 		Customer: subscriptionCustomerResponse{
 			ID:             subscription.CustomerID,
@@ -257,9 +324,14 @@ func responseSubscription(subscription Subscription) subscriptionResponse {
 		ExpiresAt:     subscription.ExpiresAt,
 		AutoRenew:     subscription.AutoRenew,
 		PaymentStatus: subscription.PaymentStatus,
+		RemainingBytes: subscription.RemainingBytes,
 		CreatedAt:     subscription.CreatedAt,
 		UpdatedAt:     subscription.UpdatedAt,
 	}
+	if subscription.DeviceID != "" {
+		response.Device = &subscriptionDeviceResponse{ID: subscription.DeviceID, Label: subscription.DeviceLabel, NormalizedMAC: subscription.DeviceMAC}
+	}
+	return response
 }
 
 type cursorPayload struct {

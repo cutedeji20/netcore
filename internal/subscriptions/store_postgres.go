@@ -39,6 +39,11 @@ SELECT s.id::text,
        COALESCE(c.last_name, ''),
        s.plan_id::text,
        p.name,
+       COALESCE(d.id::text, ''),
+       COALESCE(d.hostname, ''),
+       COALESCE(d.normalized_mac, ''),
+       CASE WHEN p.quota_bytes IS NULL THEN NULL
+            ELSE GREATEST(0, uc.quota_bytes - uc.consumed_bytes) END,
        CASE WHEN s.status = 'ACTIVE' AND s.expires_at <= now() THEN 'EXPIRED' ELSE s.status END,
        s.starts_at,
        s.expires_at,
@@ -53,6 +58,16 @@ SELECT s.id::text,
   JOIN plans AS p
     ON p.id = s.plan_id
    AND p.tenant_id = s.tenant_id
+  LEFT JOIN devices AS d
+    ON d.id = s.device_id
+   AND d.tenant_id = s.tenant_id
+   AND d.customer_id = s.customer_id
+  LEFT JOIN LATERAL (
+      SELECT quota_bytes, consumed_bytes FROM usage_counters
+       WHERE tenant_id=s.tenant_id AND subscription_id=s.id
+         AND period_start<=now() AND period_end>now()
+       ORDER BY period_start DESC LIMIT 1
+  ) AS uc ON true
  WHERE s.tenant_id = $1
    AND (
        $2 = ''
@@ -83,6 +98,7 @@ SELECT s.id::text,
 		for rows.Next() {
 			var subscription Subscription
 			var startsAt, expiresAt pgtype.Timestamptz
+			var remainingBytes pgtype.Int8
 			if err := rows.Scan(
 				&subscription.ID,
 				&subscription.CustomerID,
@@ -91,6 +107,10 @@ SELECT s.id::text,
 				&subscription.CustomerLastName,
 				&subscription.PlanID,
 				&subscription.PlanName,
+				&subscription.DeviceID,
+				&subscription.DeviceLabel,
+				&subscription.DeviceMAC,
+				&remainingBytes,
 				&subscription.Status,
 				&startsAt,
 				&expiresAt,
@@ -104,6 +124,10 @@ SELECT s.id::text,
 			if startsAt.Valid {
 				value := startsAt.Time.UTC()
 				subscription.StartsAt = &value
+			}
+			if remainingBytes.Valid {
+				value := remainingBytes.Int64
+				subscription.RemainingBytes = &value
 			}
 			if expiresAt.Valid {
 				value := expiresAt.Time.UTC()

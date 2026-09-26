@@ -26,7 +26,7 @@
     var status = text(value.status, 32);
     var paymentStatus = text(value.payment_status, 32);
     if (!planName || !status || !paymentStatus) return null;
-    return { planName: planName, deviceLabel: text(value.device_label, 120), deviceMAC: mac(value.device_mac), status: status, paymentStatus: paymentStatus, startsAt: timestamp(value.starts_at), expiresAt: timestamp(value.expires_at) };
+    return { id: text(value.id, 36), planName: planName, deviceLabel: text(value.device_label, 120), deviceMAC: mac(value.device_mac), metered: value.metered === true, remainingBytes: Number.isSafeInteger(value.remaining_bytes) && value.remaining_bytes >= 0 ? value.remaining_bytes : null, status: status, paymentStatus: paymentStatus, startsAt: timestamp(value.starts_at), expiresAt: timestamp(value.expires_at) };
   }
 
   function payment(value) {
@@ -43,8 +43,13 @@
     var data = response && typeof response === "object" ? response.data : null;
     var subscriptions = data && Array.isArray(data.subscriptions) ? data.subscriptions.map(subscription).filter(Boolean) : [];
     var payments = data && Array.isArray(data.payments) ? data.payments.map(payment).filter(Boolean) : [];
-    return { subscriptions: subscriptions, payments: payments };
+    return { subscriptions: subscriptions, payments: payments, deviceReplacementEnabled: response && response.device_replacement_enabled === true };
   }
 
-  return { displayModel: displayModel };
+  function canMoveSubscription(subscription, connection, enabled, now) {
+    var currentMAC = connection && mac(String(connection.client_mac || "").replace(/[^0-9a-f]/gi, ""));
+    return Boolean(enabled && subscription && subscription.id && subscription.status === "ACTIVE" && subscription.deviceMAC && currentMAC && currentMAC !== subscription.deviceMAC && subscription.expiresAt && Date.parse(subscription.expiresAt) > now);
+  }
+
+  return { displayModel: displayModel, canMoveSubscription: canMoveSubscription };
 }));

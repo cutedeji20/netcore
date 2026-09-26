@@ -50,9 +50,11 @@ SELECT 1
 		found = true
 
 		subscriptions, err := tx.Query(ctx, `
-SELECT plan.name,
-	       COALESCE(device.label, ''),
+SELECT subscription.id::text, plan.name,
+	       COALESCE(device.hostname, ''),
 	       COALESCE(device.normalized_mac, ''),
+	       plan.quota_bytes IS NOT NULL,
+	       CASE WHEN plan.quota_bytes IS NULL THEN NULL ELSE GREATEST(0, quota.quota_bytes-quota.consumed_bytes) END,
        subscription.status,
        subscription.payment_status,
        subscription.starts_at,
@@ -67,6 +69,12 @@ SELECT plan.name,
 	 LEFT JOIN devices AS device
 	    ON device.id = subscription.device_id
 	   AND device.tenant_id = subscription.tenant_id
+	 LEFT JOIN LATERAL (
+	   SELECT quota_bytes,consumed_bytes FROM usage_counters
+	    WHERE tenant_id=subscription.tenant_id AND subscription_id=subscription.id
+	      AND period_start<=now() AND period_end>now()
+	    ORDER BY period_start DESC LIMIT 1
+	 ) AS quota ON true
  WHERE subscription.tenant_id = $1
    AND customer.user_id = $2
    AND customer.status = 'ACTIVE'
@@ -79,7 +87,7 @@ SELECT plan.name,
 		for subscriptions.Next() {
 			var subscription CustomerSubscription
 			var startsAt, expiresAt *time.Time
-			if err := subscriptions.Scan(&subscription.PlanName, &subscription.DeviceLabel, &subscription.DeviceMAC, &subscription.Status, &subscription.PaymentStatus, &startsAt, &expiresAt); err != nil {
+			if err := subscriptions.Scan(&subscription.ID, &subscription.PlanName, &subscription.DeviceLabel, &subscription.DeviceMAC, &subscription.Metered, &subscription.RemainingBytes, &subscription.Status, &subscription.PaymentStatus, &startsAt, &expiresAt); err != nil {
 				return fmt.Errorf("scan portal subscription: %w", err)
 			}
 			if startsAt != nil {
@@ -161,17 +169,46 @@ SELECT subscription.id::text
   JOIN subscriptions AS subscription
     ON subscription.customer_id = customer.id
    AND subscription.tenant_id = customer.tenant_id
+  LEFT JOIN devices AS device
+    ON device.id = subscription.device_id
+   AND device.tenant_id = subscription.tenant_id
+   AND device.customer_id = customer.id
  WHERE customer.tenant_id = $1
    AND customer.user_id = $2
+   AND customer.status = 'ACTIVE'
    AND subscription.status = 'ACTIVE'
    AND subscription.starts_at <= now()
    AND subscription.expires_at > now()
- ORDER BY subscription.expires_at ASC, subscription.id ASC
+   AND (
+       subscription.device_id IS NULL
+       OR (device.status = 'ACTIVE' AND device.normalized_mac = $3)
+       OR EXISTS (
+           SELECT 1 FROM device_replacements AS replacement
+            WHERE replacement.tenant_id=subscription.tenant_id
+              AND replacement.subscription_id=subscription.id
+              AND replacement.user_id=$2::uuid
+              AND replacement.old_device_id=subscription.device_id
+              AND replacement.nas_id=$4::uuid
+              AND replacement.target_mac=$3
+              AND replacement.status='PENDING'
+              AND replacement.expires_at>now()
+       )
+   )
+ ORDER BY (device.normalized_mac = $3) DESC NULLS LAST, (subscription.device_id IS NULL) ASC, subscription.expires_at ASC, subscription.id ASC
  LIMIT 1`,
 			record.TenantID,
 			record.UserID,
+			record.ClientMAC,
+			nasID,
 		).Scan(&subscriptionID)
 		if errors.Is(err, pgx.ErrNoRows) {
+			var hasActivePlan bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM subscriptions AS s JOIN customers AS c ON c.id=s.customer_id AND c.tenant_id=s.tenant_id WHERE c.tenant_id=$1 AND c.user_id=$2 AND c.status='ACTIVE' AND s.status='ACTIVE' AND s.starts_at<=now() AND s.expires_at>now())`, record.TenantID, record.UserID).Scan(&hasActivePlan); err != nil {
+				return fmt.Errorf("resolve portal entitlement existence: %w", err)
+			}
+			if hasActivePlan {
+				return ErrDeviceMismatch
+			}
 			return ErrNoActivePlan
 		}
 		if err != nil {

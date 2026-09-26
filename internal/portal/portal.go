@@ -23,6 +23,7 @@ const HandoffTTL = 120 * time.Second
 
 var (
 	ErrNoActivePlan   = errors.New("portal: no active plan")
+	ErrDeviceMismatch = errors.New("portal: active plan belongs to another device")
 	ErrInvalidContext = errors.New("portal: invalid connection context")
 	ErrUnavailable    = errors.New("portal: handoff unavailable")
 )

@@ -28,9 +28,16 @@ type HandoffLimiter interface {
 
 // HTTP exposes the authenticated captive-portal handoff step.
 type HTTP struct {
-	service        *Service
-	limiter        HandoffLimiter
-	allowedOrigins []string
+	service            *Service
+	replacement        *ReplacementService
+	replacementEnabled bool
+	limiter            HandoffLimiter
+	allowedOrigins     []string
+}
+
+func (h *HTTP) ConfigureReplacement(service *ReplacementService, enabled bool) {
+	h.replacement = service
+	h.replacementEnabled = enabled
 }
 
 func NewHTTP(service *Service, limiter HandoffLimiter, allowedOrigins []string) (*HTTP, error) {
@@ -58,7 +65,109 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"POST /api/v1/portal/handoff",
 		sessions.RequireAuth(http.HandlerFunc(h.issue)),
 	)
+	mux.Handle("POST /api/v1/portal/device-replacement/request", sessions.RequireAuth(http.HandlerFunc(h.requestReplacement)))
+	mux.Handle("POST /api/v1/portal/device-replacement/verify", sessions.RequireAuth(http.HandlerFunc(h.verifyReplacement)))
 	return nil
+}
+
+func (h *HTTP) replacementPrincipal(w http.ResponseWriter, r *http.Request) (auth.Principal, bool) {
+	if !h.replacementEnabled || h.replacement == nil {
+		security.WriteError(w, r, http.StatusNotFound, "NOT_FOUND", "Not found.")
+		return auth.Principal{}, false
+	}
+	if origin := r.Header.Get("Origin"); origin != "" && !slices.Contains(h.allowedOrigins, origin) {
+		security.WriteError(w, r, http.StatusForbidden, "CSRF_REJECTED", "Request origin is not allowed.")
+		return auth.Principal{}, false
+	}
+	p, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || p.TenantID == "" || p.UserID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return auth.Principal{}, false
+	}
+	return p, true
+}
+
+func (h *HTTP) requestReplacement(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.replacementPrincipal(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		SubscriptionID string `json:"subscription_id"`
+		ClientMAC      string `json:"client_mac"`
+		NASAddress     string `json:"nas_address"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
+	if decodeJSON(r, &input) != nil || !validUUID(input.SubscriptionID) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Connection details are invalid.")
+		return
+	}
+	mac, valid := security.NormalizeMAC(input.ClientMAC)
+	nas, err := netip.ParseAddr(strings.TrimSpace(input.NASAddress))
+	if !valid || err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Connection details are invalid.")
+		return
+	}
+	if err = h.limitReplacement(r.Context(), p.TenantID, p.UserID, mac); err != nil {
+		security.WriteError(w, r, http.StatusTooManyRequests, "REPLACEMENT_UNAVAILABLE", "Please wait and try again.")
+		return
+	}
+	issued, err := h.replacement.Begin(r.Context(), p.TenantID, p.UserID, input.SubscriptionID, mac, nas.String())
+	if errors.Is(err, ErrReplacementNotEligible) {
+		security.WriteError(w, r, http.StatusConflict, "REPLACEMENT_NOT_ELIGIBLE", "This plan cannot be moved yet. Disconnect the old device or contact support.")
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "REPLACEMENT_UNAVAILABLE", "Device replacement is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"challenge_id": issued.ChallengeID, "expires_at": issued.ExpiresAt})
+}
+
+func (h *HTTP) limitReplacement(ctx context.Context, tenantID, userID, mac string) error {
+	for _, key := range []string{rateLimitKey("portal:replacement:account", tenantID, userID), rateLimitKey("portal:replacement:mac", tenantID, mac)} {
+		allowed, err := h.limiter.AllowSlidingWindow(ctx, key, 3, 15*time.Minute)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errRateLimited
+		}
+	}
+	return nil
+}
+
+func (h *HTTP) verifyReplacement(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.replacementPrincipal(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		ChallengeID string `json:"challenge_id"`
+		Code        string `json:"code"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2048)
+	defer r.Body.Close()
+	if decodeJSON(r, &input) != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Verification details are invalid.")
+		return
+	}
+	allowed, err := h.limiter.AllowSlidingWindow(r.Context(), rateLimitKey("portal:replacement:verify", p.TenantID, p.UserID), 5, 15*time.Minute)
+	if err != nil || !allowed {
+		security.WriteError(w, r, http.StatusTooManyRequests, "REPLACEMENT_UNAVAILABLE", "Please wait and try again.")
+		return
+	}
+	err = h.replacement.Verify(r.Context(), p.TenantID, p.UserID, input.ChallengeID, input.Code)
+	if errors.Is(err, auth.ErrInvalidOTP) || errors.Is(err, ErrReplacementNotEligible) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VERIFICATION_CODE", "The code or request is invalid or expired.")
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "REPLACEMENT_UNAVAILABLE", "Device replacement is temporarily unavailable.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *HTTP) issue(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +210,12 @@ func (h *HTTP) issue(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrNoActivePlan):
 		security.WriteError(w, r, http.StatusConflict, "NO_ACTIVE_PLAN", "No active internet plan was found. Choose a plan or sign in with another account.")
+	case errors.Is(err, ErrDeviceMismatch):
+		if h.replacementEnabled {
+			security.WriteError(w, r, http.StatusConflict, "PLAN_DEVICE_MISMATCH", "Your active plan is linked to a different Wi-Fi device. Move the existing plan from your account; do not buy another one.")
+		} else {
+			security.WriteError(w, r, http.StatusConflict, "PLAN_DEVICE_MISMATCH", "Your active plan is linked to a different Wi-Fi device. Contact support to move this plan; do not buy another one.")
+		}
 	case errors.Is(err, ErrInvalidContext):
 		security.WriteError(w, r, http.StatusBadRequest, "PORTAL_CONTEXT_INVALID", "Unable to continue this connection.")
 	case err != nil:

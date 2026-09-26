@@ -195,6 +195,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	subscriptionHTTP.ConfigureTransfers(authService, cfg.Portal.DeviceReplacementEnabled)
 	planStore, err := plans.NewPostgresStore(postgres)
 	if err != nil {
 		return err
@@ -327,6 +328,25 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if cfg.Portal.DeviceReplacementEnabled {
+		tenantID, found, resolveErr := authStore.ResolveTenant(startupCtx, cfg.Portal.TenantSlug)
+		if resolveErr != nil || !found {
+			return errors.New("device replacement tenant is unavailable")
+		}
+		notifier, notifyErr := notify.NewTenantResendNotifier(integrationCredentialResolver, tenantID, nil)
+		if notifyErr != nil {
+			return notifyErr
+		}
+		otp, otpErr := auth.NewOTPService(redisClient, notifier)
+		if otpErr != nil {
+			return otpErr
+		}
+		replacement, replacementErr := portal.NewReplacementService(portalStore, otp)
+		if replacementErr != nil {
+			return replacementErr
+		}
+		portalHTTP.ConfigureReplacement(replacement, true)
+	}
 	portalAccountService, err := portal.NewAccountService(portalStore)
 	if err != nil {
 		return err
@@ -335,6 +355,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	portalAccountHTTP.ConfigureReplacement(cfg.Portal.DeviceReplacementEnabled)
 	var catalogueHTTP *portal.CatalogueHTTP
 	if cfg.Portal.TenantSlug != "" {
 		catalogueService, err := portal.NewCatalogueService(portalStore, cfg.Portal.TenantSlug)

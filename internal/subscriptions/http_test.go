@@ -28,6 +28,58 @@ type revocationStub struct {
 	err        error
 }
 
+type transferStub struct {
+	memoryStore
+	called                                 bool
+	actor                                  GrantActor
+	subscriptionID, targetDeviceID, reason string
+	err                                    error
+}
+
+func (s *transferStub) Transfer(_ context.Context, _ string, actor GrantActor, subscriptionID, targetDeviceID, reason string) error {
+	s.called = true
+	s.actor, s.subscriptionID, s.targetDeviceID, s.reason = actor, subscriptionID, targetDeviceID, reason
+	return s.err
+}
+
+type stepUpStub struct{ err error }
+
+func (s stepUpStub) VerifyStepUp(_ context.Context, _ auth.StepUpInput) error { return s.err }
+
+func TestTransferRequiresFreshStepUp(t *testing.T) {
+	store := &transferStub{}
+	handler, err := NewHTTP(store, 25, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.ConfigureTransfers(stepUpStub{err: auth.ErrInvalidCredentials}, true)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions/22222222-2222-4222-8222-222222222222/transfer-device", strings.NewReader(`{"target_device_id":"44444444-4444-4444-8444-444444444444","reason":"SSID changed","password":"wrong","mfa_code":"123456"}`))
+	request.SetPathValue("id", "22222222-2222-4222-8222-222222222222")
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: subscriptionTestTenantID, UserID: "33333333-3333-4333-8333-333333333333"}))
+	response := httptest.NewRecorder()
+	handler.transferDevice(response, request)
+	if response.Code != http.StatusForbidden || store.called {
+		t.Fatalf("status=%d called=%v body=%s", response.Code, store.called, response.Body)
+	}
+}
+
+func TestTransferPassesVerifiedSameCustomerTargetToStore(t *testing.T) {
+	store := &transferStub{}
+	handler, err := NewHTTP(store, 25, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.ConfigureTransfers(stepUpStub{}, true)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions/22222222-2222-4222-8222-222222222222/transfer-device", strings.NewReader(`{"target_device_id":"44444444-4444-4444-8444-444444444444","reason":"SSID changed","password":"current","mfa_code":"123456"}`))
+	request.SetPathValue("id", "22222222-2222-4222-8222-222222222222")
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: subscriptionTestTenantID, UserID: "33333333-3333-4333-8333-333333333333"}))
+	response := httptest.NewRecorder()
+	handler.transferDevice(response, request)
+	if response.Code != http.StatusOK || !store.called || store.targetDeviceID != "44444444-4444-4444-8444-444444444444" || store.reason != "SSID changed" {
+		t.Fatalf("status=%d called=%v store=%+v body=%s", response.Code, store.called, store, response.Body)
+	}
+}
+
 func (s *revocationStub) RevokeGrant(_ context.Context, tenantID string, _ GrantActor, id, reason string) error {
 	s.tenantID, s.id, s.reason = tenantID, id, reason
 	return s.err
@@ -110,6 +162,17 @@ func TestListUsesTenantScopedCursorOptions(t *testing.T) {
 	}
 	if len(body.Data) != 1 || body.Data[0].Plan.Name != "Home Pro 50" || body.Data[0].Customer.CustomerNumber != "CUS-10482" || body.Data[0].ExpiresAt == nil {
 		t.Fatalf("unexpected response: %+v", body)
+	}
+}
+
+func TestResponseSubscriptionIncludesBoundDevice(t *testing.T) {
+	subscription := Subscription{DeviceID: "11111111-1111-4111-8111-111111111111", DeviceLabel: "MAAL", DeviceMAC: "46388ddbb0f9"}
+	response := responseSubscription(subscription)
+	if response.Device == nil || response.Device.ID != subscription.DeviceID || response.Device.NormalizedMAC != subscription.DeviceMAC {
+		t.Fatalf("bound device missing: %+v", response.Device)
+	}
+	if responseSubscription(Subscription{}).Device != nil {
+		t.Fatal("unbound subscription must not fabricate a device")
 	}
 }
 

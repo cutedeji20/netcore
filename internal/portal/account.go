@@ -14,13 +14,16 @@ var (
 // CustomerSubscription is the customer-safe subscription summary. Internal
 // identifiers, enforcement data, and usage records remain server-side.
 type CustomerSubscription struct {
-	PlanName      string
-	DeviceLabel   string
-	DeviceMAC     string
-	Status        string
-	PaymentStatus string
-	StartsAt      *time.Time
-	ExpiresAt     *time.Time
+	ID             string
+	PlanName       string
+	DeviceLabel    string
+	DeviceMAC      string
+	Metered        bool
+	RemainingBytes *int64
+	Status         string
+	PaymentStatus  string
+	StartsAt       *time.Time
+	ExpiresAt      *time.Time
 }
 
 // CustomerPayment is a customer-safe payment history entry. It intentionally

@@ -500,6 +500,8 @@ func otpMessage(purpose auth.OTPPurpose, code string) (subject, text string, ok 
 		return "Verify your NetCore email", "Your NetCore email verification code is " + code + ". This code expires in 10 minutes.", true
 	case auth.OTPPasswordReset:
 		return "Reset your NetCore password", "Your NetCore password reset code is " + code + ". This code expires in 10 minutes.", true
+	case auth.OTPDeviceReplacement:
+		return "Confirm your NetCore device change", "Your NetCore device change code is " + code + ". Only enter it if you requested to move an active internet plan. This code expires in 10 minutes.", true
 	default:
 		return "", "", false
 	}

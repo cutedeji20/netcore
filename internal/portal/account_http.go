@@ -11,7 +11,12 @@ import (
 
 // AccountHTTP exposes a signed-in customer's own plan and payment history.
 // It deliberately has no customer, tenant, or user selector in the request.
-type AccountHTTP struct{ service *AccountService }
+type AccountHTTP struct {
+	service            *AccountService
+	replacementEnabled bool
+}
+
+func (h *AccountHTTP) ConfigureReplacement(enabled bool) { h.replacementEnabled = enabled }
 
 func NewAccountHTTP(service *AccountService) (*AccountHTTP, error) {
 	if service == nil {
@@ -47,10 +52,11 @@ func (h *AccountHTTP) account(w http.ResponseWriter, r *http.Request) {
 		Subscriptions: make([]customerSubscriptionResponse, 0, len(account.Subscriptions)),
 		Payments:      make([]customerPaymentResponse, 0, len(account.Payments)),
 	}}
+	response.DeviceReplacementEnabled = h.replacementEnabled
 	for _, subscription := range account.Subscriptions {
 		response.Data.Subscriptions = append(response.Data.Subscriptions, customerSubscriptionResponse{
-			PlanName: subscription.PlanName, Status: subscription.Status, PaymentStatus: subscription.PaymentStatus,
-			DeviceLabel: subscription.DeviceLabel, DeviceMAC: subscription.DeviceMAC,
+			ID: subscription.ID, PlanName: subscription.PlanName, Status: subscription.Status, PaymentStatus: subscription.PaymentStatus,
+			DeviceLabel: subscription.DeviceLabel, DeviceMAC: subscription.DeviceMAC, Metered: subscription.Metered, RemainingBytes: subscription.RemainingBytes,
 			StartsAt: subscription.StartsAt, ExpiresAt: subscription.ExpiresAt,
 		})
 	}
@@ -64,7 +70,8 @@ func (h *AccountHTTP) account(w http.ResponseWriter, r *http.Request) {
 }
 
 type customerAccountResponse struct {
-	Data customerAccountData `json:"data"`
+	Data                     customerAccountData `json:"data"`
+	DeviceReplacementEnabled bool                `json:"device_replacement_enabled"`
 }
 
 type customerAccountData struct {
@@ -73,13 +80,16 @@ type customerAccountData struct {
 }
 
 type customerSubscriptionResponse struct {
-	PlanName      string     `json:"plan_name"`
-	DeviceLabel   string     `json:"device_label,omitempty"`
-	DeviceMAC     string     `json:"device_mac,omitempty"`
-	Status        string     `json:"status"`
-	PaymentStatus string     `json:"payment_status"`
-	StartsAt      *time.Time `json:"starts_at,omitempty"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	ID             string     `json:"id"`
+	PlanName       string     `json:"plan_name"`
+	DeviceLabel    string     `json:"device_label,omitempty"`
+	DeviceMAC      string     `json:"device_mac,omitempty"`
+	Metered        bool       `json:"metered"`
+	RemainingBytes *int64     `json:"remaining_bytes"`
+	Status         string     `json:"status"`
+	PaymentStatus  string     `json:"payment_status"`
+	StartsAt       *time.Time `json:"starts_at,omitempty"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }
 
 type customerPaymentResponse struct {

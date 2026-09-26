@@ -42,6 +42,25 @@ func TestLoad_DevelopmentDefaults(t *testing.T) {
 	}
 }
 
+func TestDeviceReplacementDefaultsOffAndCanBeEnabled(t *testing.T) {
+	base := baseProd()
+	c, err := Load(env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Portal.DeviceReplacementEnabled {
+		t.Fatal("device replacement must default off")
+	}
+	base["NETCORE_DEVICE_REPLACEMENT_ENABLED"] = "true"
+	c, err = Load(env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Portal.DeviceReplacementEnabled {
+		t.Fatal("device replacement flag was ignored")
+	}
+}
+
 func TestLoad_MissingDSNFails(t *testing.T) {
 	if _, err := Load(env(map[string]string{})); err == nil {
 		t.Fatal("expected failure with no DSN")
