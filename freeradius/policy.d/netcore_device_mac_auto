@@ -1,13 +1,19 @@
 # Browserless HotSpot/POS authorization. The password is deployment-managed:
 # NETCORE_RADIUS_MAC_AUTH_PASSWORD must be injected from the secret store.
 netcore_device_mac_auto {
-	if (&User-Name !~ /^[0-9A-Fa-f:-]{12,17}$/) { reject }
-	if (&User-Password != "$ENV{NETCORE_RADIUS_MAC_AUTH_PASSWORD}") { reject }
+	if (&User-Name !~ /^[0-9A-Fa-f:-]{12,17}$/) {
+		reject
+	}
+	if (&User-Password != "$ENV{NETCORE_RADIUS_MAC_AUTH_PASSWORD}") {
+		reject
+	}
 	update control {
 		Tmp-String-0 := "%{netcore_sql:SELECT concat_ws(',', subscription_id::text, rate_limit, session_timeout_seconds::text, idle_timeout_seconds::text, interim_interval::text, COALESCE(total_limit::text, '-'), COALESCE(total_limit_gigawords::text, '-'), COALESCE(filter_id, '-')) FROM radius_device_mac_authorize('%{NAS-IP-Address}', '%{Calling-Station-Id}')}"
 	}
 	update request { Tmp-String-0 := "%{control:Tmp-String-0}" }
-	if (&Tmp-String-0 !~ /^([^,]+),([^,]+),([^,]+),([^,]+),([^,]+),([^,]+),([^,]+),([^,]+)$/) { reject }
+	if (&Tmp-String-0 !~ /^([^,]+),([^,]+),([^,]+),([^,]+),([^,]+),([^,]+),([^,]+),([^,]+)$/) {
+		reject
+	}
 	update reply {
 		Class := "netcore:%{1}"
 		Mikrotik-Rate-Limit := "%{2}"
