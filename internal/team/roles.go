@@ -24,6 +24,7 @@ var rolePermissions = map[BuiltInRole]map[string]struct{}{
 		"security.read",
 		"automation.read", "automation.write",
 		"workspace.read", "workspace.write",
+		"tenant.test_data_reset",
 		"integration.read", "integration.write",
 	),
 	RoleOperations: permissionSet(
@@ -86,6 +87,7 @@ func (r BuiltInRole) Permissions() []string {
 		"security.read",
 		"automation.read", "automation.write",
 		"workspace.read", "workspace.write",
+		"tenant.test_data_reset",
 		"integration.read", "integration.write",
 	} {
 		if r.Allows(permission) {

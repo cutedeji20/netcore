@@ -46,6 +46,71 @@
     return Boolean(principal && Array.isArray(principal.permissions) && principal.permissions.indexOf("workspace.write") !== -1);
   }
 
+  function canResetTestData() {
+    var principal = window.NETCORE_PRINCIPAL;
+    return Boolean(workspace && workspace.test_data_reset_enabled && principal && Array.isArray(principal.permissions) && principal.permissions.indexOf("tenant.test_data_reset") !== -1);
+  }
+
+  function resetError(response, fallback) {
+    return response.json().catch(function () { return {}; }).then(function (body) {
+      throw new Error((body && body.error && body.error.message) || fallback);
+    });
+  }
+
+  function field(labelText, name, type) {
+    var label = document.createElement("label"); label.className = "test-data-reset-field"; label.textContent = labelText;
+    var input = document.createElement("input"); input.name = name; input.type = type || "text"; input.required = true;
+    label.appendChild(input); return label;
+  }
+
+  function openResetDialog(preview) {
+    var backdrop = document.createElement("div"); backdrop.className = "test-data-reset-backdrop";
+    var form = document.createElement("form"); form.className = "test-data-reset-dialog";
+    var title = document.createElement("h2"); title.textContent = "Reset test data";
+    var note = document.createElement("p"); note.textContent = "This permanently removes test customers, successful test payments, invoices, subscriptions, devices, sessions, RADIUS accounting, vouchers and ledger data. Plans, staff, router/NAS/AP settings and integrations remain.";
+    var summary = document.createElement("p"); summary.className = "test-data-reset-summary";
+    summary.textContent = [preview.customers + " customers", preview.subscriptions + " subscriptions", preview.payments + " payments", preview.invoices + " invoices", preview.devices + " devices"].join(" · ");
+    var backup = field("Verified database backup reference", "backup_reference"); backup.querySelector("input").placeholder = "e.g. netcore-before-live-2026-09-27.dump";
+    var reason = field("Reason", "reason"); reason.querySelector("input").maxLength = 240;
+    var confirmation = field('Type "RESET ' + workspace.slug + '" to continue', "confirmation");
+    var password = field("Your current password", "password", "password");
+    var mfa = field("Authenticator code", "mfa_code"); mfa.querySelector("input").inputMode = "numeric"; mfa.querySelector("input").maxLength = 6;
+    var feedback = document.createElement("p"); feedback.className = "test-data-reset-feedback"; feedback.setAttribute("role", "alert");
+    var footer = document.createElement("footer"); var cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "button"; cancel.textContent = "Cancel";
+    var submit = document.createElement("button"); submit.type = "submit"; submit.className = "button test-data-reset-confirm"; submit.textContent = "Permanently reset test data";
+    cancel.onclick = function () { backdrop.remove(); }; footer.append(cancel, submit);
+    form.append(title, note, summary, backup, reason, confirmation, password, mfa, feedback, footer); backdrop.appendChild(form); document.body.appendChild(backdrop);
+    form.addEventListener("submit", function (event) {
+      event.preventDefault(); feedback.textContent = ""; submit.disabled = true;
+      var data = new FormData(form);
+      fetch(apiBase + "/api/v1/workspace/test-data-reset", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        backup_reference: String(data.get("backup_reference") || ""), reason: String(data.get("reason") || ""), confirmation: String(data.get("confirmation") || ""), password: String(data.get("password") || ""), mfa_code: String(data.get("mfa_code") || "")
+      }) }).then(function (response) { if (!response.ok) return resetError(response, "The reset was not completed."); return response.json(); })
+        .then(function () { backdrop.remove(); workspace = null; requestWorkspace(true); if (window.NetCoreToast) window.NetCoreToast.show("Test data was reset. Keep the backup until live operations are verified."); })
+        .catch(function (error) { feedback.textContent = error.message || "The reset was not completed."; submit.disabled = false; });
+    });
+  }
+
+  function addTestDataResetControls(content) {
+    var existing = content.querySelector(".test-data-reset-controls");
+    if (!canResetTestData()) { if (existing) existing.remove(); return; }
+    if (existing) return;
+    var controls = document.createElement("section"); controls.className = "test-data-reset-controls";
+    var title = document.createElement("strong"); title.textContent = "Danger zone — pre-live reset";
+    var copy = document.createElement("p"); copy.textContent = "Permanently clear test customer and commercial data while preserving plans and network configuration. A verified database backup, your password and MFA are required.";
+    var action = document.createElement("button"); action.type = "button"; action.className = "button test-data-reset-button"; action.textContent = "Reset test data";
+    var feedback = document.createElement("p"); feedback.className = "test-data-reset-feedback";
+    action.onclick = function () {
+      action.disabled = true; feedback.textContent = "Loading reset preview…";
+      fetch(apiBase + "/api/v1/workspace/test-data-reset/preview", { credentials: "include", cache: "no-store" })
+        .then(function (response) { if (!response.ok) return resetError(response, "The reset preview could not be loaded."); return response.json(); })
+        .then(function (body) { var preview = body.data || {}; if (Number(preview.active_sessions || 0) || Number(preview.active_reservations || 0) || Number(preview.unpublished_outbox || 0)) { feedback.textContent = "Reset is blocked: close active sessions and wait for queued tenant events first."; return; } feedback.textContent = ""; openResetDialog(preview); })
+        .catch(function (error) { feedback.textContent = error.message || "The reset preview could not be loaded."; })
+        .finally(function () { action.disabled = false; });
+    };
+    controls.append(title, copy, action, feedback); content.appendChild(controls);
+  }
+
   function addVerificationPolicyControls(content) {
     var controls = content.querySelector(".verification-policy-controls");
     if (!canWriteVerificationPolicy()) {
@@ -130,6 +195,7 @@
     appendRow(body, "Require phone verification", workspace.require_phone_verification ? "On" : "Off");
 
     addVerificationPolicyControls(content);
+    addTestDataResetControls(content);
     appendRow(body, "Profile last updated", formatDate(workspace.updated_at));
 
     var metricNames = ["Workspace status", "Registered routers", "Active team members", "Currency"];

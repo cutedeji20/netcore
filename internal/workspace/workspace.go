@@ -14,16 +14,17 @@ var ErrUnavailable = errors.New("workspace: settings data unavailable")
 // integration tokens, secret references, provider credentials, nor raw router
 // management configuration.
 type Snapshot struct {
-	Name              string
-	Slug              string
-	Timezone          string
-	Currency          string
-	Status            string
-	UpdatedAt         time.Time
-	RegisteredRouters int
-	ActiveTeamMembers int
+	Name                     string
+	Slug                     string
+	Timezone                 string
+	Currency                 string
+	Status                   string
+	UpdatedAt                time.Time
+	RegisteredRouters        int
+	ActiveTeamMembers        int
 	RequireEmailVerification bool
 	RequirePhoneVerification bool
+	TestDataResetEnabled     bool
 }
 
 // Store is the workspace settings persistence boundary.

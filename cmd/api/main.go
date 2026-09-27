@@ -316,6 +316,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	resetService, err := workspace.NewTestDataResetService(workspaceStore, authService)
+	if err != nil {
+		return err
+	}
+	workspaceHTTP.ConfigureTestDataReset(resetService, cfg.Security.TestDataResetEnabled)
 	portalStore, err := portal.NewPostgresStore(postgres)
 	if err != nil {
 		return err

@@ -81,8 +81,12 @@ type Security struct {
 	AllowedOrigins  []string
 	TLSSkipVerify   bool
 	SeedDataEnabled bool
-	SessionTimeout  time.Duration
-	TrustedProxies  []string
+	// TestDataResetEnabled is an intentionally short-lived pre-live control.
+	// It defaults to false so a production deployment never exposes a
+	// destructive data-reset action by accident.
+	TestDataResetEnabled bool
+	SessionTimeout       time.Duration
+	TrustedProxies       []string
 }
 
 // Auth contains the current password-hashing and browser-session policy.
@@ -217,11 +221,12 @@ func Load(getenv func(string) string) (*Config, error) {
 			RequiredForReadiness: false, // §48. Not configurable. See the field comment.
 		},
 		Security: Security{
-			AllowedOrigins:  splitList(getenv("NETCORE_ALLOWED_ORIGINS")),
-			TLSSkipVerify:   boolDefault(getenv("NETCORE_TLS_SKIP_VERIFY"), false),
-			SeedDataEnabled: boolDefault(getenv("NETCORE_SEED_ENABLED"), false),
-			SessionTimeout:  durDefault(getenv("NETCORE_SESSION_TIMEOUT"), 4*time.Hour),
-			TrustedProxies:  splitList(getenv("NETCORE_TRUSTED_PROXIES")),
+			AllowedOrigins:       splitList(getenv("NETCORE_ALLOWED_ORIGINS")),
+			TLSSkipVerify:        boolDefault(getenv("NETCORE_TLS_SKIP_VERIFY"), false),
+			SeedDataEnabled:      boolDefault(getenv("NETCORE_SEED_ENABLED"), false),
+			TestDataResetEnabled: boolDefault(getenv("NETCORE_TEST_DATA_RESET_ENABLED"), false),
+			SessionTimeout:       durDefault(getenv("NETCORE_SESSION_TIMEOUT"), 4*time.Hour),
+			TrustedProxies:       splitList(getenv("NETCORE_TRUSTED_PROXIES")),
 		},
 		Auth: Auth{
 			SessionTTL:          durDefault(getenv("NETCORE_AUTH_SESSION_TTL"), 24*time.Hour),
