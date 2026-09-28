@@ -20,14 +20,14 @@ func NewPostgresStore(db *database.Pool) (*PostgresStore, error) {
 }
 func (s *PostgresStore) List(ctx context.Context, tenantID, userID string) (devices []Device, err error) {
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT d.id::text, d.normalized_mac, COALESCE(d.hostname, ''), d.status, d.created_at FROM devices d JOIN customers c ON c.id = d.customer_id AND c.tenant_id = d.tenant_id WHERE d.tenant_id = $1 AND c.user_id = $2 AND c.status = 'ACTIVE' ORDER BY d.created_at DESC, d.id DESC`, tenantID, userID)
+		rows, err := tx.Query(ctx, `SELECT d.id::text, d.normalized_mac, COALESCE(d.hostname, ''), COALESCE(d.device_type, ''), d.status, d.created_at FROM devices d JOIN customers c ON c.id = d.customer_id AND c.tenant_id = d.tenant_id WHERE d.tenant_id = $1 AND c.user_id = $2 AND c.status = 'ACTIVE' ORDER BY d.created_at DESC, d.id DESC`, tenantID, userID)
 		if err != nil {
 			return fmt.Errorf("devices: list: %w", err)
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var device Device
-			if err := rows.Scan(&device.ID, &device.NormalizedMAC, &device.Label, &device.Status, &device.CreatedAt); err != nil {
+			if err := rows.Scan(&device.ID, &device.NormalizedMAC, &device.Label, &device.DeviceType, &device.Status, &device.CreatedAt); err != nil {
 				return fmt.Errorf("devices: scan: %w", err)
 			}
 			devices = append(devices, device)
@@ -38,14 +38,14 @@ func (s *PostgresStore) List(ctx context.Context, tenantID, userID string) (devi
 }
 func (s *PostgresStore) ListForCustomer(ctx context.Context, tenantID, customerID string) (devices []Device, err error) {
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id::text, normalized_mac, COALESCE(hostname,''), status, created_at FROM devices WHERE tenant_id=$1 AND customer_id=$2::uuid ORDER BY created_at DESC,id DESC`, tenantID, customerID)
+		rows, err := tx.Query(ctx, `SELECT id::text, normalized_mac, COALESCE(hostname,''), COALESCE(device_type,''), status, created_at FROM devices WHERE tenant_id=$1 AND customer_id=$2::uuid ORDER BY created_at DESC,id DESC`, tenantID, customerID)
 		if err != nil {
 			return fmt.Errorf("devices: list customer: %w", err)
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var d Device
-			if err := rows.Scan(&d.ID, &d.NormalizedMAC, &d.Label, &d.Status, &d.CreatedAt); err != nil {
+			if err := rows.Scan(&d.ID, &d.NormalizedMAC, &d.Label, &d.DeviceType, &d.Status, &d.CreatedAt); err != nil {
 				return fmt.Errorf("devices: scan customer: %w", err)
 			}
 			devices = append(devices, d)
@@ -62,7 +62,7 @@ func (s *PostgresStore) Register(ctx context.Context, tenantID, userID string, i
 		} else if err != nil {
 			return fmt.Errorf("devices: customer: %w", err)
 		}
-		err := tx.QueryRow(ctx, `INSERT INTO devices (tenant_id, customer_id, mac_address, normalized_mac, hostname) VALUES ($1, $2, $3, $3, NULLIF($4, '')) RETURNING id::text, normalized_mac, COALESCE(hostname, ''), status, created_at`, tenantID, customerID, input.NormalizedMAC, input.Label).Scan(&device.ID, &device.NormalizedMAC, &device.Label, &device.Status, &device.CreatedAt)
+		err := tx.QueryRow(ctx, `INSERT INTO devices (tenant_id, customer_id, mac_address, normalized_mac, hostname, device_type) VALUES ($1, $2, $3, $3, NULLIF($4, ''), NULLIF($5, '')) RETURNING id::text, normalized_mac, COALESCE(hostname, ''), COALESCE(device_type, ''), status, created_at`, tenantID, customerID, input.NormalizedMAC, input.Label, input.DeviceType).Scan(&device.ID, &device.NormalizedMAC, &device.Label, &device.DeviceType, &device.Status, &device.CreatedAt)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -80,7 +80,7 @@ func (s *PostgresStore) RegisterForCustomer(ctx context.Context, tenantID, actor
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM customers WHERE tenant_id=$1 AND id=$2::uuid AND status='ACTIVE')`, tenantID, customerID).Scan(&exists); err != nil || !exists {
 			return ErrUnavailable
 		}
-		err := tx.QueryRow(ctx, `INSERT INTO devices (tenant_id, customer_id, mac_address, normalized_mac, hostname) VALUES ($1,$2::uuid,$3,$3,NULLIF($4,'')) RETURNING id::text, normalized_mac, COALESCE(hostname,''), status, created_at`, tenantID, customerID, input.NormalizedMAC, input.Label).Scan(&device.ID, &device.NormalizedMAC, &device.Label, &device.Status, &device.CreatedAt)
+		err := tx.QueryRow(ctx, `INSERT INTO devices (tenant_id, customer_id, mac_address, normalized_mac, hostname, device_type) VALUES ($1,$2::uuid,$3,$3,NULLIF($4,''),NULLIF($5,'')) RETURNING id::text, normalized_mac, COALESCE(hostname,''), COALESCE(device_type,''), status, created_at`, tenantID, customerID, input.NormalizedMAC, input.Label, input.DeviceType).Scan(&device.ID, &device.NormalizedMAC, &device.Label, &device.DeviceType, &device.Status, &device.CreatedAt)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -88,7 +88,11 @@ func (s *PostgresStore) RegisterForCustomer(ctx context.Context, tenantID, actor
 			}
 			return fmt.Errorf("devices: staff register: %w", err)
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata) VALUES ($1,'USER',$2::uuid,'DEVICE_REGISTERED_BY_STAFF','device',$3::uuid,jsonb_build_object('customer_id',$4::uuid))`, tenantID, actorID, device.ID, customerID)
+		action := "DEVICE_REGISTERED_BY_STAFF"
+		if input.DeviceType == "POS" {
+			action = "POS_DEVICE_REGISTERED_BY_STAFF"
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata) VALUES ($1,'USER',$2::uuid,$3,'device',$4::uuid,jsonb_build_object('customer_id',$5::uuid,'device_type',NULLIF($6,'')))`, tenantID, actorID, action, device.ID, customerID, input.DeviceType)
 		return err
 	})
 	return device, err

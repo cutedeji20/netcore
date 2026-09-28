@@ -14,6 +14,7 @@ var rolePermissions = map[BuiltInRole]map[string]struct{}{
 	RoleAdministrator: permissionSet(
 		"auth.mfa_required",
 		"customer.read", "customer.write",
+		"customer.pos_device.write",
 		"subscription.read", "subscription.write",
 		"plan.read", "plan.write",
 		"session.read", "session.write",
@@ -77,6 +78,7 @@ func (r BuiltInRole) Permissions() []string {
 	for _, permission := range []string{
 		"auth.mfa_required",
 		"customer.read", "customer.write",
+		"customer.pos_device.write",
 		"subscription.read", "subscription.write",
 		"plan.read", "plan.write",
 		"session.read", "session.write",

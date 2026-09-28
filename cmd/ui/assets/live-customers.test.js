@@ -1,10 +1,16 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { customerPayload, renderCustomerActions, customerErrorMessage, customerMutationRequest, deviceOptionLabel } = require("./live-customers.js");
+const { customerPayload, renderCustomerActions, canRegisterPOS, customerErrorMessage, customerMutationRequest, deviceOptionLabel } = require("./live-customers.js");
 
 test("registered devices show a readable full MAC", () => {
   assert.equal(deviceOptionLabel({ label: "MAAL", normalized_mac: "46388ddbb0f9" }), "MAAL · 46:38:8D:DB:B0:F9");
   assert.equal(deviceOptionLabel({ normalized_mac: "d2bd24d25372" }), "Device · D2:BD:24:D2:53:72");
+  assert.equal(deviceOptionLabel({ label: "Counter 1", normalized_mac: "aabbccddeeff", device_type: "POS" }), "POS · Counter 1 · AA:BB:CC:DD:EE:FF");
+});
+
+test("only the dedicated POS permission can reveal POS enrollment", () => {
+  assert.equal(canRegisterPOS({ permissions: ["customer.write"] }), false);
+  assert.equal(canRegisterPOS({ permissions: ["customer.pos_device.write"] }), true);
 });
 
 test("customer form sends only profile fields", () => {

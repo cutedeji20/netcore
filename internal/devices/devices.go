@@ -16,11 +16,12 @@ var (
 	ErrUnavailable         = errors.New("devices: unavailable")
 )
 
-type Registration struct{ NormalizedMAC, Label string }
+type Registration struct{ NormalizedMAC, Label, DeviceType string }
 type Device struct {
 	ID            string    `json:"id"`
 	NormalizedMAC string    `json:"normalized_mac"`
 	Label         string    `json:"label,omitempty"`
+	DeviceType    string    `json:"device_type,omitempty"`
 	Status        string    `json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
 }
@@ -32,6 +33,18 @@ func NewRegistration(mac, label string) (Registration, error) {
 		return Registration{}, ErrInvalidRegistration
 	}
 	return Registration{NormalizedMAC: normalized, Label: label}, nil
+}
+
+// NewPOSRegistration validates a staff-enrolled payment terminal. Unlike a
+// customer portal device, a POS label is required so the audited record can be
+// identified without relying on a browser hostname.
+func NewPOSRegistration(mac, label string) (Registration, error) {
+	input, err := NewRegistration(mac, label)
+	if err != nil || input.Label == "" {
+		return Registration{}, ErrInvalidRegistration
+	}
+	input.DeviceType = "POS"
+	return input, nil
 }
 
 type Store interface {
@@ -53,6 +66,19 @@ func (s *Service) RegisterForCustomer(ctx context.Context, tenantID, actorID, cu
 		return Device{}, ErrUnavailable
 	}
 	input, err := NewRegistration(mac, label)
+	if err != nil {
+		return Device{}, err
+	}
+	return s.store.RegisterForCustomer(ctx, tenantID, actorID, customerID, input)
+}
+
+// RegisterPOSForCustomer is an administrator-driven enrollment path for
+// terminals that cannot open a captive-portal browser.
+func (s *Service) RegisterPOSForCustomer(ctx context.Context, tenantID, actorID, customerID, mac, label string) (Device, error) {
+	if s == nil || s.store == nil || !validUUID(tenantID) || !validUUID(actorID) || !validUUID(customerID) {
+		return Device{}, ErrUnavailable
+	}
+	input, err := NewPOSRegistration(mac, label)
 	if err != nil {
 		return Device{}, err
 	}

@@ -30,14 +30,14 @@ func (s *memoryStore) Register(_ context.Context, tenantID, userID string, input
 	if s.err != nil {
 		return Device{}, s.err
 	}
-	return Device{ID: "44444444-4444-4444-8444-444444444444", NormalizedMAC: input.NormalizedMAC, Label: input.Label, Status: "ACTIVE"}, nil
+	return Device{ID: "44444444-4444-4444-8444-444444444444", NormalizedMAC: input.NormalizedMAC, Label: input.Label, DeviceType: input.DeviceType, Status: "ACTIVE"}, nil
 }
 func (s *memoryStore) RegisterForCustomer(_ context.Context, tenantID, actorID, customerID string, input Registration) (Device, error) {
 	s.tenantID, s.userID, s.registered = tenantID, actorID, input
 	if s.err != nil {
 		return Device{}, s.err
 	}
-	return Device{ID: "44444444-4444-4444-8444-444444444444", NormalizedMAC: input.NormalizedMAC, Label: input.Label, Status: "ACTIVE"}, nil
+	return Device{ID: "44444444-4444-4444-8444-444444444444", NormalizedMAC: input.NormalizedMAC, Label: input.Label, DeviceType: input.DeviceType, Status: "ACTIVE"}, nil
 }
 func (s *memoryStore) ListForCustomer(_ context.Context, tenantID, customerID string) ([]Device, error) {
 	s.tenantID, s.userID = tenantID, customerID
@@ -78,5 +78,28 @@ func TestDeviceHTTPRegistersOnlyForAuthenticatedCustomer(t *testing.T) {
 	}
 	if err := json.NewDecoder(strings.NewReader(raw)).Decode(&body); err != nil || body.Data.ID == "" || body.Data.NormalizedMAC != "aabbccddeeff" {
 		t.Fatalf("response=%s decoded=%+v err=%v", raw, body, err)
+	}
+}
+
+func TestDeviceHTTPRegistersNamedPOSForStaffCustomer(t *testing.T) {
+	store := &memoryStore{}
+	service, err := NewService(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewHTTP(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/customers/33333333-3333-4333-8333-333333333333/pos-devices", strings.NewReader(`{"mac":"AA:BB:CC:DD:EE:FF","label":"Counter 1"}`))
+	request.SetPathValue("id", "33333333-3333-4333-8333-333333333333")
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: testTenant, UserID: testUser}))
+	response := httptest.NewRecorder()
+	h.registerPOSForCustomer(response, request)
+	if response.Code != http.StatusCreated || store.registered.DeviceType != "POS" || store.registered.Label != "Counter 1" {
+		t.Fatalf("status=%d registration=%+v body=%s", response.Code, store.registered, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"device_type":"POS"`) {
+		t.Fatalf("POS projection missing: %s", response.Body.String())
 	}
 }

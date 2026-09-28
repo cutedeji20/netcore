@@ -25,6 +25,7 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	mux.Handle("GET /api/v1/portal/devices", sessions.RequireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("POST /api/v1/portal/devices", sessions.RequireAuth(sessions.RequireAllowedOrigin(http.HandlerFunc(h.register))))
 	mux.Handle("POST /api/v1/customers/{id}/devices", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("customer.write", http.HandlerFunc(h.registerForCustomer)))))
+	mux.Handle("POST /api/v1/customers/{id}/pos-devices", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("customer.pos_device.write", http.HandlerFunc(h.registerPOSForCustomer)))))
 	mux.Handle("GET /api/v1/customers/{id}/devices", sessions.RequireAuth(auth.RequirePermission("customer.read", http.HandlerFunc(h.listForCustomer))))
 	return nil
 }
@@ -43,6 +44,12 @@ func (h *HTTP) listForCustomer(w http.ResponseWriter, r *http.Request) {
 	}{values})
 }
 func (h *HTTP) registerForCustomer(w http.ResponseWriter, r *http.Request) {
+	h.registerCustomerDevice(w, r, false)
+}
+func (h *HTTP) registerPOSForCustomer(w http.ResponseWriter, r *http.Request) {
+	h.registerCustomerDevice(w, r, true)
+}
+func (h *HTTP) registerCustomerDevice(w http.ResponseWriter, r *http.Request, pos bool) {
 	p, ok := h.principal(w, r)
 	if !ok {
 		return
@@ -57,7 +64,13 @@ func (h *HTTP) registerForCustomer(w http.ResponseWriter, r *http.Request) {
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_DEVICE", "Device details are invalid.")
 		return
 	}
-	device, err := h.service.RegisterForCustomer(r.Context(), p.TenantID, p.UserID, r.PathValue("id"), input.MAC, input.Label)
+	var device Device
+	var err error
+	if pos {
+		device, err = h.service.RegisterPOSForCustomer(r.Context(), p.TenantID, p.UserID, r.PathValue("id"), input.MAC, input.Label)
+	} else {
+		device, err = h.service.RegisterForCustomer(r.Context(), p.TenantID, p.UserID, r.PathValue("id"), input.MAC, input.Label)
+	}
 	if errors.Is(err, ErrInvalidRegistration) {
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_DEVICE", "Device details are invalid.")
 		return
