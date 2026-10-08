@@ -240,7 +240,7 @@
     dialog.className = "plan-dialog";
     title.textContent = plan ? "Edit plan" : "Create plan";
     note.className = "plan-dialog-note";
-    note.textContent = hasSubscriptions ? "This plan has subscription history, so its commercial terms are locked. Use Retire or Restore outside this form to control future sales." : "Published plans become visible in the customer portal once checkout is enabled.";
+    note.textContent = hasSubscriptions ? "Changing the price affects future purchases only. Existing subscriptions, invoices, and payments keep their original amounts. Other plan terms are locked." : "Published plans become visible in the customer portal once checkout is enabled.";
     heading.append(title, note);
     form.className = "plan-form";
     form.noValidate = true;
@@ -257,7 +257,7 @@
     );
     if (hasSubscriptions) {
       Array.prototype.forEach.call(form.elements, function (field) {
-        if (field.name !== "status") field.readOnly = true;
+        if (field.name !== "price") field.readOnly = true;
       });
     }
     feedback.className = "plan-form-feedback";
@@ -267,12 +267,11 @@
     cancel.textContent = "Cancel";
     cancel.addEventListener("click", closePlanDialog);
     submit.className = "button primary";
-    submit.type = hasSubscriptions ? "button" : "submit";
-    submit.textContent = hasSubscriptions ? "Close" : (plan ? "Save changes" : "Create plan");
-    if (hasSubscriptions) submit.addEventListener("click", closePlanDialog);
+    submit.type = "submit";
+    submit.textContent = plan ? "Save changes" : "Create plan";
     footer.append(cancel, submit);
     form.append(feedback, footer);
-    if (!hasSubscriptions) form.addEventListener("submit", function (event) {
+    form.addEventListener("submit", function (event) {
       event.preventDefault();
       submitPlan(plan, current, form, submit, feedback);
     });

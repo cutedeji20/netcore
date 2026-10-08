@@ -199,7 +199,7 @@ SELECT EXISTS (
 )`, tenantID, planID).Scan(&used); err != nil {
 			return fmt.Errorf("check plan subscriptions: %w", err)
 		}
-		if used && !sameTerms(previous, input) {
+		if used && !sameNonPriceTerms(previous, input) {
 			return ErrTermsLocked
 		}
 
@@ -413,8 +413,8 @@ func scanPlanWithQuota(row rowScanner, plan *Plan, quotaBytes *pgtype.Int8) erro
 	return nil
 }
 
-func sameTerms(plan Plan, input WriteInput) bool {
-	if plan.Name != input.Name || plan.Description != input.Description || plan.PriceMinor != input.PriceMinor ||
+func sameNonPriceTerms(plan Plan, input WriteInput) bool {
+	if plan.Name != input.Name || plan.Description != input.Description ||
 		plan.Currency != input.Currency || plan.DurationSeconds != input.DurationSeconds ||
 		plan.DownloadBPS != input.DownloadBPS || plan.UploadBPS != input.UploadBPS ||
 		plan.MaxDevices != input.MaxDevices || plan.MaxConcurrentSessions != input.MaxConcurrentSessions ||

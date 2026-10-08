@@ -159,7 +159,7 @@ func (h *HTTP) update(w http.ResponseWriter, r *http.Request) {
 		security.WriteError(w, r, http.StatusNotFound, "PLAN_NOT_FOUND", "The plan was not found.")
 		return
 	case errors.Is(err, ErrTermsLocked):
-		security.WriteError(w, r, http.StatusConflict, "PLAN_TERMS_LOCKED", "Only publication status can change after a plan has subscriptions.")
+		security.WriteError(w, r, http.StatusConflict, "PLAN_TERMS_LOCKED", "Only price and publication status can change after a plan has subscriptions.")
 		return
 	case err != nil:
 		security.WriteError(w, r, http.StatusServiceUnavailable, "PLANS_UNAVAILABLE", "Plan data is temporarily unavailable.")
