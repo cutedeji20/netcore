@@ -56,3 +56,19 @@ func TestStaffVoucherRevokeRequiresStepUp(t *testing.T) {
 		t.Fatalf("err=%v calls=%d", err, revoker.calls)
 	}
 }
+
+func TestRevealRequiresStepUpAndKeepsBuyerIdentity(t *testing.T) {
+	store := &issuingStoreStub{}
+	issuer, _ := NewIssuer(store, voucherTestWrapper{}, "https://vault.test/keys/voucher/1")
+	service, _ := NewStaffService(issuer, &revokerStub{}, staffStepUpStub{err: errors.New("invalid code")})
+	p := auth.Principal{TenantID: voucherTestTenantID, UserID: "22222222-2222-4222-8222-222222222222"}
+	batchID := "33333333-3333-4333-8333-333333333333"
+	if _, err := service.Reveal(context.Background(), p, batchID, "password", "000000"); !errors.Is(err, ErrCodeUnavailable) || store.revealed != 0 {
+		t.Fatalf("failed step-up reached store: %v", err)
+	}
+	service.stepUp = staffStepUpStub{}
+	codes, err := service.Reveal(context.Background(), p, batchID, "password", "123456")
+	if err != nil || len(codes) != 1 || store.revealed != 1 || store.revealTenant != p.TenantID || store.revealActor != p.UserID || store.revealBatch != batchID {
+		t.Fatalf("reveal=%+v err=%v store=%+v", codes, err, store)
+	}
+}

@@ -24,6 +24,17 @@ func NewPostgresStore(db *database.Pool) (*PostgresStore, error) {
 }
 
 func (s *PostgresStore) List(ctx context.Context, tenantID string, options ListOptions) (page Page, err error) {
+	return s.listBatches(ctx, tenantID, "", options)
+}
+
+func (s *PostgresStore) ListBuyerBatches(ctx context.Context, tenantID, userID string, options ListOptions) (Page, error) {
+	if !validUUID(userID) {
+		return Page{}, ErrInvalidPage
+	}
+	return s.listBatches(ctx, tenantID, userID, options)
+}
+
+func (s *PostgresStore) listBatches(ctx context.Context, tenantID, buyerUserID string, options ListOptions) (page Page, err error) {
 	if tenantID == "" || options.Limit < 1 {
 		return Page{}, ErrInvalidPage
 	}
@@ -59,7 +70,8 @@ WITH batches AS (
       JOIN plans AS p
         ON p.id = v.plan_id
        AND p.tenant_id = v.tenant_id
-     WHERE v.tenant_id = $1
+      LEFT JOIN voucher_batches AS b ON b.id=v.batch_id AND b.tenant_id=v.tenant_id
+     WHERE v.tenant_id = $1 AND ($6::uuid IS NULL OR b.buyer_user_id=$6::uuid)
      GROUP BY COALESCE(v.batch_id, v.id), p.name
 )
 SELECT id::text,
@@ -87,6 +99,7 @@ SELECT id::text,
 			nullableCursorTime(options.Cursor),
 			nullableCursorID(options.Cursor),
 			options.Limit+1,
+			nullableVoucherUUID(buyerUserID),
 		)
 		if err != nil {
 			return fmt.Errorf("query voucher batches: %w", err)

@@ -151,6 +151,7 @@ type Portal struct {
 type Payments struct {
 	Gateway             string
 	VoucherSalesEnabled bool
+	VoucherGuestEnabled bool
 	PaystackSecretRef   string
 	CallbackURL         string
 	PaystackCallbackURL string
@@ -267,13 +268,14 @@ func Load(getenv func(string) string) (*Config, error) {
 			DeviceReplacementEnabled: boolDefault(getenv("NETCORE_DEVICE_REPLACEMENT_ENABLED"), false),
 		},
 		Payments: Payments{
-			Gateway:             strDefault(getenv("NETCORE_PAYMENT_GATEWAY"), "disabled"),
-			VoucherSalesEnabled: boolDefault(getenv("NETCORE_VOUCHER_SALES_ENABLED"), false),
-			PaystackSecretRef:   getenv("NETCORE_PAYSTACK_SECRET_REF"),
-			CallbackURL:         callbackURL,
-			PaystackCallbackURL: callbackURL,
-			WebhookPollInterval: durDefault(getenv("NETCORE_WEBHOOK_POLL_INTERVAL"), time.Second),
-			WebhookMaxAttempts:  intDefault(getenv("NETCORE_WEBHOOK_MAX_ATTEMPTS"), 8),
+			Gateway:              strDefault(getenv("NETCORE_PAYMENT_GATEWAY"), "disabled"),
+			VoucherSalesEnabled:  boolDefault(getenv("NETCORE_VOUCHER_SALES_ENABLED"), false),
+			VoucherGuestEnabled:  boolDefault(getenv("NETCORE_VOUCHER_GUEST_ENABLED"), false),
+			PaystackSecretRef:    getenv("NETCORE_PAYSTACK_SECRET_REF"),
+			CallbackURL:          callbackURL,
+			PaystackCallbackURL:  callbackURL,
+			WebhookPollInterval:  durDefault(getenv("NETCORE_WEBHOOK_POLL_INTERVAL"), time.Second),
+			WebhookMaxAttempts:   intDefault(getenv("NETCORE_WEBHOOK_MAX_ATTEMPTS"), 8),
 		},
 		Radius: Radius{ServerAddress: strings.TrimSpace(getenv("NETCORE_RADIUS_SERVER_ADDRESS"))},
 		Staff: Staff{
@@ -465,6 +467,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Payments.VoucherSalesEnabled && c.VoucherCrypto.Backend != "azure-key-vault" {
 		p = append(p, "NETCORE_VOUCHER_SALES_ENABLED requires a configured voucher Key Vault key")
+	}
+	if c.Payments.VoucherGuestEnabled && c.VoucherCrypto.Backend != "azure-key-vault" {
+		p = append(p, "NETCORE_VOUCHER_GUEST_ENABLED requires a configured voucher Key Vault key")
+	}
+	if c.Payments.VoucherGuestEnabled && !validPortalTenantSlug(c.Portal.TenantSlug) {
+		p = append(p, "NETCORE_PORTAL_TENANT_SLUG must be set when NETCORE_VOUCHER_GUEST_ENABLED=true")
 	}
 	if c.Staff.InviteURL != "" && !validStaffInviteURL(c.Staff.InviteURL, c.Security.AllowedOrigins) {
 		p = append(p, "NETCORE_STAFF_INVITE_URL must be a fragment-free HTTPS URL without a query whose origin is listed in NETCORE_ALLOWED_ORIGINS")

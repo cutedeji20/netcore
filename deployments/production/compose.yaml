@@ -35,6 +35,8 @@ services:
       # one-time MFA administrator ceremony documented in README.md succeeds.
       NETCORE_UI_MODE: ${NETCORE_UI_MODE:-locked}
       NETCORE_TENANT_SLUG: ${NETCORE_TENANT_SLUG:-}
+      NETCORE_VOUCHER_GUEST_ENABLED: ${NETCORE_VOUCHER_GUEST_ENABLED:-false}
+      NETCORE_VOUCHER_SALES_ENABLED: ${NETCORE_VOUCHER_SALES_ENABLED:-false}
     networks: [netcore]
     read_only: true
     cap_drop: ["ALL"]
@@ -64,6 +66,10 @@ services:
       NETCORE_TEST_DATA_RESET_ENABLED: ${NETCORE_TEST_DATA_RESET_ENABLED:-false}
       NETCORE_STAFF_INVITE_URL: ${NETCORE_STAFF_INVITE_URL:-}
       NETCORE_PAYMENT_GATEWAY: ${NETCORE_PAYMENT_GATEWAY:-disabled}
+      NETCORE_VOUCHER_SALES_ENABLED: ${NETCORE_VOUCHER_SALES_ENABLED:-false}
+      NETCORE_VOUCHER_GUEST_ENABLED: ${NETCORE_VOUCHER_GUEST_ENABLED:-false}
+      NETCORE_VOUCHER_CRYPTO_BACKEND: ${NETCORE_VOUCHER_CRYPTO_BACKEND:-disabled}
+      NETCORE_VOUCHER_KEK_ID: ${NETCORE_VOUCHER_KEK_ID:-}
       NETCORE_PAYMENT_CALLBACK_URL: https://${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}/portal.html
       # Provider credentials are encrypted in PostgreSQL and wrapped by this
       # versioned, non-exportable Key Vault key. No provider key is an env var.
@@ -115,6 +121,8 @@ services:
       NETCORE_PAYMENT_CALLBACK_URL: https://${NETCORE_DOMAIN:?set NETCORE_DOMAIN in deployments/production/.env}/portal.html
       NETCORE_INTEGRATION_CRYPTO_BACKEND: ${NETCORE_INTEGRATION_CRYPTO_BACKEND:-disabled}
       NETCORE_INTEGRATION_KEK_ID: ${NETCORE_INTEGRATION_KEK_ID:-}
+      NETCORE_VOUCHER_CRYPTO_BACKEND: ${NETCORE_VOUCHER_CRYPTO_BACKEND:-disabled}
+      NETCORE_VOUCHER_KEK_ID: ${NETCORE_VOUCHER_KEK_ID:-}
     volumes:
       - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/app:/run/netcore/runtime:ro
       - postgres_tls:/run/netcore/postgres-tls:ro

@@ -29,10 +29,31 @@ func (s *PostgresStore) RevokeVoucher(ctx context.Context, tenantID, voucherID, 
 		if status == "REVOKED" {
 			return nil
 		}
-		if status != "UNUSED" {
+		if status != "UNUSED" && status != "REDEEMED" {
 			return ErrStaffVoucherDenied
 		}
-		if _, err := tx.Exec(ctx, `UPDATE vouchers SET status='REVOKED' WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='UNUSED'`, tenantID, voucherID); err != nil {
+		if status == "REDEEMED" {
+			var subscriptionID, subscriptionStatus string
+			if err := tx.QueryRow(ctx, `SELECT id::text,status FROM subscriptions WHERE tenant_id=$1::uuid AND voucher_id=$2::uuid FOR UPDATE`, tenantID, voucherID).Scan(&subscriptionID, &subscriptionStatus); err != nil {
+				return err
+			}
+			var open bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE tenant_id=$1::uuid AND subscription_id=$2::uuid AND status<>'CLOSED') OR subscription_has_radius_reservation($1::uuid,$2::uuid)`, tenantID, subscriptionID).Scan(&open); err != nil {
+				return err
+			}
+			if open {
+				return ErrVoucherHasOpenSession
+			}
+			if subscriptionStatus == "ACTIVE" || subscriptionStatus == "SUSPENDED" {
+				if _, err := tx.Exec(ctx, `UPDATE subscriptions SET status='CANCELLED',auto_renew=false,updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, subscriptionID); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `INSERT INTO subscription_events(tenant_id,subscription_id,from_status,to_status,reason,actor_type,actor_id,metadata) VALUES($1::uuid,$2::uuid,$3,'CANCELLED','VOUCHER_REVOKED','ADMIN',$4::uuid,jsonb_build_object('voucher_id',$5::text))`, tenantID, subscriptionID, subscriptionStatus, actorID, voucherID); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE vouchers SET status='REVOKED' WHERE tenant_id=$1::uuid AND id=$2::uuid AND status IN ('UNUSED','REDEEMED')`, tenantID, voucherID); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO audit_logs(tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata) VALUES($1::uuid,'STAFF',$2::uuid,'VOUCHER_REVOKED','vouchers',$3::uuid,jsonb_build_object('previous_status',$4::text))`, tenantID, actorID, voucherID, status)

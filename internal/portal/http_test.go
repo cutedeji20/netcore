@@ -20,11 +20,54 @@ type memoryLimiter struct {
 	allowed bool
 	err     error
 	keys    []string
+	limits  []int64
 }
 
-func (l *memoryLimiter) AllowSlidingWindow(_ context.Context, key string, _ int64, _ time.Duration) (bool, error) {
+type guestRedeemerStub struct { calls int; err error }
+func (s *guestRedeemerStub) RedeemForDevice(_ context.Context, _, _, _, _ string) (string,error) { s.calls++; return "33333333-3333-4333-8333-333333333333",s.err }
+
+func TestGuestVoucherHandoffIsGatedAndDoesNotExposeCode(t *testing.T) {
+	store := &memoryStore{}
+	h := newTestHTTP(t, store, &memoryLimiter{allowed:true})
+	code := "NC-ABCDEF-GHJKLM-NPQRST"
+	request := func() *http.Request { return httptest.NewRequest(http.MethodPost,"/api/v1/portal/voucher-handoff",strings.NewReader(`{"code":"`+code+`","client_mac":"AA:BB:CC:DD:EE:FF","nas_address":"10.10.0.1","hotspot_login_url":"http://10.10.0.1/login"}`)) }
+	response := httptest.NewRecorder()
+	h.guestIssue(response,request())
+	if response.Code != http.StatusNotFound { t.Fatalf("disabled status=%d",response.Code) }
+	redeemer := &guestRedeemerStub{}
+	h.ConfigureGuestVoucher(redeemer, portalTestTenantID, true)
+	badOrigin := request(); badOrigin.Header.Set("Origin","https://other.example")
+	response = httptest.NewRecorder(); h.guestIssue(response,badOrigin)
+	if response.Code != http.StatusForbidden || redeemer.calls != 0 { t.Fatalf("bad origin status=%d calls=%d",response.Code,redeemer.calls) }
+	response = httptest.NewRecorder(); h.guestIssue(response,request())
+	if response.Code != http.StatusCreated || redeemer.calls != 1 || store.record.UserID != "" || store.record.SubscriptionID != "33333333-3333-4333-8333-333333333333" || strings.Contains(response.Body.String(),code) || strings.Contains(response.Body.String(),"client_mac") { t.Fatalf("guest response=%d body=%s record=%+v",response.Code,response.Body.String(),store.record) }
+}
+
+func (l *memoryLimiter) AllowSlidingWindow(_ context.Context, key string, limit int64, _ time.Duration) (bool, error) {
 	l.keys = append(l.keys, key)
+	l.limits = append(l.limits, limit)
 	return l.allowed, l.err
+}
+
+func TestGuestVoucherLimitsArePerIPCodeAndDevice(t *testing.T) {
+	h := newTestHTTP(t, &memoryStore{}, &memoryLimiter{allowed: true})
+	l := h.limiter.(*memoryLimiter)
+	if err := h.limitGuestIssue(context.Background(), portalTestTenantID, "198.51.100.1", "aabbccddeeff", "NC-ABCDEF-GHJKLM-NPQRST"); err != nil {
+		t.Fatal(err)
+	}
+	if len(l.keys) != 3 || !strings.HasPrefix(l.keys[0], "portal:voucher:ip:") || !strings.HasPrefix(l.keys[1], "portal:voucher:code:") || !strings.HasPrefix(l.keys[2], "portal:voucher:device:") {
+		t.Fatalf("keys = %v", l.keys)
+	}
+	if l.limits[0] != 30 || l.limits[1] != 5 || l.limits[2] != 10 {
+		t.Fatalf("limits = %v", l.limits)
+	}
+	firstIPKey := l.keys[0]
+	if err := h.limitGuestIssue(context.Background(), portalTestTenantID, "198.51.100.2", "aabbccddeeff", "NC-ABCDEF-GHJKLM-NPQRST"); err != nil {
+		t.Fatal(err)
+	}
+	if l.keys[3] == firstIPKey {
+		t.Fatal("different IPs shared an attempt bucket")
+	}
 }
 
 func newTestHTTP(t *testing.T, store HandoffStore, limiter HandoffLimiter) *HTTP {

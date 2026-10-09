@@ -98,6 +98,25 @@ func TestVoucherSalesDefaultsOffAndRequiresKey(t *testing.T) {
 	}
 }
 
+func TestVoucherGuestDefaultsOffAndRequiresPortalTenant(t *testing.T) {
+	values := baseProd()
+	c, err := Load(env(values))
+	if err != nil || c.Payments.VoucherGuestEnabled {
+		t.Fatalf("default=%+v err=%v", c.Payments, err)
+	}
+	values["NETCORE_VOUCHER_GUEST_ENABLED"] = "true"
+	if _, err := Load(env(values)); err == nil {
+		t.Fatal("voucher guest enabled without key")
+	}
+	values["NETCORE_VOUCHER_CRYPTO_BACKEND"] = "azure-key-vault"
+	values["NETCORE_VOUCHER_KEK_ID"] = "https://netcore-vault.vault.azure.net/keys/vouchers/version1"
+	values["NETCORE_PORTAL_TENANT_SLUG"] = "public-tenant"
+	c, err = Load(env(values))
+	if err != nil || !c.Payments.VoucherGuestEnabled {
+		t.Fatalf("enabled=%+v err=%v", c.Payments, err)
+	}
+}
+
 func TestLoad_MissingDSNFails(t *testing.T) {
 	if _, err := Load(env(map[string]string{})); err == nil {
 		t.Fatal("expected failure with no DSN")

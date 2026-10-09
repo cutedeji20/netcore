@@ -69,6 +69,10 @@ func (h *HTTP) revokeVoucher(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := h.staff.Revoke(r.Context(), p, r.PathValue("id"), in.Password, in.MFACode)
+	if errors.Is(err, ErrVoucherHasOpenSession) {
+		security.WriteError(w, r, http.StatusConflict, "ACTIVE_SESSION", "Disconnect this voucher's active network session before revoking it.")
+		return
+	}
 	if errors.Is(err, ErrStaffVoucherDenied) {
 		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "Voucher revocation is not allowed.")
 		return
@@ -78,4 +82,38 @@ func (h *HTTP) revokeVoucher(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *HTTP) revealBatch(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	p, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || h.staff == nil || h.revealLimiter == nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "VOUCHERS_UNAVAILABLE", "Voucher retrieval is unavailable.")
+		return
+	}
+	var in struct {
+		Password string `json:"password"`
+		MFACode  string `json:"mfa_code"`
+	}
+	if !decodeVoucherMutation(w, r, &in) || !validUUID(r.PathValue("id")) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Voucher retrieval request is invalid.")
+		return
+	}
+	allowed, err := h.revealLimiter.AllowSlidingWindow(r.Context(), revealRateKey(p.TenantID, p.UserID, r.PathValue("id")), 5, 15*time.Minute)
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "VOUCHERS_UNAVAILABLE", "Voucher retrieval is unavailable.")
+		return
+	}
+	if !allowed {
+		security.WriteError(w, r, http.StatusTooManyRequests, "TOO_MANY_REQUESTS", "Please wait before trying again.")
+		return
+	}
+	codes, err := h.staff.Reveal(r.Context(), p, r.PathValue("id"), in.Password, in.MFACode)
+	if err != nil {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "Voucher retrieval is not allowed.")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Data []IssuedCode `json:"data"`
+	}{codes})
 }

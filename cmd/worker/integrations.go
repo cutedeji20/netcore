@@ -20,3 +20,17 @@ func configuredIntegrationKeyWrapper(cfg *config.Config) (integrations.KeyWrappe
 		return nil, errors.New("integration crypto backend is invalid")
 	}
 }
+
+func configuredVoucherKeyWrapper(cfg *config.Config) (integrations.KeyWrapper, error) {
+	if cfg == nil {
+		return nil, errors.New("voucher configuration is required")
+	}
+	switch cfg.VoucherCrypto.Backend {
+	case "disabled":
+		return integrations.NewUnavailableKeyWrapper(), nil
+	case "azure-key-vault":
+		return integrations.NewManagedIdentityKeyWrapper(cfg.VoucherCrypto.KEKID)
+	default:
+		return nil, errors.New("voucher crypto backend is invalid")
+	}
+}

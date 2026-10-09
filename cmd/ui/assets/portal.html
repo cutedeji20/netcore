@@ -15,6 +15,7 @@
     <script src="/portal-recovery.js" defer></script>
     <script src="/portal-navigation.js" defer></script>
     <script src="/portal-registration.js" defer></script>
+    <script src="/portal-vouchers.js" defer></script>
     <script src="/portal.js" defer></script>
   </head>
   <body>
@@ -45,7 +46,13 @@
           <div class="main-actions">
             <button class="primary-action" type="button" data-action="plans">Choose a plan <span>→</span></button>
             <button class="secondary-action" type="button" data-action="account">Sign in or manage my plan</button>
+            <button class="secondary-action" id="portal-buy-vouchers" type="button" data-action="buy-vouchers" hidden>Buy vouchers</button>
           </div>
+          <form id="portal-voucher" class="voucher-panel" novalidate>
+            <label>Voucher code<input name="code" autocomplete="one-time-code" inputmode="text" maxlength="38" placeholder="Enter your voucher code" aria-label="Voucher code" /></label>
+            <button class="secondary-action" type="submit">Use a voucher</button>
+          </form>
+          <p class="form-status" id="voucher-status" role="status"></p>
           <p class="privacy-note">Your device is checked securely before access is granted.</p>
         </section>
 
@@ -144,6 +151,20 @@
           <div class="account-section">
             <h2>Recent payments</h2>
             <div class="account-list" id="account-payments" aria-live="polite"></div>
+          </div>
+          <div class="account-section" id="account-vouchers-section" hidden>
+            <h2>Buy vouchers</h2>
+            <p class="lead compact">Buy one or more codes to use or share. Buying does not activate this device.</p>
+            <form id="portal-voucher-order" novalidate>
+              <label>Plan<select name="plan_id" required></select></label>
+              <label>Quantity<input name="quantity" type="number" min="1" max="100" value="1" required /></label>
+              <p id="voucher-quote" class="form-status" role="status"></p>
+              <button class="primary-action" type="submit">Continue to secure payment</button>
+            </form>
+            <h2>Your voucher batches</h2>
+            <div class="account-list" id="account-voucher-batches" aria-live="polite"></div>
+            <button class="secondary-action" id="voucher-batches-more" type="button" hidden>Load more</button>
+            <p class="form-status" id="account-voucher-status" role="status"></p>
           </div>
           <p class="form-status" id="account-status" role="status"></p>
         </section>

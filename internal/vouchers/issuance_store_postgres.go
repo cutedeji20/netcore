@@ -105,7 +105,7 @@ func (s *PostgresStore) RevealBatch(ctx context.Context, wrapper envelope.KeyWra
 	var codes []IssuedCode
 	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var authorized bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM voucher_batches b WHERE b.tenant_id=$1::uuid AND b.id=$2::uuid AND (b.buyer_user_id=$3::uuid OR EXISTS (SELECT 1 FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id AND r.tenant_id=u.tenant_id WHERE u.tenant_id=b.tenant_id AND u.id=$3::uuid AND u.status='ACTIVE' AND r.name='Administrator')))`, tenantID, batchID, actorUserID).Scan(&authorized); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM voucher_batches b JOIN users u ON u.id=$3::uuid AND u.tenant_id=b.tenant_id AND u.status='ACTIVE' WHERE b.tenant_id=$1::uuid AND b.id=$2::uuid AND (b.buyer_user_id=u.id OR b.issuer_user_id=u.id))`, tenantID, batchID, actorUserID).Scan(&authorized); err != nil {
 			return err
 		}
 		if !authorized {

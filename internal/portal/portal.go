@@ -32,12 +32,13 @@ var (
 // returned once to the browser for the RouterOS login redirect and must never
 // be logged or written to a database.
 type HandoffRecord struct {
-	TenantID   string
-	UserID     string
-	ClientMAC  string
-	NASAddress string
-	TokenHash  []byte
-	ExpiresAt  time.Time
+	TenantID      string
+	UserID        string
+	SubscriptionID string
+	ClientMAC     string
+	NASAddress    string
+	TokenHash     []byte
+	ExpiresAt     time.Time
 }
 
 // HandoffStore atomically verifies entitlement, resolves the registered NAS,
@@ -77,6 +78,20 @@ func (s *Service) Issue(ctx context.Context, tenantID, userID, clientMAC, nasAdd
 	if !validUUID(tenantID) || !validUUID(userID) {
 		return Handoff{}, ErrInvalidContext
 	}
+	return s.issueHandoff(ctx, tenantID, userID, "", clientMAC, nasAddress, hotspotLoginURL)
+}
+
+func (s *Service) IssueGuest(ctx context.Context, tenantID, subscriptionID, clientMAC, nasAddress, hotspotLoginURL string) (Handoff, error) {
+	if s == nil || s.store == nil {
+		return Handoff{}, ErrUnavailable
+	}
+	if !validUUID(tenantID) || !validUUID(subscriptionID) {
+		return Handoff{}, ErrInvalidContext
+	}
+	return s.issueHandoff(ctx, tenantID, "", subscriptionID, clientMAC, nasAddress, hotspotLoginURL)
+}
+
+func (s *Service) issueHandoff(ctx context.Context, tenantID, userID, subscriptionID, clientMAC, nasAddress, hotspotLoginURL string) (Handoff, error) {
 	normalizedMAC, ok := security.NormalizeMAC(clientMAC)
 	if !ok {
 		return Handoff{}, ErrInvalidContext
@@ -96,19 +111,18 @@ func (s *Service) Issue(ctx context.Context, tenantID, userID, clientMAC, nasAdd
 	}
 	expiresAt := s.now().UTC().Add(HandoffTTL)
 	if err := s.store.IssueHandoff(ctx, HandoffRecord{
-		TenantID:   tenantID,
-		UserID:     userID,
-		ClientMAC:  normalizedMAC,
-		NASAddress: nas.String(),
-		TokenHash:  digest,
-		ExpiresAt:  expiresAt,
+		TenantID:       tenantID,
+		UserID:         userID,
+		SubscriptionID: subscriptionID,
+		ClientMAC:      normalizedMAC,
+		NASAddress:     nas.String(),
+		TokenHash:      digest,
+		ExpiresAt:      expiresAt,
 	}); err != nil {
 		return Handoff{}, err
 	}
 	query := redirectBase.Query()
 	query.Set("username", token)
-	// RouterOS forwards User-Name to RADIUS for this narrowly scoped
-	// handoff. The password is deliberately not a credential in this branch.
 	query.Set("password", "portal-handoff")
 	redirectBase.RawQuery = query.Encode()
 	return Handoff{RedirectURL: redirectBase.String(), ExpiresAt: expiresAt}, nil

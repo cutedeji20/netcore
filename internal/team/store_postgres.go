@@ -155,6 +155,22 @@ func nullableCursorID(cursor Cursor) any {
 }
 
 // SetReseller changes only the reseller overlay, leaving staff roles intact.
+func (s *PostgresStore) LookupResellerUser(ctx context.Context, tenantID, actorID, email string) (string, bool, error) {
+	if !validUUID(tenantID) || !validUUID(actorID) || email == "" {
+		return "", false, ErrResellerInvalid
+	}
+	var userID string
+	var reseller bool
+	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT u.id::text, EXISTS(SELECT 1 FROM reseller_designations rd WHERE rd.tenant_id=u.tenant_id AND rd.user_id=u.id) FROM users u WHERE u.tenant_id=$1::uuid AND lower(u.email::text)=lower($3) AND u.status='ACTIVE' AND EXISTS(SELECT 1 FROM users a JOIN user_roles ur ON ur.user_id=a.id JOIN roles r ON r.id=ur.role_id AND r.tenant_id=a.tenant_id WHERE a.tenant_id=u.tenant_id AND a.id=$2::uuid AND a.status='ACTIVE' AND r.name='Administrator')`, tenantID, actorID, email).Scan(&userID, &reseller)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, ErrResellerInvalid
+	}
+	return userID, reseller, err
+}
+
+// SetReseller changes only the reseller overlay, leaving staff roles intact.
 func (s *PostgresStore) SetReseller(ctx context.Context, tenantID, userID string, enabled bool, actor MutationActor) error {
 	if !validUUID(tenantID) || !validUUID(userID) || !validUUID(actor.UserID) {
 		return ErrResellerInvalid

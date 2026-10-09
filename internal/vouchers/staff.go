@@ -10,6 +10,7 @@ import (
 )
 
 var ErrStaffVoucherDenied = errors.New("vouchers: staff mutation denied")
+var ErrVoucherHasOpenSession = errors.New("vouchers: active network session must be disconnected before revocation")
 
 type StepUpVerifier interface {
 	VerifyStepUp(context.Context, auth.StepUpInput) error
@@ -49,4 +50,14 @@ func (s *StaffService) Revoke(ctx context.Context, principal auth.Principal, vou
 		return ErrStaffVoucherDenied
 	}
 	return s.revoker.RevokeVoucher(ctx, principal.TenantID, voucherID, principal.UserID)
+}
+
+func (s *StaffService) Reveal(ctx context.Context, principal auth.Principal, batchID, password, mfaCode string) ([]IssuedCode, error) {
+	if s == nil || !validUUID(principal.TenantID) || !validUUID(principal.UserID) || !validUUID(batchID) {
+		return nil, ErrCodeUnavailable
+	}
+	if err := s.stepUp.VerifyStepUp(ctx, auth.StepUpInput{Principal: principal, Password: password, MFACode: mfaCode}); err != nil {
+		return nil, ErrCodeUnavailable
+	}
+	return s.issuer.RevealBatch(ctx, principal.TenantID, principal.UserID, batchID)
 }

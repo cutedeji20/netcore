@@ -9,8 +9,10 @@ import (
 )
 
 type issuingStoreStub struct {
-	saved int
-	codes []sealedCode
+	saved                                  int
+	codes                                  []sealedCode
+	revealed                               int
+	revealTenant, revealActor, revealBatch string
 }
 
 func (s *issuingStoreStub) SaveBatch(_ context.Context, _ string, request IssueRequest, id string, codes []sealedCode) (Batch, error) {
@@ -18,8 +20,10 @@ func (s *issuingStoreStub) SaveBatch(_ context.Context, _ string, request IssueR
 	s.codes = codes
 	return Batch{ID: id, Issued: int64(request.Quantity)}, nil
 }
-func (*issuingStoreStub) RevealBatch(context.Context, envelope.KeyWrapper, string, string, string) ([]IssuedCode, error) {
-	return nil, nil
+func (s *issuingStoreStub) RevealBatch(_ context.Context, _ envelope.KeyWrapper, tenantID, actorID, batchID string) ([]IssuedCode, error) {
+	s.revealed++
+	s.revealTenant, s.revealActor, s.revealBatch = tenantID, actorID, batchID
+	return []IssuedCode{{VoucherID: "44444444-4444-4444-8444-444444444444", Code: "NC-ABCDEF-GHJKLM-NPQRST"}}, nil
 }
 
 func TestIssueBatchEncryptsAndHashesAllCodes(t *testing.T) {

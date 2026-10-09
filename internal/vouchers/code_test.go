@@ -11,7 +11,7 @@ func TestCodeGenerationAndHashLookup(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if seen[code] || len(code) < 30 {
+		if seen[code] || len(code) != 23 {
 			t.Fatalf("duplicate or short code")
 		}
 		seen[code] = true

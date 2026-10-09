@@ -82,6 +82,29 @@ func TestLoadPortalConfigUsesSameOriginLiveModeWithoutTenant(t *testing.T) {
 	}
 }
 
+func TestLoadPortalConfigGuestVoucherFlag(t *testing.T) {
+	config, err := loadPortalConfig(func(key string) string {
+		switch key {
+		case "NETCORE_UI_MODE":
+			return "live"
+		case "NETCORE_TENANT_SLUG":
+			return "lagos-hub"
+		case "NETCORE_VOUCHER_GUEST_ENABLED":
+			return "true"
+		default:
+			return ""
+		}
+	})
+	if err != nil || !config.VoucherGuestEnabled {
+		t.Fatalf("voucher guest config = %+v, %v", config, err)
+	}
+	response := httptest.NewRecorder()
+	servePortalConfig(response, config)
+	if !strings.Contains(response.Body.String(), `"voucherGuestEnabled":true`) {
+		t.Fatalf("guest flag missing: %s", response.Body.String())
+	}
+}
+
 func TestLoadPortalConfigDoesNotRequireProviderEnvironmentFlags(t *testing.T) {
 	config, err := loadPortalConfig(func(key string) string {
 		if key == "NETCORE_UI_MODE" || key == "NETCORE_TENANT_SLUG" {

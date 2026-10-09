@@ -140,7 +140,7 @@ SELECT payment.provider_reference,
 }
 
 func (s *PostgresStore) IssueHandoff(ctx context.Context, record HandoffRecord) error {
-	if record.TenantID == "" || record.UserID == "" || record.ClientMAC == "" || record.NASAddress == "" || len(record.TokenHash) != 32 || record.ExpiresAt.IsZero() {
+	if record.TenantID == "" || record.ClientMAC == "" || record.NASAddress == "" || len(record.TokenHash) != 32 || record.ExpiresAt.IsZero() {
 		return ErrInvalidContext
 	}
 
@@ -162,8 +162,12 @@ SELECT id::text
 			return fmt.Errorf("resolve portal NAS: %w", err)
 		}
 
-		var subscriptionID string
-		err = tx.QueryRow(ctx, `
+		subscriptionID := record.SubscriptionID
+		if subscriptionID == "" {
+			if record.UserID == "" {
+				return ErrInvalidContext
+			}
+			err = tx.QueryRow(ctx, `
 SELECT subscription.id::text
   FROM customers AS customer
   JOIN subscriptions AS subscription
@@ -196,26 +200,58 @@ SELECT subscription.id::text
    )
  ORDER BY (device.normalized_mac = $3) DESC NULLS LAST, (subscription.device_id IS NULL) ASC, subscription.expires_at ASC, subscription.id ASC
  LIMIT 1`,
-			record.TenantID,
-			record.UserID,
-			record.ClientMAC,
-			nasID,
-		).Scan(&subscriptionID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			var hasActivePlan bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM subscriptions AS s JOIN customers AS c ON c.id=s.customer_id AND c.tenant_id=s.tenant_id WHERE c.tenant_id=$1 AND c.user_id=$2 AND c.status='ACTIVE' AND s.status='ACTIVE' AND s.starts_at<=now() AND s.expires_at>now())`, record.TenantID, record.UserID).Scan(&hasActivePlan); err != nil {
-				return fmt.Errorf("resolve portal entitlement existence: %w", err)
+				record.TenantID,
+				record.UserID,
+				record.ClientMAC,
+				nasID,
+			).Scan(&subscriptionID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				var hasActivePlan bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM subscriptions AS s JOIN customers AS c ON c.id=s.customer_id AND c.tenant_id=s.tenant_id WHERE c.tenant_id=$1 AND c.user_id=$2 AND c.status='ACTIVE' AND s.status='ACTIVE' AND s.starts_at<=now() AND s.expires_at>now())`, record.TenantID, record.UserID).Scan(&hasActivePlan); err != nil {
+					return fmt.Errorf("resolve portal entitlement existence: %w", err)
+				}
+				if hasActivePlan {
+					return ErrDeviceMismatch
+				}
+				return ErrNoActivePlan
 			}
-			if hasActivePlan {
-				return ErrDeviceMismatch
+			if err != nil {
+				return fmt.Errorf("resolve portal entitlement: %w", err)
 			}
-			return ErrNoActivePlan
-		}
-		if err != nil {
-			return fmt.Errorf("resolve portal entitlement: %w", err)
+		} else {
+			if record.UserID != "" {
+				return ErrInvalidContext
+			}
+			err = tx.QueryRow(ctx, `
+SELECT s.id::text
+  FROM subscriptions s
+  JOIN customers c ON c.id=s.customer_id AND c.tenant_id=s.tenant_id
+  JOIN devices d ON d.id=s.device_id AND d.tenant_id=s.tenant_id AND d.customer_id=c.id
+  JOIN vouchers v ON v.id=s.voucher_id AND v.tenant_id=s.tenant_id
+  JOIN usage_counters uc ON uc.subscription_id=s.id AND uc.tenant_id=s.tenant_id
+ WHERE s.id=$2::uuid AND s.tenant_id=$1::uuid
+   AND c.is_guest AND c.user_id IS NULL AND c.status='ACTIVE'
+   AND d.status='ACTIVE' AND d.normalized_mac=$3
+   AND v.status='REDEEMED'
+   AND s.status='ACTIVE' AND s.starts_at<=now() AND s.expires_at>now()
+   AND uc.period_start<=now() AND uc.period_end>now()
+   AND (uc.quota_bytes=0 OR uc.consumed_bytes<uc.quota_bytes)
+ FOR UPDATE OF s`, record.TenantID, subscriptionID, record.ClientMAC).Scan(&subscriptionID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNoActivePlan
+			}
+			if err != nil {
+				return fmt.Errorf("resolve guest portal entitlement: %w", err)
+			}
 		}
 
 		var handoffID string
+		userID := record.UserID
+		actorType := "USER"
+		if userID == "" {
+			actorType = "GUEST"
+			userID = ""
+		}
 		err = tx.QueryRow(ctx, `
 INSERT INTO portal_handoffs (
     tenant_id, subscription_id, nas_id, user_id, client_mac, nonce_hash, expires_at
@@ -224,7 +260,7 @@ RETURNING id::text`,
 			record.TenantID,
 			subscriptionID,
 			nasID,
-			record.UserID,
+			pointerUUID(userID),
 			record.ClientMAC,
 			record.TokenHash,
 			record.ExpiresAt,
@@ -235,15 +271,23 @@ RETURNING id::text`,
 
 		if _, err := tx.Exec(ctx, `
 INSERT INTO audit_logs (tenant_id, actor_type, actor_id, action, resource_type, resource_id)
-VALUES ($1, 'USER', $2, 'PORTAL_HANDOFF_ISSUED', 'portal_handoff', $3)`,
+VALUES ($1, $2, $3, 'PORTAL_HANDOFF_ISSUED', 'portal_handoff', $4)`,
 			record.TenantID,
-			record.UserID,
+			actorType,
+			pointerUUID(userID),
 			handoffID,
 		); err != nil {
 			return fmt.Errorf("write portal handoff audit record: %w", err)
 		}
 		return nil
 	})
+}
+
+func pointerUUID(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 // ResolveTenant resolves the deployment-selected portal tenant before a

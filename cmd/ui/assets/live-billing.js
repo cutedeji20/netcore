@@ -63,6 +63,8 @@
 
   function requestMetrics() {
     if (currentPage() !== "billing") return;
+    var metricsHost = document.querySelector("#page-content .metric, #page-content .detail-list");
+    if (!metricsHost) return;
     fetch(apiBase + "/api/v1/billing/metrics", { credentials: "include", cache: "no-store" })
       .then(function (response) { if (!response.ok) throw new Error(); return response.json(); })
       .then(function (data) {
@@ -339,10 +341,10 @@
   }
 
   function onPageRendered(event) {
-    clearInterval(metricsTimer);
+    if (typeof clearInterval === "function") clearInterval(metricsTimer);
     if (event.detail !== "billing") return;
     requestMetrics();
-    metricsTimer = setInterval(requestMetrics, 15000);
+    if (typeof setInterval === "function") metricsTimer = setInterval(requestMetrics, 15000);
     renderControls();
     if (loadedTransactions) requestTransactions(true);
     else requestTransactions();

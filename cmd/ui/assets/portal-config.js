@@ -3,5 +3,6 @@
 window.NETCORE_PORTAL_CONFIG = Object.freeze({
   mode: "preview",
   tenant: "",
-  apiBase: ""
+  apiBase: "",
+  voucherGuestEnabled: false
 });
