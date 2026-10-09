@@ -42,7 +42,7 @@ func (s *PostgresStore) SaveBatch(ctx context.Context, tenantID string, request 
 			}
 		}
 		var planName string
-		if err := tx.QueryRow(ctx, `SELECT name FROM plans WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='ACTIVE' FOR UPDATE`, tenantID, request.PlanID).Scan(&planName); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT name FROM plans WHERE tenant_id=$1::uuid AND id=$2::uuid AND ($3::boolean OR status='ACTIVE') FOR UPDATE`, tenantID, request.PlanID, request.OrderID != "").Scan(&planName); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrIssueInvalid
 			}

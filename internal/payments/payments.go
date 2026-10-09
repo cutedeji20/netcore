@@ -129,6 +129,7 @@ type Checkout struct {
 
 type Payment struct {
 	ID                          string
+	VoucherOrderID              string
 	SubscriptionID              string
 	Gateway                     string
 	Reference                   string
@@ -155,6 +156,7 @@ type Activation struct {
 
 type ActivationResult struct {
 	PaymentID        string
+	VoucherOrderID   string
 	SubscriptionID   string
 	Status           string
 	StartsAt         time.Time
@@ -165,9 +167,11 @@ type ActivationResult struct {
 // Service deliberately does not trust any browser success redirect.  The
 // only path to ActivateVerified follows Gateway.Verify.
 type Service struct {
-	store       Store
-	gateway     Gateway
-	callbackURL string
+	store         Store
+	gateway       Gateway
+	callbackURL   string
+	voucherOrders VoucherOrderStore
+	voucherIssuer VoucherIssuer
 }
 
 func NewService(store Store, gateway Gateway, callbackURLs ...string) (*Service, error) {
@@ -263,6 +267,12 @@ func (s *Service) Verify(ctx context.Context, tenantID, userID, reference string
 		return ActivationResult{}, ErrPaymentNotFound
 	}
 	if payment.Status == StatusSuccess {
+		if payment.VoucherOrderID != "" {
+			if s.voucherOrders == nil || s.voucherIssuer == nil {
+				return ActivationResult{}, ErrGatewayUnavailable
+			}
+			return s.finishVoucherVerification(ctx, Activation{TenantID: tenantID, UserID: userID, Gateway: payment.Gateway, Reference: payment.Reference, AmountMinor: payment.AmountMinor, Currency: payment.Currency, VerifiedAt: time.Now().UTC()})
+		}
 		// The store returns the dates only from the successful activation path.
 		return s.store.ActivateVerified(ctx, Activation{TenantID: tenantID, UserID: userID, Gateway: payment.Gateway, Reference: payment.Reference, AmountMinor: payment.AmountMinor, Currency: payment.Currency, VerifiedAt: time.Now().UTC()})
 	}
@@ -279,11 +289,18 @@ func (s *Service) Verify(ctx context.Context, tenantID, userID, reference string
 	if verification.Reference != payment.Reference || verification.AmountMinor != payment.AmountMinor || !sameCurrency(verification.Currency, payment.Currency) || verification.VerifiedAt.IsZero() {
 		return ActivationResult{}, ErrVerificationMismatch
 	}
-	return s.store.ActivateVerified(ctx, Activation{
+	activation := Activation{
 		TenantID: tenantID, UserID: userID, Gateway: payment.Gateway,
 		Reference: payment.Reference, AmountMinor: verification.AmountMinor,
 		Currency: payment.Currency, VerifiedAt: verification.VerifiedAt.UTC(),
-	})
+	}
+	if payment.VoucherOrderID != "" {
+		if s.voucherOrders == nil || s.voucherIssuer == nil {
+			return ActivationResult{}, ErrGatewayUnavailable
+		}
+		return s.finishVoucherVerification(ctx, activation)
+	}
+	return s.store.ActivateVerified(ctx, activation)
 }
 
 func validCheckoutURL(raw string) bool {

@@ -254,14 +254,15 @@ func (s *PostgresStore) PaymentForVerification(ctx context.Context, tenantID, us
 	}
 	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
-SELECT p.id::text, p.subscription_id::text, p.gateway, p.provider_reference,
+SELECT p.id::text, COALESCE(p.subscription_id::text, ''), COALESCE(o.id::text, ''), p.gateway, p.provider_reference,
        p.amount_minor, p.base_plan_amount_minor, p.reseller_discount_basis_points, p.reseller_discount_minor, p.reseller_at_initiation, p.plan_amount_minor, p.bank_charge_minor, p.currency, p.status
   FROM payments AS p
   JOIN customers AS c ON c.id = p.customer_id AND c.tenant_id = p.tenant_id
+  LEFT JOIN voucher_orders o ON o.payment_id=p.id AND o.tenant_id=p.tenant_id
  WHERE p.tenant_id = $1
    AND c.user_id = $2
    AND p.provider_reference = $3`, tenantID, userID, reference).Scan(
-			&payment.ID, &payment.SubscriptionID, &payment.Gateway, &payment.Reference,
+			&payment.ID, &payment.SubscriptionID, &payment.VoucherOrderID, &payment.Gateway, &payment.Reference,
 			&payment.AmountMinor, &payment.BasePlanAmountMinor, &payment.ResellerDiscountBasisPoints, &payment.ResellerDiscountMinor, &payment.ResellerAtInitiation, &payment.PlanAmountMinor, &payment.BankChargeMinor, &payment.Currency, &payment.Status,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {

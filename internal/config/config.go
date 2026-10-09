@@ -150,6 +150,7 @@ type Portal struct {
 // SecretStore document; it is never a secret value.
 type Payments struct {
 	Gateway             string
+	VoucherSalesEnabled bool
 	PaystackSecretRef   string
 	CallbackURL         string
 	PaystackCallbackURL string
@@ -267,6 +268,7 @@ func Load(getenv func(string) string) (*Config, error) {
 		},
 		Payments: Payments{
 			Gateway:             strDefault(getenv("NETCORE_PAYMENT_GATEWAY"), "disabled"),
+			VoucherSalesEnabled: boolDefault(getenv("NETCORE_VOUCHER_SALES_ENABLED"), false),
 			PaystackSecretRef:   getenv("NETCORE_PAYSTACK_SECRET_REF"),
 			CallbackURL:         callbackURL,
 			PaystackCallbackURL: callbackURL,
@@ -460,6 +462,9 @@ func (c *Config) Validate() error {
 		}
 	default:
 		p = append(p, "NETCORE_VOUCHER_CRYPTO_BACKEND must be disabled or azure-key-vault")
+	}
+	if c.Payments.VoucherSalesEnabled && c.VoucherCrypto.Backend != "azure-key-vault" {
+		p = append(p, "NETCORE_VOUCHER_SALES_ENABLED requires a configured voucher Key Vault key")
 	}
 	if c.Staff.InviteURL != "" && !validStaffInviteURL(c.Staff.InviteURL, c.Security.AllowedOrigins) {
 		p = append(p, "NETCORE_STAFF_INVITE_URL must be a fragment-free HTTPS URL without a query whose origin is listed in NETCORE_ALLOWED_ORIGINS")

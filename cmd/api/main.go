@@ -395,6 +395,20 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if cfg.Payments.VoucherSalesEnabled {
+		voucherWrapper, wrapperErr := configuredVoucherKeyWrapper(cfg)
+		if wrapperErr != nil {
+			return wrapperErr
+		}
+		issuer, issueErr := vouchers.NewIssuer(voucherStore, voucherWrapper, cfg.VoucherCrypto.KEKID)
+		if issueErr != nil {
+			return issueErr
+		}
+		if err := paymentService.ConfigureVoucherOrders(paymentStore, issuer); err != nil {
+			return err
+		}
+		paymentHTTP.ConfigureVoucherSales(true)
+	}
 	paymentReadinessHTTP, err := payments.NewReadinessHTTP(paymentGateway, cfg.Payments.CallbackURL)
 	if err != nil {
 		return err
