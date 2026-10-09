@@ -8,16 +8,25 @@
   var liveMode = portalConfig.mode === "live";
   var accountsEnabled = liveMode && portalConfig.accountsEnabled === true;
   var paymentsEnabled = liveMode && portalConfig.paymentsEnabled === true;
+  var voucherSalesEnabled = liveMode && portalConfig.voucherSalesEnabled === true;
+  var voucherGuestEnabled = liveMode && portalConfig.voucherGuestEnabled === true;
   var checkoutStorage = window.NetCorePortalCheckout || null;
 	var pricing = window.NetCorePortalPricing || null;
   var accountPresentation = window.NetCorePortalAccount || null;
   var recovery = window.NetCorePortalRecovery || null;
   var postLoginNavigation = window.NetCorePortalNavigation || null;
   var registration = window.NetCorePortalRegistration || null;
+  var voucherGuest = window.NetCorePortalVouchers || null;
   var connection = readConnectionContext();
   var storedPaymentReturn = checkoutStorage ? checkoutStorage.readPaymentReturn(window.sessionStorage) : null;
   if (!connection && storedPaymentReturn) connection = storedPaymentReturn.connection;
   var returningPaymentReference = readReturnedPaymentReference() || (storedPaymentReturn && storedPaymentReturn.reference) || "";
+  if (!returningPaymentReference && checkoutStorage) {
+    try {
+      var savedVoucherReference = window.sessionStorage.getItem("netcore.portal.voucher.payment.reference");
+      if (checkoutStorage.validReference(savedVoucherReference)) returningPaymentReference = savedVoucherReference;
+    } catch (_) { /* payment reference remains in the callback URL */ }
+  }
 
   var views = {
     home: document.querySelector("#access-view"),
@@ -39,15 +48,29 @@
   var loginStatus = document.querySelector("#login-status");
   var resetRequestStatus = document.querySelector("#reset-request-status");
   var resetConfirmStatus = document.querySelector("#reset-confirm-status");
+  var voucherStatus = document.querySelector("#voucher-status");
   var registerForm = document.querySelector("#portal-register");
   var verifyForm = document.querySelector("#portal-verify-email");
   var loginForm = document.querySelector("#portal-login");
   var resetRequestForm = document.querySelector("#portal-reset-request");
   var resetConfirmForm = document.querySelector("#portal-reset-confirm");
+  var voucherForm = document.querySelector("#portal-voucher");
   var loginSubmit = loginForm.querySelector("button[type=submit]");
   var accountStatus = document.querySelector("#account-status");
   var accountSubscriptions = document.querySelector("#account-subscriptions");
   var accountPayments = document.querySelector("#account-payments");
+  var voucherSection = document.querySelector("#account-vouchers-section");
+  var voucherOrderForm = document.querySelector("#portal-voucher-order");
+  var voucherQuoteStatus = document.querySelector("#voucher-quote");
+  var voucherBatchList = document.querySelector("#account-voucher-batches");
+  var voucherBatchMore = document.querySelector("#voucher-batches-more");
+  var voucherAccountStatus = document.querySelector("#account-voucher-status");
+  var voucherNextCursor = "";
+  var voucherOrderKey = "";
+  if (voucherSection) voucherSection.hidden = !voucherSalesEnabled;
+  if (voucherForm) voucherForm.hidden = !voucherGuestEnabled;
+  var buyVouchersButton = document.querySelector("#portal-buy-vouchers");
+  if (buyVouchersButton) buyVouchersButton.hidden = !voucherSalesEnabled;
   var catalogueLoading = false;
   var catalogueLoaded = false;
   var selectedPlanName = "";
@@ -116,6 +139,48 @@
       showView("register");
     }
   });
+
+  if (voucherForm) {
+    voucherForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      if (!liveMode || !voucherGuestEnabled) {
+        voucherStatus.textContent = "Guest voucher access is not enabled yet. Please contact support or sign in to a plan.";
+        return;
+      }
+      if (!connection) {
+        voucherStatus.textContent = "Open this page from NetCore Wi‑Fi to use a voucher.";
+        return;
+      }
+      if (!voucherGuest) {
+        voucherStatus.textContent = "Guest voucher entry is temporarily unavailable. Please try again shortly.";
+        return;
+      }
+      var fields = new FormData(voucherForm);
+      var code = String(fields.get("code") || "");
+      var validationMessage = voucherGuest.validateVoucherCode(code);
+      if (validationMessage) {
+        voucherStatus.textContent = validationMessage;
+        return;
+      }
+      var payload = voucherGuest.guestRequest(code, connection);
+      if (!payload) {
+        voucherStatus.textContent = "This voucher request could not be validated for this connection.";
+        return;
+      }
+      setFormSubmitting(voucherForm, true);
+      voucherStatus.textContent = "Checking your voucher…";
+      postJSON("/api/v1/portal/voucher-handoff", payload).then(function (result) {
+        if (!result.response.ok || !result.body || !result.body.redirect_url) {
+          throw new Error(humanError(result.body, "This voucher could not be used right now. Please try again."));
+        }
+        window.location.replace(result.body.redirect_url);
+      }).catch(function (error) {
+        voucherStatus.textContent = error && error.message ? error.message : "This voucher could not be used right now. Please try again.";
+      }).finally(function () {
+        setFormSubmitting(voucherForm, false);
+      });
+    });
+  }
 
   registerForm.addEventListener("submit", function (event) {
     event.preventDefault();
@@ -408,6 +473,7 @@
       }
       renderCustomerAccount(accountPresentation ? accountPresentation.displayModel(result.body) : { subscriptions: [], payments: [], deviceReplacementEnabled: false });
       accountStatus.textContent = "";
+      if (voucherSalesEnabled) loadVoucherBuyerArea();
     }).catch(function (error) {
       accountStatus.textContent = error && error.message ? error.message : "We could not load your account. Please try again shortly.";
     });
@@ -444,6 +510,92 @@
         accountPayments.append(row);
       });
     }
+  }
+
+  function loadVoucherBuyerArea() {
+    window.fetch(endpoint("/api/v1/portal/catalogue"), { credentials: "include", headers: { "Accept": "application/json" } }).then(function (response) {
+      return responseBody(response).then(function (body) { if (!response.ok) throw new Error(humanError(body, "Plans could not be loaded.")); return body; });
+    }).then(function (body) {
+      var select = voucherOrderForm.elements.plan_id;
+      select.replaceChildren();
+      (Array.isArray(body.data) ? body.data : []).forEach(function (plan) {
+        var option = document.createElement("option"); option.value = String(plan.id || ""); option.textContent = String(plan.name || "Internet plan"); select.append(option);
+      });
+      if (select.options.length) updateVoucherQuote();
+      else voucherQuoteStatus.textContent = "No plans are available for voucher purchase.";
+    }).catch(function (error) { voucherQuoteStatus.textContent = error.message || "Plans could not be loaded."; });
+    loadBuyerBatches(true);
+  }
+
+  function updateVoucherQuote() {
+    var planID = String(voucherOrderForm.elements.plan_id.value || "");
+    var quantity = Number(voucherOrderForm.elements.quantity.value);
+    voucherOrderKey = "";
+    if (!planID || !Number.isInteger(quantity) || quantity < 1 || quantity > 100) { voucherQuoteStatus.textContent = "Choose a plan and 1–100 vouchers."; return; }
+    voucherQuoteStatus.textContent = "Calculating your price…";
+    window.fetch(endpoint("/api/v1/voucher-orders/quote?plan_id=" + encodeURIComponent(planID) + "&quantity=" + quantity), { credentials: "include", headers: { "Accept": "application/json" } }).then(function (response) {
+      return responseBody(response).then(function (body) { if (!response.ok) throw new Error(humanError(body, "A quote is unavailable.")); return body.data; });
+    }).then(function (quote) {
+      voucherQuoteStatus.textContent = "Each " + formatMoney(quote.unit_base_minor, quote.currency) + " · Discount " + formatMoney(quote.unit_discount_minor, quote.currency) + " each · Bank charge " + formatMoney(quote.bank_charge_minor, quote.currency) + " once · Total " + formatMoney(quote.total_minor, quote.currency);
+    }).catch(function (error) { voucherQuoteStatus.textContent = error.message || "A quote is unavailable."; });
+  }
+
+  function loadBuyerBatches(reset) {
+    var path = "/api/v1/vouchers/my-batches?limit=20" + (!reset && voucherNextCursor ? "&cursor=" + encodeURIComponent(voucherNextCursor) : "");
+    if (reset) { voucherNextCursor = ""; voucherBatchList.replaceChildren(); }
+    voucherAccountStatus.textContent = "Loading voucher batches…";
+    window.fetch(endpoint(path), { credentials: "include", headers: { "Accept": "application/json" } }).then(function (response) {
+      return responseBody(response).then(function (body) { if (!response.ok) throw new Error(humanError(body, "Voucher batches could not be loaded.")); return body; });
+    }).then(function (body) {
+      var batches = Array.isArray(body.data) ? body.data : [];
+      batches.forEach(renderBuyerBatch);
+      voucherNextCursor = body.meta && body.meta.next_cursor ? String(body.meta.next_cursor) : "";
+      voucherBatchMore.hidden = !voucherNextCursor;
+      voucherAccountStatus.textContent = "";
+      if (reset && !batches.length) appendAccountEmpty(voucherBatchList, "No voucher batches yet.");
+    }).catch(function (error) { voucherAccountStatus.textContent = error.message || "Voucher batches could not be loaded."; });
+  }
+
+  function renderBuyerBatch(batch) {
+    var row = accountRow(String(batch.plan_name || "Internet plan"), batch.status, String(batch.issued || 0) + " issued · " + String(batch.available || 0) + " unused");
+    var form = document.createElement("form");
+    var password = document.createElement("input"); password.type = "password"; password.autocomplete = "current-password"; password.placeholder = "Current password"; password.required = true;
+    var mfa = document.createElement("input"); mfa.inputMode = "numeric"; mfa.pattern = "[0-9]{6}"; mfa.maxLength = 6; mfa.placeholder = "Authenticator code"; mfa.required = true;
+    var button = document.createElement("button"); button.type = "submit"; button.className = "secondary-action"; button.textContent = "Reveal codes";
+    var result = document.createElement("div"); result.setAttribute("role", "status");
+    form.append(password, mfa, button); row.append(form, result);
+    form.addEventListener("submit", function (event) {
+      event.preventDefault(); button.disabled = true; result.textContent = "Checking access…";
+      postJSON("/api/v1/vouchers/batches/" + encodeURIComponent(batch.id) + "/reveal", { password: password.value, mfa_code: mfa.value }).then(function (response) {
+        if (!response.response.ok || !Array.isArray(response.body.data)) throw new Error(humanError(response.body, "Codes could not be retrieved."));
+        result.replaceChildren();
+        response.body.data.forEach(function (item) { var code = document.createElement("code"); code.className = "voucher-code"; code.textContent = String(item.code || ""); result.append(code); });
+        password.value = ""; mfa.value = "";
+      }).catch(function (error) { result.textContent = error.message || "Codes could not be retrieved."; }).finally(function () { button.disabled = false; });
+    });
+    voucherBatchList.append(row);
+  }
+
+  if (voucherSalesEnabled) {
+    voucherOrderForm.addEventListener("change", updateVoucherQuote);
+    voucherBatchMore.addEventListener("click", function () { loadBuyerBatches(false); });
+    voucherOrderForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var planID = String(voucherOrderForm.elements.plan_id.value || "");
+      var quantity = Number(voucherOrderForm.elements.quantity.value);
+      if (!planID || !Number.isInteger(quantity) || quantity < 1 || quantity > 100) { voucherQuoteStatus.textContent = "Choose a plan and 1–100 vouchers."; return; }
+      if (!voucherOrderKey) voucherOrderKey = newBrowserKey();
+      setFormSubmitting(voucherOrderForm, true); voucherQuoteStatus.textContent = "Preparing secure payment…";
+      postJSON("/api/v1/voucher-orders", { plan_id: planID, quantity: quantity }, { "Idempotency-Key": voucherOrderKey }).then(function (result) {
+        if (!result.response.ok || !result.body.reference || !result.body.authorization_url) throw new Error(humanError(result.body, "Voucher checkout could not start."));
+        var checkoutURL = new URL(String(result.body.authorization_url));
+        if (checkoutURL.protocol !== "https:") throw new Error("The payment service returned an unsafe checkout link.");
+        if (checkoutStorage && checkoutStorage.validReference(result.body.reference)) {
+          try { window.sessionStorage.setItem("netcore.portal.voucher.payment.reference", result.body.reference); } catch (_) { /* callback still carries the reference */ }
+        }
+        window.location.assign(checkoutURL.href);
+      }).catch(function (error) { voucherQuoteStatus.textContent = error.message || "Voucher checkout could not start."; }).finally(function () { setFormSubmitting(voucherOrderForm, false); });
+    });
   }
 
   function requestDeviceReplacement(subscription, button) {
@@ -673,7 +825,18 @@
       }
       returningPaymentReference = "";
       if (checkoutStorage) checkoutStorage.clearPaymentReturn(window.sessionStorage);
+      try { window.sessionStorage.removeItem("netcore.portal.voucher.payment.reference"); } catch (_) { /* storage may be unavailable */ }
       clearPaymentAttempt();
+      if (result.body.voucher_order_id) {
+        voucherOrderKey = "";
+        showView("account");
+        return loadCustomerAccount().then(function () { voucherAccountStatus.textContent = "Payment confirmed. Your voucher codes are ready to reveal below."; });
+      }
+      if (action.dataset.action === "buy-vouchers") {
+        accountRequested = true;
+        if (customerAuthenticated) { showView("account"); loadCustomerAccount(); }
+        else showView("login");
+      }
       if (!connection) {
         showView("login");
         loginStatus.textContent = "Payment confirmed. Return to NetCore Wi-Fi to connect this device.";

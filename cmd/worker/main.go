@@ -24,6 +24,7 @@ import (
 	"github.com/netcore-isp/netcore/internal/notify"
 	"github.com/netcore-isp/netcore/internal/payments"
 	"github.com/netcore-isp/netcore/internal/subscriptions"
+	"github.com/netcore-isp/netcore/internal/vouchers"
 )
 
 func main() {
@@ -175,6 +176,23 @@ func configuredWebhookProcessor(ctx context.Context, cfg *config.Config, db *dat
 	service, err := payments.NewService(paymentStore, gateway)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.VoucherCrypto.Backend == "azure-key-vault" {
+		voucherStore, err := vouchers.NewPostgresStore(db)
+		if err != nil {
+			return nil, err
+		}
+		voucherWrapper, err := configuredVoucherKeyWrapper(cfg)
+		if err != nil {
+			return nil, err
+		}
+		issuer, err := vouchers.NewIssuer(voucherStore, voucherWrapper, cfg.VoucherCrypto.KEKID)
+		if err != nil {
+			return nil, err
+		}
+		if err := service.ConfigureVoucherOrders(paymentStore, issuer); err != nil {
+			return nil, err
+		}
 	}
 	return payments.NewWebhookProcessor(paymentStore, service, gateway.Name(), cfg.Payments.WebhookMaxAttempts)
 }

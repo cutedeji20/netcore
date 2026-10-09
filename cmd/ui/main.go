@@ -120,10 +120,12 @@ type adminConfig struct {
 // itself resolves the tenant from deployment configuration, so the portal
 // neither receives nor sends a tenant selector.
 type portalConfig struct {
-	Mode            string `json:"mode"`
-	APIBase         string `json:"apiBase"`
-	AccountsEnabled bool   `json:"accountsEnabled"`
-	PaymentsEnabled bool   `json:"paymentsEnabled"`
+	Mode                string `json:"mode"`
+	APIBase             string `json:"apiBase"`
+	AccountsEnabled     bool   `json:"accountsEnabled"`
+	PaymentsEnabled     bool   `json:"paymentsEnabled"`
+	VoucherSalesEnabled bool   `json:"voucherSalesEnabled"`
+	VoucherGuestEnabled bool   `json:"voucherGuestEnabled"`
 }
 
 func loadAdminConfig(getenv func(string) string) (adminConfig, error) {
@@ -166,8 +168,10 @@ func loadPortalConfig(getenv func(string) string) (portalConfig, error) {
 		// Provider activation is checked by the API on each operation from the
 		// tenant's encrypted dashboard settings. Static provider flags would
 		// require a UI redeploy after every safe admin configuration change.
-		AccountsEnabled: true,
-		PaymentsEnabled: true,
+		AccountsEnabled:     true,
+		PaymentsEnabled:     true,
+		VoucherSalesEnabled: strings.EqualFold(strings.TrimSpace(getenv("NETCORE_VOUCHER_SALES_ENABLED")), "true"),
+		VoucherGuestEnabled: strings.EqualFold(strings.TrimSpace(getenv("NETCORE_VOUCHER_GUEST_ENABLED")), "true"),
 	}, nil
 }
 

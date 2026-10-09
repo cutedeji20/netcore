@@ -153,3 +153,71 @@ func nullableCursorID(cursor Cursor) any {
 	}
 	return cursor.ID
 }
+
+// SetReseller changes only the reseller overlay, leaving staff roles intact.
+func (s *PostgresStore) LookupResellerUser(ctx context.Context, tenantID, actorID, email string) (string, bool, error) {
+	if !validUUID(tenantID) || !validUUID(actorID) || email == "" {
+		return "", false, ErrResellerInvalid
+	}
+	var userID string
+	var reseller bool
+	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT u.id::text, EXISTS(SELECT 1 FROM reseller_designations rd WHERE rd.tenant_id=u.tenant_id AND rd.user_id=u.id) FROM users u WHERE u.tenant_id=$1::uuid AND lower(u.email::text)=lower($3) AND u.status='ACTIVE' AND EXISTS(SELECT 1 FROM users a JOIN user_roles ur ON ur.user_id=a.id JOIN roles r ON r.id=ur.role_id AND r.tenant_id=a.tenant_id WHERE a.tenant_id=u.tenant_id AND a.id=$2::uuid AND a.status='ACTIVE' AND r.name='Administrator')`, tenantID, actorID, email).Scan(&userID, &reseller)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, ErrResellerInvalid
+	}
+	return userID, reseller, err
+}
+
+// SetReseller changes only the reseller overlay, leaving staff roles intact.
+func (s *PostgresStore) SetReseller(ctx context.Context, tenantID, userID string, enabled bool, actor MutationActor) error {
+	if !validUUID(tenantID) || !validUUID(userID) || !validUUID(actor.UserID) {
+		return ErrResellerInvalid
+	}
+	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var email *string
+		if err := tx.QueryRow(ctx, `SELECT email::text FROM users WHERE tenant_id=$1::uuid AND id=$2::uuid FOR UPDATE`, tenantID, userID).Scan(&email); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrResellerInvalid
+			}
+			return err
+		}
+		var admin bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id AND r.tenant_id=u.tenant_id WHERE u.tenant_id=$1::uuid AND u.id=$2::uuid AND u.status='ACTIVE' AND r.name='Administrator')`, tenantID, actor.UserID).Scan(&admin); err != nil {
+			return err
+		}
+		if !admin {
+			return ErrResellerInvalid
+		}
+		var previous bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM reseller_designations WHERE tenant_id=$1::uuid AND user_id=$2::uuid)`, tenantID, userID).Scan(&previous); err != nil {
+			return err
+		}
+		if enabled {
+			if _, err := tx.Exec(ctx, `INSERT INTO reseller_designations(tenant_id,user_id,created_by) VALUES($1::uuid,$2::uuid,$3::uuid) ON CONFLICT (tenant_id,user_id) DO NOTHING`, tenantID, userID, actor.UserID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO customers(tenant_id,user_id,customer_number,status,email) VALUES($1::uuid,$2::uuid,'CUS-' || replace(gen_random_uuid()::text,'-',''),'ACTIVE',$3) ON CONFLICT (tenant_id,user_id) WHERE user_id IS NOT NULL DO NOTHING`, tenantID, userID, email); err != nil {
+				return err
+			}
+		} else {
+			if _, err := tx.Exec(ctx, `DELETE FROM reseller_designations WHERE tenant_id=$1::uuid AND user_id=$2::uuid`, tenantID, userID); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO audit_logs(tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata) VALUES($1::uuid,'USER',$2::uuid,'RESELLER_DESIGNATION_CHANGED','users',$3::uuid,jsonb_build_object('previous',$4::boolean,'enabled',$5::boolean))`, tenantID, actor.UserID, userID, previous, enabled)
+		return err
+	})
+}
+
+func (s *PostgresStore) IsReseller(ctx context.Context, tenantID, userID string) (bool, error) {
+	if !validUUID(tenantID) || !validUUID(userID) {
+		return false, ErrResellerInvalid
+	}
+	var enabled bool
+	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM reseller_designations WHERE tenant_id=$1::uuid AND user_id=$2::uuid)`, tenantID, userID).Scan(&enabled)
+	})
+	return enabled, err
+}

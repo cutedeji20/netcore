@@ -78,6 +78,22 @@ type Store interface {
 	ActivateVerified(context.Context, Activation) (ActivationResult, error)
 }
 
+type PlanQuoteStore interface {
+	QuotePlan(context.Context, string, string, string) (PlanQuote, error)
+}
+
+type PlanQuote struct {
+	PlanID              string `json:"plan_id"`
+	BasePlanMinor       int64  `json:"base_plan_minor"`
+	DiscountBasisPoints int    `json:"discount_basis_points"`
+	DiscountMinor       int64  `json:"discount_minor"`
+	NetPlanMinor        int64  `json:"net_plan_minor"`
+	BankChargeMinor     int64  `json:"bank_charge_minor"`
+	TotalMinor          int64  `json:"total_minor"`
+	Currency            string `json:"currency"`
+	Reseller            bool   `json:"reseller"`
+}
+
 type Initiation struct {
 	TenantID       string
 	UserID         string
@@ -90,14 +106,18 @@ type Initiation struct {
 }
 
 type PendingPayment struct {
-	ID              string
-	SubscriptionID  string
-	Reference       string
-	AmountMinor     int64
-	PlanAmountMinor int64
-	BankChargeMinor int64
-	Currency        string
-	CustomerEmail   string
+	ID                          string
+	SubscriptionID              string
+	Reference                   string
+	AmountMinor                 int64
+	BasePlanAmountMinor         int64
+	ResellerDiscountBasisPoints int
+	ResellerDiscountMinor       int64
+	ResellerAtInitiation        bool
+	PlanAmountMinor             int64
+	BankChargeMinor             int64
+	Currency                    string
+	CustomerEmail               string
 }
 
 // Checkout is safe to return to a browser. It contains no gateway secret,
@@ -108,15 +128,20 @@ type Checkout struct {
 }
 
 type Payment struct {
-	ID              string
-	SubscriptionID  string
-	Gateway         string
-	Reference       string
-	AmountMinor     int64
-	PlanAmountMinor int64
-	BankChargeMinor int64
-	Currency        string
-	Status          string
+	ID                          string
+	VoucherOrderID              string
+	SubscriptionID              string
+	Gateway                     string
+	Reference                   string
+	AmountMinor                 int64
+	BasePlanAmountMinor         int64
+	ResellerDiscountBasisPoints int
+	ResellerDiscountMinor       int64
+	ResellerAtInitiation        bool
+	PlanAmountMinor             int64
+	BankChargeMinor             int64
+	Currency                    string
+	Status                      string
 }
 
 type Activation struct {
@@ -131,6 +156,7 @@ type Activation struct {
 
 type ActivationResult struct {
 	PaymentID        string
+	VoucherOrderID   string
 	SubscriptionID   string
 	Status           string
 	StartsAt         time.Time
@@ -141,9 +167,11 @@ type ActivationResult struct {
 // Service deliberately does not trust any browser success redirect.  The
 // only path to ActivateVerified follows Gateway.Verify.
 type Service struct {
-	store       Store
-	gateway     Gateway
-	callbackURL string
+	store         Store
+	gateway       Gateway
+	callbackURL   string
+	voucherOrders VoucherOrderStore
+	voucherIssuer VoucherIssuer
 }
 
 func NewService(store Store, gateway Gateway, callbackURLs ...string) (*Service, error) {
@@ -161,6 +189,17 @@ func NewService(store Store, gateway Gateway, callbackURLs ...string) (*Service,
 		callbackURL = strings.TrimSpace(callbackURLs[0])
 	}
 	return &Service{store: store, gateway: gateway, callbackURL: callbackURL}, nil
+}
+
+func (s *Service) Quote(ctx context.Context, tenantID, userID, planID string) (PlanQuote, error) {
+	if s == nil || !validUUID(tenantID) || !validUUID(userID) || !validUUID(planID) {
+		return PlanQuote{}, ErrInvalidRequest
+	}
+	store, ok := s.store.(PlanQuoteStore)
+	if !ok {
+		return PlanQuote{}, ErrGatewayUnavailable
+	}
+	return store.QuotePlan(ctx, tenantID, userID, planID)
 }
 
 // Initiate freezes the plan price in a PENDING payment, then begins checkout.
@@ -228,6 +267,12 @@ func (s *Service) Verify(ctx context.Context, tenantID, userID, reference string
 		return ActivationResult{}, ErrPaymentNotFound
 	}
 	if payment.Status == StatusSuccess {
+		if payment.VoucherOrderID != "" {
+			if s.voucherOrders == nil || s.voucherIssuer == nil {
+				return ActivationResult{}, ErrGatewayUnavailable
+			}
+			return s.finishVoucherVerification(ctx, Activation{TenantID: tenantID, UserID: userID, Gateway: payment.Gateway, Reference: payment.Reference, AmountMinor: payment.AmountMinor, Currency: payment.Currency, VerifiedAt: time.Now().UTC()})
+		}
 		// The store returns the dates only from the successful activation path.
 		return s.store.ActivateVerified(ctx, Activation{TenantID: tenantID, UserID: userID, Gateway: payment.Gateway, Reference: payment.Reference, AmountMinor: payment.AmountMinor, Currency: payment.Currency, VerifiedAt: time.Now().UTC()})
 	}
@@ -244,11 +289,18 @@ func (s *Service) Verify(ctx context.Context, tenantID, userID, reference string
 	if verification.Reference != payment.Reference || verification.AmountMinor != payment.AmountMinor || !sameCurrency(verification.Currency, payment.Currency) || verification.VerifiedAt.IsZero() {
 		return ActivationResult{}, ErrVerificationMismatch
 	}
-	return s.store.ActivateVerified(ctx, Activation{
+	activation := Activation{
 		TenantID: tenantID, UserID: userID, Gateway: payment.Gateway,
 		Reference: payment.Reference, AmountMinor: verification.AmountMinor,
 		Currency: payment.Currency, VerifiedAt: verification.VerifiedAt.UTC(),
-	})
+	}
+	if payment.VoucherOrderID != "" {
+		if s.voucherOrders == nil || s.voucherIssuer == nil {
+			return ActivationResult{}, ErrGatewayUnavailable
+		}
+		return s.finishVoucherVerification(ctx, activation)
+	}
+	return s.store.ActivateVerified(ctx, activation)
 }
 
 func validCheckoutURL(raw string) bool {

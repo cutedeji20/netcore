@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -28,16 +29,30 @@ type HandoffLimiter interface {
 
 // HTTP exposes the authenticated captive-portal handoff step.
 type HTTP struct {
-	service            *Service
-	replacement        *ReplacementService
-	replacementEnabled bool
-	limiter            HandoffLimiter
-	allowedOrigins     []string
+	service             *Service
+	replacement         *ReplacementService
+	replacementEnabled  bool
+	limiter             HandoffLimiter
+	allowedOrigins      []string
+	guestVoucherEnabled bool
+	voucherRedeemer     GuestVoucherRedeemer
+	guestTenantID       string
+	clientIP            func(*http.Request) string
+}
+
+type GuestVoucherRedeemer interface {
+	RedeemForDevice(ctx context.Context, tenantID, code, mac, nas string) (string, error)
 }
 
 func (h *HTTP) ConfigureReplacement(service *ReplacementService, enabled bool) {
 	h.replacement = service
 	h.replacementEnabled = enabled
+}
+
+func (h *HTTP) ConfigureGuestVoucher(redeemer GuestVoucherRedeemer, tenantID string, enabled bool) {
+	h.voucherRedeemer = redeemer
+	h.guestTenantID = tenantID
+	h.guestVoucherEnabled = enabled
 }
 
 func NewHTTP(service *Service, limiter HandoffLimiter, allowedOrigins []string) (*HTTP, error) {
@@ -51,6 +66,13 @@ func NewHTTP(service *Service, limiter HandoffLimiter, allowedOrigins []string) 
 		service:        service,
 		limiter:        limiter,
 		allowedOrigins: slices.Clone(allowedOrigins),
+		clientIP: func(r *http.Request) string {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				return ""
+			}
+			return host
+		},
 	}, nil
 }
 
@@ -61,10 +83,14 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	if mux == nil || sessions == nil {
 		return errors.New("portal: mux and session authentication are required")
 	}
+	h.clientIP = sessions.ClientIP
 	mux.Handle(
 		"POST /api/v1/portal/handoff",
 		sessions.RequireAuth(http.HandlerFunc(h.issue)),
 	)
+	if h.guestVoucherEnabled {
+		mux.Handle("POST /api/v1/portal/voucher-handoff", http.HandlerFunc(h.guestIssue))
+	}
 	mux.Handle("POST /api/v1/portal/device-replacement/request", sessions.RequireAuth(http.HandlerFunc(h.requestReplacement)))
 	mux.Handle("POST /api/v1/portal/device-replacement/verify", sessions.RequireAuth(http.HandlerFunc(h.verifyReplacement)))
 	return nil
@@ -223,6 +249,91 @@ func (h *HTTP) issue(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusCreated, handoffResponse{RedirectURL: handoff.RedirectURL, ExpiresAt: handoff.ExpiresAt})
 	}
+}
+
+func (h *HTTP) guestIssue(w http.ResponseWriter, r *http.Request) {
+	if !h.guestVoucherEnabled || h.voucherRedeemer == nil || h.guestTenantID == "" {
+		security.WriteError(w, r, http.StatusNotFound, "NOT_FOUND", "Not found.")
+		return
+	}
+	if origin := r.Header.Get("Origin"); origin != "" && !slices.Contains(h.allowedOrigins, origin) {
+		security.WriteError(w, r, http.StatusForbidden, "CSRF_REJECTED", "Request origin is not allowed.")
+		return
+	}
+
+	var input struct {
+		Code            string `json:"code"`
+		ClientMAC       string `json:"client_mac"`
+		NASAddress      string `json:"nas_address"`
+		HotspotLoginURL string `json:"hotspot_login_url"`
+	}
+	if err := decodeJSON(r, &input); err != nil || strings.TrimSpace(input.Code) == "" {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Voucher code is required.")
+		return
+	}
+	normalizedMAC, validMAC := security.NormalizeMAC(input.ClientMAC)
+	nas, nasErr := netip.ParseAddr(strings.TrimSpace(input.NASAddress))
+	if !validMAC || nasErr != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "PORTAL_CONTEXT_INVALID", "Unable to continue this connection.")
+		return
+	}
+	ip := ""
+	if h.clientIP != nil {
+		ip = h.clientIP(r)
+	}
+	if ip == "" {
+		security.WriteError(w, r, http.StatusBadRequest, "PORTAL_CONTEXT_INVALID", "Unable to continue this connection.")
+		return
+	}
+	if err := h.limitGuestIssue(r.Context(), h.guestTenantID, ip, normalizedMAC, input.Code); err != nil {
+		if errors.Is(err, errRateLimited) {
+			security.WriteError(w, r, http.StatusTooManyRequests, "TOO_MANY_REQUESTS", "Please wait a moment and try again.")
+			return
+		}
+		security.WriteError(w, r, http.StatusServiceUnavailable, "PORTAL_UNAVAILABLE", "We cannot continue sign-in right now. Please try again shortly.")
+		return
+	}
+
+	subscriptionID, err := h.voucherRedeemer.RedeemForDevice(r.Context(), h.guestTenantID, input.Code, normalizedMAC, nas.String())
+	switch {
+	case err != nil:
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
+	case subscriptionID == "":
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
+	default:
+		handoff, issueErr := h.service.IssueGuest(r.Context(), h.guestTenantID, subscriptionID, normalizedMAC, nas.String(), input.HotspotLoginURL)
+		switch {
+		case errors.Is(issueErr, ErrInvalidContext):
+			security.WriteError(w, r, http.StatusBadRequest, "PORTAL_CONTEXT_INVALID", "Unable to continue this connection.")
+		case errors.Is(issueErr, ErrNoActivePlan), errors.Is(issueErr, ErrDeviceMismatch):
+			security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
+		case issueErr != nil:
+			security.WriteError(w, r, http.StatusServiceUnavailable, "PORTAL_UNAVAILABLE", "We cannot continue sign-in right now. Please try again shortly.")
+		default:
+			writeJSON(w, http.StatusCreated, handoffResponse{RedirectURL: handoff.RedirectURL, ExpiresAt: handoff.ExpiresAt})
+		}
+	}
+}
+
+func (h *HTTP) limitGuestIssue(ctx context.Context, tenantID, ip, normalizedMAC, code string) error {
+	limits := []struct {
+		key   string
+		count int64
+	}{
+		{rateLimitKey("portal:voucher:ip", tenantID, ip), 30},
+		{rateLimitKey("portal:voucher:code", tenantID, strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(code), "-", ""))), 5},
+		{rateLimitKey("portal:voucher:device", tenantID, normalizedMAC), 10},
+	}
+	for _, limit := range limits {
+		allowed, err := h.limiter.AllowSlidingWindow(ctx, limit.key, limit.count, 15*time.Minute)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errRateLimited
+		}
+	}
+	return nil
 }
 
 func (h *HTTP) limitIssue(ctx context.Context, tenantID, userID, normalizedMAC, nasAddress string) error {

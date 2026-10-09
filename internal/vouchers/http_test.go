@@ -6,11 +6,52 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/netcore-isp/netcore/internal/auth"
 )
+
+type revealLimiterStub struct {
+	allowed bool
+	calls   int
+}
+
+func (l *revealLimiterStub) AllowSlidingWindow(_ context.Context, _ string, limit int64, _ time.Duration) (bool, error) {
+	l.calls++
+	if limit != 5 {
+		return false, ErrCodeUnavailable
+	}
+	return l.allowed, nil
+}
+
+func TestRevealRateLimitAndNoStore(t *testing.T) {
+	h, _ := newTestHTTP(t)
+	store := &issuingStoreStub{}
+	issuer, _ := NewIssuer(store, voucherTestWrapper{}, "https://vault.test/keys/voucher/1")
+	service, _ := NewStaffService(issuer, &revokerStub{}, staffStepUpStub{})
+	h.ConfigureStaff(service)
+	limiter := &revealLimiterStub{}
+	h.ConfigureRevealLimiter(limiter)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/vouchers/batches/33333333-3333-4333-8333-333333333333/reveal", strings.NewReader(`{"password":"secret","mfa_code":"123456"}`))
+	request.SetPathValue("id", "33333333-3333-4333-8333-333333333333")
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: voucherTestTenantID, UserID: "22222222-2222-4222-8222-222222222222"}))
+	response := httptest.NewRecorder()
+	h.revealBatch(response, request)
+	if response.Code != http.StatusTooManyRequests || store.revealed != 0 {
+		t.Fatalf("blocked reveal status=%d calls=%d", response.Code, store.revealed)
+	}
+	limiter.allowed = true
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/vouchers/batches/33333333-3333-4333-8333-333333333333/reveal", strings.NewReader(`{"password":"secret","mfa_code":"123456"}`))
+	request.SetPathValue("id", "33333333-3333-4333-8333-333333333333")
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: voucherTestTenantID, UserID: "22222222-2222-4222-8222-222222222222"}))
+	response = httptest.NewRecorder()
+	h.revealBatch(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || store.revealed != 1 || !strings.Contains(response.Body.String(), "NC-ABCDEF-GHJKLM-NPQRST") {
+		t.Fatalf("reveal status=%d body=%s", response.Code, response.Body.String())
+	}
+}
 
 const voucherTestTenantID = "11111111-1111-4111-8111-111111111111"
 

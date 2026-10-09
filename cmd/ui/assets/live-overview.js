@@ -56,7 +56,10 @@
     }).catch(function () { /* retain safe empty state */ });
   }
   window.addEventListener("netcore:page-rendered", function (event) {
-    clearInterval(timer);
-    if (["overview", "customers", "plans", "subscriptions"].indexOf(event.detail) !== -1) { load(event.detail); timer = setInterval(function () { load(event.detail); }, 15000); }
+    if (typeof clearInterval === "function") clearInterval(timer);
+    if (["overview", "customers", "plans", "subscriptions"].indexOf(event.detail) !== -1) {
+      load(event.detail);
+      if (typeof setInterval === "function") timer = setInterval(function () { load(event.detail); }, 15000);
+    }
   });
 }());

@@ -55,6 +55,7 @@ type Config struct {
 	// to wrap database-held provider credentials. It never contains a provider
 	// credential or an Azure client secret.
 	IntegrationCrypto IntegrationCrypto
+	VoucherCrypto     IntegrationCrypto
 }
 
 type Database struct {
@@ -149,6 +150,8 @@ type Portal struct {
 // SecretStore document; it is never a secret value.
 type Payments struct {
 	Gateway             string
+	VoucherSalesEnabled bool
+	VoucherGuestEnabled bool
 	PaystackSecretRef   string
 	CallbackURL         string
 	PaystackCallbackURL string
@@ -265,12 +268,14 @@ func Load(getenv func(string) string) (*Config, error) {
 			DeviceReplacementEnabled: boolDefault(getenv("NETCORE_DEVICE_REPLACEMENT_ENABLED"), false),
 		},
 		Payments: Payments{
-			Gateway:             strDefault(getenv("NETCORE_PAYMENT_GATEWAY"), "disabled"),
-			PaystackSecretRef:   getenv("NETCORE_PAYSTACK_SECRET_REF"),
-			CallbackURL:         callbackURL,
-			PaystackCallbackURL: callbackURL,
-			WebhookPollInterval: durDefault(getenv("NETCORE_WEBHOOK_POLL_INTERVAL"), time.Second),
-			WebhookMaxAttempts:  intDefault(getenv("NETCORE_WEBHOOK_MAX_ATTEMPTS"), 8),
+			Gateway:              strDefault(getenv("NETCORE_PAYMENT_GATEWAY"), "disabled"),
+			VoucherSalesEnabled:  boolDefault(getenv("NETCORE_VOUCHER_SALES_ENABLED"), false),
+			VoucherGuestEnabled:  boolDefault(getenv("NETCORE_VOUCHER_GUEST_ENABLED"), false),
+			PaystackSecretRef:    getenv("NETCORE_PAYSTACK_SECRET_REF"),
+			CallbackURL:          callbackURL,
+			PaystackCallbackURL:  callbackURL,
+			WebhookPollInterval:  durDefault(getenv("NETCORE_WEBHOOK_POLL_INTERVAL"), time.Second),
+			WebhookMaxAttempts:   intDefault(getenv("NETCORE_WEBHOOK_MAX_ATTEMPTS"), 8),
 		},
 		Radius: Radius{ServerAddress: strings.TrimSpace(getenv("NETCORE_RADIUS_SERVER_ADDRESS"))},
 		Staff: Staff{
@@ -279,6 +284,10 @@ func Load(getenv func(string) string) (*Config, error) {
 		IntegrationCrypto: IntegrationCrypto{
 			Backend: strDefault(getenv("NETCORE_INTEGRATION_CRYPTO_BACKEND"), "disabled"),
 			KEKID:   strings.TrimSpace(getenv("NETCORE_INTEGRATION_KEK_ID")),
+		},
+		VoucherCrypto: IntegrationCrypto{
+			Backend: strDefault(getenv("NETCORE_VOUCHER_CRYPTO_BACKEND"), "disabled"),
+			KEKID:   strings.TrimSpace(getenv("NETCORE_VOUCHER_KEK_ID")),
 		},
 	}
 
@@ -440,6 +449,30 @@ func (c *Config) Validate() error {
 		}
 	default:
 		p = append(p, fmt.Sprintf("NETCORE_INTEGRATION_CRYPTO_BACKEND %q must be disabled or azure-key-vault", c.IntegrationCrypto.Backend))
+	}
+	switch c.VoucherCrypto.Backend {
+	case "disabled":
+		if c.VoucherCrypto.KEKID != "" {
+			p = append(p, "NETCORE_VOUCHER_KEK_ID must be empty when NETCORE_VOUCHER_CRYPTO_BACKEND=disabled")
+		}
+	case "azure-key-vault":
+		if !validAzureKeyVaultKeyID(c.VoucherCrypto.KEKID) {
+			p = append(p, "NETCORE_VOUCHER_KEK_ID must be a versioned Azure Key Vault key URL")
+		}
+		if c.VoucherCrypto.KEKID == c.IntegrationCrypto.KEKID {
+			p = append(p, "NETCORE_VOUCHER_KEK_ID must differ from the integration key")
+		}
+	default:
+		p = append(p, "NETCORE_VOUCHER_CRYPTO_BACKEND must be disabled or azure-key-vault")
+	}
+	if c.Payments.VoucherSalesEnabled && c.VoucherCrypto.Backend != "azure-key-vault" {
+		p = append(p, "NETCORE_VOUCHER_SALES_ENABLED requires a configured voucher Key Vault key")
+	}
+	if c.Payments.VoucherGuestEnabled && c.VoucherCrypto.Backend != "azure-key-vault" {
+		p = append(p, "NETCORE_VOUCHER_GUEST_ENABLED requires a configured voucher Key Vault key")
+	}
+	if c.Payments.VoucherGuestEnabled && !validPortalTenantSlug(c.Portal.TenantSlug) {
+		p = append(p, "NETCORE_PORTAL_TENANT_SLUG must be set when NETCORE_VOUCHER_GUEST_ENABLED=true")
 	}
 	if c.Staff.InviteURL != "" && !validStaffInviteURL(c.Staff.InviteURL, c.Security.AllowedOrigins) {
 		p = append(p, "NETCORE_STAFF_INVITE_URL must be a fragment-free HTTPS URL without a query whose origin is listed in NETCORE_ALLOWED_ORIGINS")

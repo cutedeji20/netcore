@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ type HTTP struct {
 	maxPageSize       int
 	invitations       *Service
 	invitationLimiter auth.LoginLimiter
+	resellers         *ResellerService
 }
 
 func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
@@ -51,7 +53,84 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		sessions.RequireAuth(auth.RequirePermission("team.read", http.HandlerFunc(h.list))),
 	)
 	h.invitationRoutes(mux, sessions)
+	if h.resellers != nil {
+		mux.Handle("PUT /api/v1/users/{id}/reseller", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("team.write", http.HandlerFunc(h.setReseller)))))
+		mux.Handle("GET /api/v1/users/lookup", sessions.RequireAuth(auth.RequirePermission("team.write", http.HandlerFunc(h.lookupResellerUser))))
+	}
 	return nil
+}
+
+func (h *HTTP) lookupResellerUser(w http.ResponseWriter, r *http.Request) {
+	p, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	email := strings.TrimSpace(r.URL.Query().Get("email"))
+	if len(email) < 3 || len(email) > 254 || !strings.Contains(email, "@") {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Enter a customer email address.")
+		return
+	}
+	store, ok := h.store.(interface {
+		LookupResellerUser(context.Context, string, string, string) (string, bool, error)
+	})
+	if !ok {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "TEAM_UNAVAILABLE", "User lookup is unavailable.")
+		return
+	}
+	id, reseller, err := store.LookupResellerUser(r.Context(), p.TenantID, p.UserID, email)
+	if errors.Is(err, ErrResellerInvalid) {
+		security.WriteNotFound(w, r)
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "TEAM_UNAVAILABLE", "User lookup is unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Data struct {
+			ID       string `json:"id"`
+			Reseller bool   `json:"reseller"`
+		} `json:"data"`
+	}{Data: struct {
+		ID       string `json:"id"`
+		Reseller bool   `json:"reseller"`
+	}{id, reseller}})
+}
+
+func (h *HTTP) ConfigureResellers(service *ResellerService) error {
+	if h == nil || service == nil {
+		return ErrResellerInvalid
+	}
+	h.resellers = service
+	return nil
+}
+
+func (h *HTTP) setReseller(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	var input struct {
+		Enabled  bool   `json:"enabled"`
+		Password string `json:"password"`
+		MFACode  string `json:"mfa_code"`
+	}
+	if !validUUID(r.PathValue("id")) || !decodeInvitationJSON(w, r, &input) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
+		return
+	}
+	if err := h.resellers.SetReseller(r.Context(), principal, r.PathValue("id"), input.Enabled, input.Password, input.MFACode); err != nil {
+		if errors.Is(err, ErrResellerInvalid) {
+			security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "Request cannot be completed.")
+			return
+		}
+		h.writeMutationError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {

@@ -23,10 +23,45 @@
     request().then(function (data) {
       settings = data;
       copy.textContent = "Customers pay this fixed amount in addition to their selected plan: " + api.format(data.fixed_bank_charge_minor) + ".";
+      var discountPanel = document.createElement("section"); discountPanel.className = "panel reseller-discount-control";
+      var discountTitle = document.createElement("h2"); discountTitle.textContent = "Reseller discount";
+      var discountCopy = document.createElement("p"); discountCopy.className = "description";
+      discountCopy.textContent = "Resellers receive " + (Number(data.reseller_discount_basis_points || 0) / 100).toFixed(2) + "% off plan prices. The bank charge is added afterward.";
+      discountPanel.append(discountTitle, discountCopy); panel.after(discountPanel);
+      var principal = window.NETCORE_PRINCIPAL || {};
+      if (Array.isArray(principal.permissions) && principal.permissions.indexOf("team.write") !== -1) {
+        var discountButton = document.createElement("button"); discountButton.type = "button"; discountButton.className = "button primary"; discountButton.textContent = "Change reseller discount";
+        discountButton.addEventListener("click", function () { openDiscountDialog(discountCopy); }); discountPanel.append(discountButton);
+      }
       if (!api.canEdit(window.NETCORE_PRINCIPAL)) return;
       var button = document.createElement("button"); button.type = "button"; button.className = "button primary"; button.textContent = "Change bank charge";
       button.addEventListener("click", function () { openDialog(panel, copy); }); panel.append(button);
     }).catch(function (error) { copy.textContent = error.message || "Billing settings could not be loaded."; });
+  }
+  function openDiscountDialog(copy) {
+    var form = document.createElement("form"); form.className = "payment-clear-dialog";
+    var heading = document.createElement("h2"); heading.textContent = "Confirm reseller discount";
+    var label = document.createElement("label"); label.textContent = "Discount percentage (0–99.99)";
+    var percent = document.createElement("input"); percent.type = "number"; percent.min = "0"; percent.max = "99.99"; percent.step = "0.01"; percent.required = true; percent.value = (Number(settings.reseller_discount_basis_points || 0) / 100).toFixed(2); label.append(percent);
+    var passwordLabel = document.createElement("label"); passwordLabel.textContent = "Current password";
+    var password = document.createElement("input"); password.type = "password"; password.required = true; passwordLabel.append(password);
+    var mfaLabel = document.createElement("label"); mfaLabel.textContent = "Authenticator code";
+    var mfa = document.createElement("input"); mfa.required = true; mfa.inputMode = "numeric"; mfa.maxLength = 6; mfaLabel.append(mfa);
+    var feedback = document.createElement("p"); feedback.className = "payment-clear-feedback";
+    var footer = document.createElement("footer"); var cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "button"; cancel.textContent = "Cancel";
+    var submit = document.createElement("button"); submit.type = "submit"; submit.className = "button primary"; submit.textContent = "Save securely";
+    footer.append(cancel, submit); form.append(heading, label, passwordLabel, mfaLabel, feedback, footer);
+    var backdrop = document.createElement("div"); backdrop.className = "payment-clear-dialog-backdrop"; backdrop.append(form); document.body.append(backdrop);
+    cancel.addEventListener("click", function () { backdrop.remove(); }); percent.focus();
+    form.addEventListener("submit", function (event) {
+      event.preventDefault(); var value = Number(percent.value); var points = Math.round(value * 100);
+      if (!Number.isFinite(value) || value < 0 || value > 99.99 || Math.abs(points / 100 - value) > 0.000001) { feedback.textContent = "Enter a percentage from 0 to 99.99 with at most two decimal places."; return; }
+      submit.disabled = true; feedback.textContent = "Saving securely…";
+      fetch(base + "/api/v1/billing/reseller-discount", { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reseller_discount_basis_points: points, password: password.value, mfa_code: mfa.value }) })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (b) { if (!r.ok) throw new Error(safeError(b, "Discount could not be saved.")); return b.data; }); })
+        .then(function (data) { settings.reseller_discount_basis_points = data.reseller_discount_basis_points; copy.textContent = "Resellers receive " + (Number(data.reseller_discount_basis_points) / 100).toFixed(2) + "% off plan prices. The bank charge is added afterward."; backdrop.remove(); if (window.NetCoreToast) window.NetCoreToast.show("Reseller discount updated."); })
+        .catch(function (error) { feedback.textContent = error.message || "Discount could not be saved."; submit.disabled = false; });
+    });
   }
   function openDialog(panel, copy) {
     var form = document.createElement("form"); form.className = "payment-clear-dialog";

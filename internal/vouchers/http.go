@@ -1,7 +1,10 @@
 package vouchers
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +25,10 @@ type HTTP struct {
 	store           Store
 	defaultPageSize int
 	maxPageSize     int
+	staff           *StaffService
+	revealLimiter   interface {
+		AllowSlidingWindow(context.Context, string, int64, time.Duration) (bool, error)
+	}
 }
 
 func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
@@ -48,6 +55,64 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"GET /api/v1/vouchers/batches",
 		sessions.RequireAuth(auth.RequirePermission("voucher.read", http.HandlerFunc(h.list))),
 	)
+	if h.staff != nil {
+		mux.Handle("GET /api/v1/vouchers/my-batches", sessions.RequireAuth(http.HandlerFunc(h.listBuyer)))
+		mux.Handle("POST /api/v1/vouchers/batches", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("voucher.write", http.HandlerFunc(h.issueBatch)))))
+		mux.Handle("POST /api/v1/vouchers/{id}/revoke", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("voucher.write", http.HandlerFunc(h.revokeVoucher)))))
+		mux.Handle("POST /api/v1/vouchers/batches/{id}/reveal", sessions.RequireAuth(sessions.RequireAllowedOrigin(http.HandlerFunc(h.revealBatch))))
+	}
+	return nil
+}
+
+func (h *HTTP) listBuyer(w http.ResponseWriter, r *http.Request) {
+	p, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	options, err := h.listOptions(r)
+	if err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "Page parameters are invalid.")
+		return
+	}
+	store, ok := h.store.(interface {
+		ListBuyerBatches(context.Context, string, string, ListOptions) (Page, error)
+	})
+	if !ok {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "VOUCHERS_UNAVAILABLE", "Voucher inventory is unavailable.")
+		return
+	}
+	page, err := store.ListBuyerBatches(r.Context(), p.TenantID, p.UserID, options)
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "VOUCHERS_UNAVAILABLE", "Voucher inventory is unavailable.")
+		return
+	}
+	response := listResponse{Data: make([]batchResponse, 0, len(page.Batches)), Meta: pageMeta{HasMore: page.HasMore}}
+	for _, batch := range page.Batches {
+		response.Data = append(response.Data, responseBatch(batch))
+	}
+	if page.HasMore {
+		response.Meta.NextCursor = encodeCursor(page.Next)
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *HTTP) ConfigureRevealLimiter(limiter interface {
+	AllowSlidingWindow(context.Context, string, int64, time.Duration) (bool, error)
+}) {
+	h.revealLimiter = limiter
+}
+
+func revealRateKey(tenantID, userID, batchID string) string {
+	sum := sha256.Sum256([]byte(tenantID + "\x00" + userID + "\x00" + batchID))
+	return "vouchers:reveal:" + hex.EncodeToString(sum[:])
+}
+
+func (h *HTTP) ConfigureStaff(service *StaffService) error {
+	if h == nil || service == nil {
+		return ErrStaffVoucherDenied
+	}
+	h.staff = service
 	return nil
 }
 

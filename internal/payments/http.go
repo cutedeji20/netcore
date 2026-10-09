@@ -18,8 +18,9 @@ import (
 // start payment or ask the API to independently verify it. Neither endpoint
 // accepts a price, currency, or a browser-declared success state.
 type HTTP struct {
-	service        *Service
-	allowedOrigins []string
+	service             *Service
+	allowedOrigins      []string
+	voucherSalesEnabled bool
 }
 
 func NewHTTP(service *Service, allowedOrigins []string) (*HTTP, error) {
@@ -35,7 +36,35 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	}
 	mux.Handle("POST /api/v1/payments", sessions.RequireAuth(http.HandlerFunc(h.initiate)))
 	mux.Handle("POST /api/v1/payments/{reference}/verify", sessions.RequireAuth(http.HandlerFunc(h.verify)))
+	mux.Handle("GET /api/v1/payments/quote", sessions.RequireAuth(http.HandlerFunc(h.quote)))
+	if h.voucherSalesEnabled {
+		mux.Handle("POST /api/v1/voucher-orders", sessions.RequireAuth(http.HandlerFunc(h.initiateVoucherOrder)))
+		mux.Handle("GET /api/v1/voucher-orders/quote", sessions.RequireAuth(http.HandlerFunc(h.voucherQuote)))
+		mux.Handle("GET /api/v1/voucher-orders/{id}", sessions.RequireAuth(http.HandlerFunc(h.voucherOrder)))
+	}
 	return nil
+}
+
+func (h *HTTP) ConfigureVoucherSales(enabled bool) { h.voucherSalesEnabled = enabled }
+
+func (h *HTTP) quote(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authorizedPrincipal(w, r)
+	if !ok {
+		return
+	}
+	quote, err := h.service.Quote(r.Context(), principal.TenantID, principal.UserID, r.URL.Query().Get("plan_id"))
+	switch {
+	case errors.Is(err, ErrInvalidRequest):
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Choose a valid internet plan.")
+	case errors.Is(err, ErrPaymentNotFound):
+		security.WriteNotFound(w, r)
+	case err != nil:
+		security.WriteError(w, r, http.StatusServiceUnavailable, "PAYMENTS_UNAVAILABLE", "A quote is temporarily unavailable.")
+	default:
+		writeJSON(w, http.StatusOK, struct {
+			Data PlanQuote `json:"data"`
+		}{quote})
+	}
 }
 
 func (h *HTTP) initiate(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +125,14 @@ func (h *HTTP) verify(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		security.WriteError(w, r, http.StatusServiceUnavailable, "PAYMENTS_UNAVAILABLE", "We cannot confirm the payment right now. Please try again shortly.")
 	default:
+		if result.VoucherOrderID != "" {
+			writeJSON(w, http.StatusOK, struct {
+				PaymentID      string `json:"payment_id"`
+				VoucherOrderID string `json:"voucher_order_id"`
+				Status         string `json:"status"`
+			}{result.PaymentID, result.VoucherOrderID, result.Status})
+			return
+		}
 		writeJSON(w, http.StatusOK, activationResponse{PaymentID: result.PaymentID, SubscriptionID: result.SubscriptionID, Status: result.Status, StartsAt: result.StartsAt, ExpiresAt: result.ExpiresAt, AlreadyActivated: result.AlreadyActivated})
 	}
 }

@@ -1,0 +1,11 @@
+BEGIN;
+DROP TRIGGER portal_guest_handoff_guard_trigger ON portal_handoffs;
+DROP FUNCTION portal_guest_handoff_guard();
+ALTER TABLE portal_handoffs ALTER COLUMN user_id SET NOT NULL;
+ALTER TABLE vouchers DROP CONSTRAINT vouchers_redeemed_complete;
+ALTER TABLE vouchers ADD CONSTRAINT vouchers_redeemed_complete CHECK ((status = 'REDEEMED') = (redeemed_at IS NOT NULL));
+ALTER TABLE subscriptions DROP CONSTRAINT subscriptions_voucher_funding;
+ALTER TABLE subscriptions DROP COLUMN voucher_id;
+ALTER TABLE customers DROP CONSTRAINT customers_guest_without_user;
+ALTER TABLE customers DROP COLUMN is_guest;
+COMMIT;

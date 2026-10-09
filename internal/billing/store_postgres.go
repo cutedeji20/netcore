@@ -48,7 +48,7 @@ func (s *PostgresStore) LoadSettings(ctx context.Context, tenantID string) (sett
 	}
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var updatedBy pgtype.Text
-		if err := tx.QueryRow(ctx, `SELECT fixed_bank_charge_minor, currency, updated_at, updated_by::text FROM tenant_billing_settings WHERE tenant_id=$1`, tenantID).Scan(&settings.FixedBankChargeMinor, &settings.Currency, &settings.UpdatedAt, &updatedBy); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT fixed_bank_charge_minor, reseller_discount_basis_points, currency, updated_at, updated_by::text FROM tenant_billing_settings WHERE tenant_id=$1`, tenantID).Scan(&settings.FixedBankChargeMinor, &settings.ResellerDiscountBasisPoints, &settings.Currency, &settings.UpdatedAt, &updatedBy); err != nil {
 			return fmt.Errorf("load billing settings: %w", err)
 		}
 		settings.UpdatedAt = settings.UpdatedAt.UTC()
@@ -56,6 +56,33 @@ func (s *PostgresStore) LoadSettings(ctx context.Context, tenantID string) (sett
 			settings.UpdatedBy = updatedBy.String
 		}
 		return nil
+	})
+	return settings, err
+}
+
+func (s *PostgresStore) SaveResellerDiscount(ctx context.Context, tenantID string, actor MutationActor, basisPoints int) (Settings, error) {
+	if !validUUID(tenantID) || !validUUID(actor.UserID) || basisPoints < 0 || basisPoints > 9999 {
+		return Settings{}, ErrInvalidResellerDiscount
+	}
+	var settings Settings
+	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var administrator bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id AND r.tenant_id=u.tenant_id WHERE u.tenant_id=$1::uuid AND u.id=$2::uuid AND u.status='ACTIVE' AND r.name='Administrator')`, tenantID, actor.UserID).Scan(&administrator); err != nil {
+			return err
+		}
+		if !administrator {
+			return ErrInvalidResellerDiscount
+		}
+		var previous int
+		if err := tx.QueryRow(ctx, `SELECT reseller_discount_basis_points FROM tenant_billing_settings WHERE tenant_id=$1::uuid FOR UPDATE`, tenantID).Scan(&previous); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `UPDATE tenant_billing_settings SET reseller_discount_basis_points=$2, updated_at=now(), updated_by=$3::uuid WHERE tenant_id=$1::uuid RETURNING fixed_bank_charge_minor, reseller_discount_basis_points, currency, updated_at`, tenantID, basisPoints, actor.UserID).Scan(&settings.FixedBankChargeMinor, &settings.ResellerDiscountBasisPoints, &settings.Currency, &settings.UpdatedAt); err != nil {
+			return err
+		}
+		settings.UpdatedBy = actor.UserID
+		_, err := tx.Exec(ctx, `INSERT INTO audit_logs(tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata) VALUES($1::uuid,'STAFF',$2::uuid,'BILLING_RESELLER_DISCOUNT_UPDATED','tenant',$1::uuid,jsonb_build_object('old_basis_points',$3::integer,'new_basis_points',$4::integer))`, tenantID, actor.UserID, previous, basisPoints)
+		return err
 	})
 	return settings, err
 }

@@ -196,6 +196,10 @@ func (s *PostgresStore) Update(ctx context.Context, tenantID, planID string, act
 		if err := tx.QueryRow(ctx, `
 SELECT EXISTS (
     SELECT 1 FROM subscriptions WHERE tenant_id = $1 AND plan_id = $2::uuid
+    UNION ALL
+    SELECT 1 FROM vouchers WHERE tenant_id = $1 AND plan_id = $2::uuid AND status IN ('UNUSED','REDEEMED')
+    UNION ALL
+    SELECT 1 FROM voucher_orders WHERE tenant_id = $1 AND plan_id = $2::uuid AND status IN ('PENDING','PAID')
 )`, tenantID, planID).Scan(&used); err != nil {
 			return fmt.Errorf("check plan subscriptions: %w", err)
 		}
@@ -348,6 +352,8 @@ SELECT EXISTS (
     SELECT 1 FROM subscriptions WHERE tenant_id = $1 AND plan_id = $2::uuid
     UNION ALL
     SELECT 1 FROM vouchers WHERE tenant_id = $1 AND plan_id = $2::uuid
+    UNION ALL
+    SELECT 1 FROM voucher_orders WHERE tenant_id = $1 AND plan_id = $2::uuid
 )`, tenantID, planID).Scan(&hasHistory); err != nil {
 			return fmt.Errorf("check plan deletion history: %w", err)
 		}

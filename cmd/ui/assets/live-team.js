@@ -97,12 +97,25 @@ if (typeof window !== "undefined") (function () {
     });
   }
 
+  function showResellerDialog() {
+    sensitiveDialog("Set customer reseller status", [{ label: "Customer account email", name: "email", type: "email" }, { label: "Action", name: "action", options: ["Make reseller", "Remove reseller"] }], "Save reseller status", function (values) {
+      return fetch(apiBase + "/api/v1/users/lookup?email=" + encodeURIComponent(String(values.email || "").trim()), { credentials: "include", cache: "no-store" })
+        .then(function (response) { if (!response.ok) return safeError(response).then(Promise.reject.bind(Promise)); return response.json(); })
+        .then(function (payload) {
+          if (!payload || !payload.data || !payload.data.id) return Promise.reject("This customer account could not be found.");
+          return postJSON("/api/v1/users/" + encodeURIComponent(payload.data.id) + "/reseller", "PUT", { enabled: values.action === "Make reseller", password: values.password, mfa_code: values.mfa_code });
+        }).then(function (response) { if (!response.ok) return safeError(response).then(Promise.reject.bind(Promise)); });
+    });
+  }
+
   function bindHeaderAction() {
     if (!canWrite() || currentPage() !== "team") return;
     var actions = document.querySelector("#page-content .heading-actions");
     if (!actions || actions.querySelector(".team-invite")) return;
     actions.insertAdjacentHTML("beforeend", renderTeamActions(window.NETCORE_PRINCIPAL));
     actions.querySelector(".team-invite").addEventListener("click", showInvite);
+    var reseller = document.createElement("button"); reseller.type = "button"; reseller.className = "button team-reseller"; reseller.textContent = "Set reseller status";
+    reseller.addEventListener("click", showResellerDialog); actions.append(reseller);
   }
 
   function displayIssuedInvitations() {

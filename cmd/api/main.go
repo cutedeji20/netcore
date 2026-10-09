@@ -259,6 +259,25 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	var voucherIssuer *vouchers.Issuer
+	voucherHTTP.ConfigureRevealLimiter(redisClient)
+	if cfg.VoucherCrypto.Backend == "azure-key-vault" {
+		voucherWrapper, wrapperErr := configuredVoucherKeyWrapper(cfg)
+		if wrapperErr != nil {
+			return wrapperErr
+		}
+		voucherIssuer, err = vouchers.NewIssuer(voucherStore, voucherWrapper, cfg.VoucherCrypto.KEKID)
+		if err != nil {
+			return err
+		}
+		staffVoucherService, staffErr := vouchers.NewStaffService(voucherIssuer, voucherStore, authService)
+		if staffErr != nil {
+			return staffErr
+		}
+		if err := voucherHTTP.ConfigureStaff(staffVoucherService); err != nil {
+			return err
+		}
+	}
 	teamStore, err := team.NewPostgresStore(postgres)
 	if err != nil {
 		return err
@@ -276,6 +295,13 @@ func run() error {
 		return err
 	}
 	if err := teamHTTP.ConfigureInvitations(teamService, redisClient); err != nil {
+		return err
+	}
+	resellerService, err := team.NewResellerService(teamStore, authService)
+	if err != nil {
+		return err
+	}
+	if err := teamHTTP.ConfigureResellers(resellerService); err != nil {
 		return err
 	}
 	activityStore, err := security.NewActivityPostgresStore(postgres)
@@ -333,6 +359,20 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if cfg.Payments.VoucherGuestEnabled {
+		if cfg.Portal.TenantSlug == "" {
+			return errors.New("NETCORE_PORTAL_TENANT_SLUG is required when NETCORE_VOUCHER_GUEST_ENABLED=true")
+		}
+		guestTenantID, found, resolveErr := portalStore.ResolveTenant(startupCtx, cfg.Portal.TenantSlug)
+		if resolveErr != nil || !found {
+			return errors.New("voucher guest tenant is unavailable")
+		}
+		guestRedeemer, guestErr := vouchers.NewRedeemer(voucherStore)
+		if guestErr != nil {
+			return guestErr
+		}
+		portalHTTP.ConfigureGuestVoucher(guestRedeemer, guestTenantID, true)
+	}
 	if cfg.Portal.DeviceReplacementEnabled {
 		tenantID, found, resolveErr := authStore.ResolveTenant(startupCtx, cfg.Portal.TenantSlug)
 		if resolveErr != nil || !found {
@@ -387,6 +427,14 @@ func run() error {
 	paymentHTTP, err := payments.NewHTTP(paymentService, cfg.Security.AllowedOrigins)
 	if err != nil {
 		return err
+	}
+	if voucherIssuer != nil {
+		if err := paymentService.ConfigureVoucherOrders(paymentStore, voucherIssuer); err != nil {
+			return err
+		}
+	}
+	if cfg.Payments.VoucherSalesEnabled {
+		paymentHTTP.ConfigureVoucherSales(true)
 	}
 	paymentReadinessHTTP, err := payments.NewReadinessHTTP(paymentGateway, cfg.Payments.CallbackURL)
 	if err != nil {
