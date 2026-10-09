@@ -27,6 +27,7 @@ func (h *SettingsHTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	}
 	mux.Handle("GET /api/v1/billing/settings", sessions.RequireAuth(auth.RequirePermission("billing.read", http.HandlerFunc(h.get))))
 	mux.Handle("PUT /api/v1/billing/settings", sessions.RequireAuth(auth.RequirePermission("billing.write", http.HandlerFunc(h.put))))
+	mux.Handle("PUT /api/v1/billing/reseller-discount", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("team.write", http.HandlerFunc(h.putResellerDiscount)))))
 	h.clientIP = sessions.ClientIP
 	return nil
 }
@@ -43,15 +44,69 @@ func (h *SettingsHTTP) get(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, struct {
 		Data struct {
-			FixedBankChargeMinor int64  `json:"fixed_bank_charge_minor"`
-			Currency             string `json:"currency"`
-			UpdatedAt            any    `json:"updated_at"`
+			FixedBankChargeMinor        int64  `json:"fixed_bank_charge_minor"`
+			ResellerDiscountBasisPoints int    `json:"reseller_discount_basis_points"`
+			Currency                    string `json:"currency"`
+			UpdatedAt                   any    `json:"updated_at"`
 		} `json:"data"`
 	}{Data: struct {
-		FixedBankChargeMinor int64  `json:"fixed_bank_charge_minor"`
-		Currency             string `json:"currency"`
-		UpdatedAt            any    `json:"updated_at"`
-	}{settings.FixedBankChargeMinor, settings.Currency, settings.UpdatedAt}})
+		FixedBankChargeMinor        int64  `json:"fixed_bank_charge_minor"`
+		ResellerDiscountBasisPoints int    `json:"reseller_discount_basis_points"`
+		Currency                    string `json:"currency"`
+		UpdatedAt                   any    `json:"updated_at"`
+	}{settings.FixedBankChargeMinor, settings.ResellerDiscountBasisPoints, settings.Currency, settings.UpdatedAt}})
+}
+
+func (h *SettingsHTTP) putResellerDiscount(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	p, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if !p.HasPermission("team.write") {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "Administrator access is required.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
+	var in struct {
+		BasisPoints *int   `json:"reseller_discount_basis_points"`
+		Password    string `json:"password"`
+		MFACode     string `json:"mfa_code"`
+	}
+	d := json.NewDecoder(r.Body)
+	d.DisallowUnknownFields()
+	if err := d.Decode(&in); err != nil || d.Decode(&struct{}{}) != io.EOF || in.BasisPoints == nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "A discount and administrator confirmation are required.")
+		return
+	}
+	ip := ""
+	if h.clientIP != nil {
+		ip = h.clientIP(r)
+	}
+	settings, err := h.service.UpdateResellerDiscount(r.Context(), p, MutationActor{IP: ip, UserAgent: r.UserAgent()}, *in.BasisPoints, in.Password, in.MFACode)
+	if errors.Is(err, ErrStepUpFailed) {
+		security.WriteError(w, r, http.StatusUnauthorized, "STEP_UP_FAILED", "Password or authenticator code was not accepted.")
+		return
+	}
+	if errors.Is(err, ErrInvalidResellerDiscount) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Discount must be between 0 and 9,999 basis points.")
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "BILLING_UNAVAILABLE", "Discount could not be saved.")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Data struct {
+			ResellerDiscountBasisPoints int   `json:"reseller_discount_basis_points"`
+			FixedBankChargeMinor        int64 `json:"fixed_bank_charge_minor"`
+		} `json:"data"`
+	}{Data: struct {
+		ResellerDiscountBasisPoints int   `json:"reseller_discount_basis_points"`
+		FixedBankChargeMinor        int64 `json:"fixed_bank_charge_minor"`
+	}{settings.ResellerDiscountBasisPoints, settings.FixedBankChargeMinor}})
 }
 func (h *SettingsHTTP) put(w http.ResponseWriter, r *http.Request) {
 	p, ok := auth.PrincipalFromContext(r.Context())

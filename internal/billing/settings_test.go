@@ -23,6 +23,28 @@ func (s *memorySettingsStore) SaveSettings(_ context.Context, _ string, actor Mu
 	s.settings, s.actor, s.saved = settings, actor, true
 	return nil
 }
+func (s *memorySettingsStore) SaveResellerDiscount(_ context.Context, _ string, actor MutationActor, basisPoints int) (Settings, error) {
+	s.settings.ResellerDiscountBasisPoints = basisPoints
+	s.actor, s.saved = actor, true
+	return s.settings, nil
+}
+
+func TestResellerDiscountPreservesBankChargeAndRequiresAdministratorStepUp(t *testing.T) {
+	store := &memorySettingsStore{settings: Settings{FixedBankChargeMinor: 1500, Currency: "NGN"}}
+	service, err := NewSettingsService(store, stepUpStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, _ := NewSettingsHTTP(service)
+	principal := auth.Principal{TenantID: billingTestTenantID, UserID: "44444444-4444-4444-8444-444444444444", Permissions: map[string]struct{}{"team.write": {}}}
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/billing/reseller-discount", strings.NewReader(`{"reseller_discount_basis_points":2500,"password":"current","mfa_code":"123456"}`))
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), principal))
+	response := httptest.NewRecorder()
+	h.putResellerDiscount(response, request)
+	if response.Code != http.StatusOK || !store.saved || store.settings.FixedBankChargeMinor != 1500 || store.settings.ResellerDiscountBasisPoints != 2500 {
+		t.Fatalf("status=%d settings=%+v body=%s", response.Code, store.settings, response.Body)
+	}
+}
 
 func TestBankChargeSettingsParsesExactDecimalAndAuditsUpdate(t *testing.T) {
 	store := &memorySettingsStore{settings: Settings{Currency: "NGN"}}

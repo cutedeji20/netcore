@@ -11,10 +11,15 @@ import (
 
 // Settings is the tenant-owned checkout fee policy. Amounts are always kobo.
 type Settings struct {
-	FixedBankChargeMinor int64
-	Currency             string
-	UpdatedAt            time.Time
-	UpdatedBy            string
+	FixedBankChargeMinor        int64
+	ResellerDiscountBasisPoints int
+	Currency                    string
+	UpdatedAt                   time.Time
+	UpdatedBy                   string
+}
+
+type ResellerDiscountStore interface {
+	SaveResellerDiscount(context.Context, string, MutationActor, int) (Settings, error)
 }
 
 type SettingsStore interface {
@@ -58,4 +63,19 @@ func (s *SettingsService) Update(ctx context.Context, principal auth.Principal, 
 		return Settings{}, err
 	}
 	return settings, nil
+}
+
+func (s *SettingsService) UpdateResellerDiscount(ctx context.Context, principal auth.Principal, actor MutationActor, basisPoints int, password, mfaCode string) (Settings, error) {
+	if s == nil || s.store == nil || s.stepUp == nil {
+		return Settings{}, ErrUnavailable
+	}
+	store, ok := s.store.(ResellerDiscountStore)
+	if !ok || !validUUID(principal.TenantID) || !validUUID(principal.UserID) || !principal.HasPermission("team.write") || basisPoints < 0 || basisPoints > 9999 {
+		return Settings{}, ErrInvalidResellerDiscount
+	}
+	if err := s.stepUp.VerifyStepUp(ctx, auth.StepUpInput{Principal: principal, Password: password, MFACode: mfaCode}); err != nil {
+		return Settings{}, ErrStepUpFailed
+	}
+	actor.UserID = principal.UserID
+	return store.SaveResellerDiscount(ctx, principal.TenantID, actor, basisPoints)
 }
