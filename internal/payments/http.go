@@ -35,7 +35,28 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	}
 	mux.Handle("POST /api/v1/payments", sessions.RequireAuth(http.HandlerFunc(h.initiate)))
 	mux.Handle("POST /api/v1/payments/{reference}/verify", sessions.RequireAuth(http.HandlerFunc(h.verify)))
+	mux.Handle("GET /api/v1/payments/quote", sessions.RequireAuth(http.HandlerFunc(h.quote)))
 	return nil
+}
+
+func (h *HTTP) quote(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authorizedPrincipal(w, r)
+	if !ok {
+		return
+	}
+	quote, err := h.service.Quote(r.Context(), principal.TenantID, principal.UserID, r.URL.Query().Get("plan_id"))
+	switch {
+	case errors.Is(err, ErrInvalidRequest):
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Choose a valid internet plan.")
+	case errors.Is(err, ErrPaymentNotFound):
+		security.WriteNotFound(w, r)
+	case err != nil:
+		security.WriteError(w, r, http.StatusServiceUnavailable, "PAYMENTS_UNAVAILABLE", "A quote is temporarily unavailable.")
+	default:
+		writeJSON(w, http.StatusOK, struct {
+			Data PlanQuote `json:"data"`
+		}{quote})
+	}
 }
 
 func (h *HTTP) initiate(w http.ResponseWriter, r *http.Request) {

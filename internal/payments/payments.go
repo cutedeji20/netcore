@@ -78,6 +78,22 @@ type Store interface {
 	ActivateVerified(context.Context, Activation) (ActivationResult, error)
 }
 
+type PlanQuoteStore interface {
+	QuotePlan(context.Context, string, string, string) (PlanQuote, error)
+}
+
+type PlanQuote struct {
+	PlanID              string `json:"plan_id"`
+	BasePlanMinor       int64  `json:"base_plan_minor"`
+	DiscountBasisPoints int    `json:"discount_basis_points"`
+	DiscountMinor       int64  `json:"discount_minor"`
+	NetPlanMinor        int64  `json:"net_plan_minor"`
+	BankChargeMinor     int64  `json:"bank_charge_minor"`
+	TotalMinor          int64  `json:"total_minor"`
+	Currency            string `json:"currency"`
+	Reseller            bool   `json:"reseller"`
+}
+
 type Initiation struct {
 	TenantID       string
 	UserID         string
@@ -90,14 +106,18 @@ type Initiation struct {
 }
 
 type PendingPayment struct {
-	ID              string
-	SubscriptionID  string
-	Reference       string
-	AmountMinor     int64
-	PlanAmountMinor int64
-	BankChargeMinor int64
-	Currency        string
-	CustomerEmail   string
+	ID                          string
+	SubscriptionID              string
+	Reference                   string
+	AmountMinor                 int64
+	BasePlanAmountMinor         int64
+	ResellerDiscountBasisPoints int
+	ResellerDiscountMinor       int64
+	ResellerAtInitiation        bool
+	PlanAmountMinor             int64
+	BankChargeMinor             int64
+	Currency                    string
+	CustomerEmail               string
 }
 
 // Checkout is safe to return to a browser. It contains no gateway secret,
@@ -108,15 +128,19 @@ type Checkout struct {
 }
 
 type Payment struct {
-	ID              string
-	SubscriptionID  string
-	Gateway         string
-	Reference       string
-	AmountMinor     int64
-	PlanAmountMinor int64
-	BankChargeMinor int64
-	Currency        string
-	Status          string
+	ID                          string
+	SubscriptionID              string
+	Gateway                     string
+	Reference                   string
+	AmountMinor                 int64
+	BasePlanAmountMinor         int64
+	ResellerDiscountBasisPoints int
+	ResellerDiscountMinor       int64
+	ResellerAtInitiation        bool
+	PlanAmountMinor             int64
+	BankChargeMinor             int64
+	Currency                    string
+	Status                      string
 }
 
 type Activation struct {
@@ -161,6 +185,17 @@ func NewService(store Store, gateway Gateway, callbackURLs ...string) (*Service,
 		callbackURL = strings.TrimSpace(callbackURLs[0])
 	}
 	return &Service{store: store, gateway: gateway, callbackURL: callbackURL}, nil
+}
+
+func (s *Service) Quote(ctx context.Context, tenantID, userID, planID string) (PlanQuote, error) {
+	if s == nil || !validUUID(tenantID) || !validUUID(userID) || !validUUID(planID) {
+		return PlanQuote{}, ErrInvalidRequest
+	}
+	store, ok := s.store.(PlanQuoteStore)
+	if !ok {
+		return PlanQuote{}, ErrGatewayUnavailable
+	}
+	return store.QuotePlan(ctx, tenantID, userID, planID)
 }
 
 // Initiate freezes the plan price in a PENDING payment, then begins checkout.
