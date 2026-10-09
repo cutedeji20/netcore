@@ -259,6 +259,24 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	var voucherIssuer *vouchers.Issuer
+	if cfg.VoucherCrypto.Backend == "azure-key-vault" {
+		voucherWrapper, wrapperErr := configuredVoucherKeyWrapper(cfg)
+		if wrapperErr != nil {
+			return wrapperErr
+		}
+		voucherIssuer, err = vouchers.NewIssuer(voucherStore, voucherWrapper, cfg.VoucherCrypto.KEKID)
+		if err != nil {
+			return err
+		}
+		staffVoucherService, staffErr := vouchers.NewStaffService(voucherIssuer, voucherStore, authService)
+		if staffErr != nil {
+			return staffErr
+		}
+		if err := voucherHTTP.ConfigureStaff(staffVoucherService); err != nil {
+			return err
+		}
+	}
 	teamStore, err := team.NewPostgresStore(postgres)
 	if err != nil {
 		return err
@@ -396,15 +414,7 @@ func run() error {
 		return err
 	}
 	if cfg.Payments.VoucherSalesEnabled {
-		voucherWrapper, wrapperErr := configuredVoucherKeyWrapper(cfg)
-		if wrapperErr != nil {
-			return wrapperErr
-		}
-		issuer, issueErr := vouchers.NewIssuer(voucherStore, voucherWrapper, cfg.VoucherCrypto.KEKID)
-		if issueErr != nil {
-			return issueErr
-		}
-		if err := paymentService.ConfigureVoucherOrders(paymentStore, issuer); err != nil {
+		if err := paymentService.ConfigureVoucherOrders(paymentStore, voucherIssuer); err != nil {
 			return err
 		}
 		paymentHTTP.ConfigureVoucherSales(true)

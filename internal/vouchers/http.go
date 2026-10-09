@@ -22,6 +22,7 @@ type HTTP struct {
 	store           Store
 	defaultPageSize int
 	maxPageSize     int
+	staff           *StaffService
 }
 
 func NewHTTP(store Store, defaultPageSize, maxPageSize int) (*HTTP, error) {
@@ -48,6 +49,18 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"GET /api/v1/vouchers/batches",
 		sessions.RequireAuth(auth.RequirePermission("voucher.read", http.HandlerFunc(h.list))),
 	)
+	if h.staff != nil {
+		mux.Handle("POST /api/v1/vouchers/batches", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("voucher.write", http.HandlerFunc(h.issueBatch)))))
+		mux.Handle("POST /api/v1/vouchers/{id}/revoke", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("voucher.write", http.HandlerFunc(h.revokeVoucher)))))
+	}
+	return nil
+}
+
+func (h *HTTP) ConfigureStaff(service *StaffService) error {
+	if h == nil || service == nil {
+		return ErrStaffVoucherDenied
+	}
+	h.staff = service
 	return nil
 }
 
