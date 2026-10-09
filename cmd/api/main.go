@@ -278,6 +278,13 @@ func run() error {
 	if err := teamHTTP.ConfigureInvitations(teamService, redisClient); err != nil {
 		return err
 	}
+	resellerService, err := team.NewResellerService(teamStore, authService)
+	if err != nil {
+		return err
+	}
+	if err := teamHTTP.ConfigureResellers(resellerService); err != nil {
+		return err
+	}
 	activityStore, err := security.NewActivityPostgresStore(postgres)
 	if err != nil {
 		return err
