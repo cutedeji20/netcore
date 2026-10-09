@@ -1,0 +1,12 @@
+./http.go
+./invitations.go
+./invitations_http.go
+./invitations_store_postgres.go
+./roles.go
+./store_postgres.go
+./team.go
+./http_test.go
+./invitations_http_test.go
+./invitations_store_postgres_test.go
+./invitations_test.go
+./roles_test.go

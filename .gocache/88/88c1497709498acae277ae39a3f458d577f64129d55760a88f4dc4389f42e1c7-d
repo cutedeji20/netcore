@@ -1,0 +1,16 @@
+./azure_key_vault.go
+./envelope.go
+./http.go
+./integrations.go
+./keywrapper.go
+./provider_validator.go
+./resolver.go
+./service.go
+./store_postgres.go
+./azure_key_vault_test.go
+./envelope_test.go
+./http_test.go
+./provider_validator_test.go
+./resolver_test.go
+./service_test.go
+./store_postgres_test.go

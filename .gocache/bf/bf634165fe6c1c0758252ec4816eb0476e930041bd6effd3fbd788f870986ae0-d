@@ -1,0 +1,3 @@
+./authority.go
+./authorizetype_string.go
+./known_metadata.go

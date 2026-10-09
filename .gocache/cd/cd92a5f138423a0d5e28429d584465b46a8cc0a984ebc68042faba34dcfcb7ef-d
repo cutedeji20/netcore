@@ -1,0 +1,13 @@
+./credentials.go
+./http.go
+./lifecycle.go
+./network.go
+./routeros_template.go
+./service.go
+./store_postgres.go
+./credentials_test.go
+./http_test.go
+./lifecycle_test.go
+./routeros_template_test.go
+./service_test.go
+./store_postgres_test.go

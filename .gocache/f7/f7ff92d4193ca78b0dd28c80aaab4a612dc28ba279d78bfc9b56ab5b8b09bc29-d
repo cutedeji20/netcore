@@ -1,0 +1,7 @@
+# test log
+getenv GOTMPDIR
+open C:\Users\Alienware\AppData\Local\Temp\TestLoad_SensitiveValuesMayComeFromMountedFiles2081125359\001\db_dsn
+open C:\Users\Alienware\AppData\Local\Temp\TestLoad_SensitiveValuesMayComeFromMountedFiles2081125359\001\redis_password
+open C:\Users\Alienware\AppData\Local\Temp\TestLoad_SensitiveValuesMayComeFromMountedFiles2081125359\001\db_dsn
+open C:\Users\Alienware\AppData\Local\Temp\TestLoad_SensitiveValuesMayComeFromMountedFiles2081125359\001\redis_password
+open C:\Users\Alienware\AppData\Local\Temp

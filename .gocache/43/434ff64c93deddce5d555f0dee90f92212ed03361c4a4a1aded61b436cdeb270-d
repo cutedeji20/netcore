@@ -1,0 +1,9 @@
+./account.go
+./account_http.go
+./catalogue.go
+./catalogue_http.go
+./http.go
+./portal.go
+./replacement.go
+./replacement_store_postgres.go
+./store_postgres.go

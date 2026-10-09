@@ -1,0 +1,12 @@
+# test log
+open ..\..\routeros\hotspot\provision-hotspot.rsc.tmpl
+open ..\..\routeros\hotspot\login.html.tmpl
+open ..\..\routeros\hotspot\flogin.html.tmpl
+open ..\..\routeros\hotspot\error.html.tmpl
+open ..\..\routeros\hotspot\maintenance.html.tmpl
+open ..\..\freeradius\policy.d\netcore_portal
+open ..\..\freeradius\policy.d\netcore_accounting
+open ..\..\freeradius\sites-enabled\netcore-hotspot
+open ..\..\db\migrations\0043_radius_plan_access_limits.up.sql
+open ..\..\db\migrations\0047_fix_radius_plan_authorization_sql.up.sql
+open ..\..\db\migrations\0051_radius_device_bound_subscriptions.up.sql

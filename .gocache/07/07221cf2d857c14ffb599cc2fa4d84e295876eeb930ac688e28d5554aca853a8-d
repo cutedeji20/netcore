@@ -1,0 +1,9 @@
+# test log
+getenv GOTMPDIR
+open C:\Users\Alienware\AppData\Local\Temp\TestSOPSFileStoreResolvesLogicalReference2027372334\001\netcore.json
+open C:\Users\Alienware\AppData\Local\Temp\TestSOPSFileStoreResolvesLogicalReference2027372334\001\netcore.json
+open C:\Users\Alienware\AppData\Local\Temp\TestSOPSFileStoreResolvesLogicalReference2027372334\001\netcore.json
+open C:\Users\Alienware\AppData\Local\Temp
+getenv GOTMPDIR
+open C:\Users\Alienware\AppData\Local\Temp\TestSOPSFileStoreRejectsUnsafeSourcesAndReferences1278422752\001\netcore.json
+open C:\Users\Alienware\AppData\Local\Temp

@@ -1,0 +1,7 @@
+./customers.go
+./http.go
+./mutations.go
+./store_postgres.go
+./http_test.go
+./mutations_test.go
+./store_postgres_test.go

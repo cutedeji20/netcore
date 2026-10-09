@@ -1,0 +1,5 @@
+./devices.go
+./http.go
+./store_postgres.go
+./devices_test.go
+./http_test.go

@@ -1,0 +1,4 @@
+./automations.go
+./http.go
+./store_postgres.go
+./http_test.go

@@ -1,0 +1,12 @@
+./account.go
+./account_http.go
+./catalogue.go
+./catalogue_http.go
+./http.go
+./portal.go
+./store_postgres.go
+./account_test.go
+./catalogue_test.go
+./deployment_templates_test.go
+./http_test.go
+./portal_test.go

@@ -1,0 +1,5 @@
+./challenge_policy.go
+./constants.go
+./doc.go
+./fake_challenge.go
+./parse.go

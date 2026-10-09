@@ -1,0 +1,4 @@
+./azure_ml.go
+./cloud_shell.go
+./managedidentity.go
+./servicefabric.go
