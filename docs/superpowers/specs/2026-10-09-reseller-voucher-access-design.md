@@ -122,6 +122,9 @@ without restarting duration or quota. Create the same short-lived, one-time
 handoff used by the current portal path, then let RouterOS and FreeRADIUS
 authorize access. Guest subscriptions have an explicit voucher funding state;
 they must not be counted as a new direct gateway payment on redemption.
+The existing handoff row currently requires `user_id`; its guest form allows
+NULL only when the referenced subscription is voucher-funded. Authenticated
+handoffs retain their user binding and the RADIUS nonce/MAC/NAS checks.
 
 ## UI and permissions
 
