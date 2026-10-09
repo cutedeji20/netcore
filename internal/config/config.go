@@ -55,6 +55,7 @@ type Config struct {
 	// to wrap database-held provider credentials. It never contains a provider
 	// credential or an Azure client secret.
 	IntegrationCrypto IntegrationCrypto
+	VoucherCrypto     IntegrationCrypto
 }
 
 type Database struct {
@@ -280,6 +281,10 @@ func Load(getenv func(string) string) (*Config, error) {
 			Backend: strDefault(getenv("NETCORE_INTEGRATION_CRYPTO_BACKEND"), "disabled"),
 			KEKID:   strings.TrimSpace(getenv("NETCORE_INTEGRATION_KEK_ID")),
 		},
+		VoucherCrypto: IntegrationCrypto{
+			Backend: strDefault(getenv("NETCORE_VOUCHER_CRYPTO_BACKEND"), "disabled"),
+			KEKID:   strings.TrimSpace(getenv("NETCORE_VOUCHER_KEK_ID")),
+		},
 	}
 
 	if err := c.Validate(); err != nil {
@@ -440,6 +445,21 @@ func (c *Config) Validate() error {
 		}
 	default:
 		p = append(p, fmt.Sprintf("NETCORE_INTEGRATION_CRYPTO_BACKEND %q must be disabled or azure-key-vault", c.IntegrationCrypto.Backend))
+	}
+	switch c.VoucherCrypto.Backend {
+	case "disabled":
+		if c.VoucherCrypto.KEKID != "" {
+			p = append(p, "NETCORE_VOUCHER_KEK_ID must be empty when NETCORE_VOUCHER_CRYPTO_BACKEND=disabled")
+		}
+	case "azure-key-vault":
+		if !validAzureKeyVaultKeyID(c.VoucherCrypto.KEKID) {
+			p = append(p, "NETCORE_VOUCHER_KEK_ID must be a versioned Azure Key Vault key URL")
+		}
+		if c.VoucherCrypto.KEKID == c.IntegrationCrypto.KEKID {
+			p = append(p, "NETCORE_VOUCHER_KEK_ID must differ from the integration key")
+		}
+	default:
+		p = append(p, "NETCORE_VOUCHER_CRYPTO_BACKEND must be disabled or azure-key-vault")
 	}
 	if c.Staff.InviteURL != "" && !validStaffInviteURL(c.Staff.InviteURL, c.Security.AllowedOrigins) {
 		p = append(p, "NETCORE_STAFF_INVITE_URL must be a fragment-free HTTPS URL without a query whose origin is listed in NETCORE_ALLOWED_ORIGINS")

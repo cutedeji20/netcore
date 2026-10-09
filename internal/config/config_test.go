@@ -61,6 +61,25 @@ func TestDeviceReplacementDefaultsOffAndCanBeEnabled(t *testing.T) {
 	}
 }
 
+func TestVoucherCryptoRequiresSeparateVersionedKey(t *testing.T) {
+	values := baseProd()
+	c, err := Load(env(values))
+	if err != nil || c.VoucherCrypto.Backend != "disabled" {
+		t.Fatalf("default=%+v err=%v", c.VoucherCrypto, err)
+	}
+	values["NETCORE_VOUCHER_CRYPTO_BACKEND"] = "azure-key-vault"
+	values["NETCORE_VOUCHER_KEK_ID"] = "https://netcore-vault.vault.azure.net/keys/vouchers/version1"
+	c, err = Load(env(values))
+	if err != nil || c.VoucherCrypto.KEKID != values["NETCORE_VOUCHER_KEK_ID"] {
+		t.Fatalf("configured=%+v err=%v", c.VoucherCrypto, err)
+	}
+	values["NETCORE_INTEGRATION_CRYPTO_BACKEND"] = "azure-key-vault"
+	values["NETCORE_INTEGRATION_KEK_ID"] = values["NETCORE_VOUCHER_KEK_ID"]
+	if _, err := Load(env(values)); err == nil {
+		t.Fatal("shared voucher and integration key accepted")
+	}
+}
+
 func TestLoad_MissingDSNFails(t *testing.T) {
 	if _, err := Load(env(map[string]string{})); err == nil {
 		t.Fatal("expected failure with no DSN")
