@@ -24,7 +24,7 @@ func (s *PostgresStore) Transfer(ctx context.Context, tenantID string, actor Gra
 SELECT s.customer_id::text, COALESCE(s.device_id::text,''), p.quota_bytes
   FROM subscriptions AS s
   JOIN customers AS c ON c.id=s.customer_id AND c.tenant_id=s.tenant_id AND c.status='ACTIVE'
-  JOIN plans AS p ON p.id=s.plan_id AND p.tenant_id=s.tenant_id AND p.status='ACTIVE'
+  JOIN plans AS p ON p.id=s.plan_id AND p.tenant_id=s.tenant_id AND p.status IN ('ACTIVE','RETIRED')
  WHERE s.tenant_id=$1 AND s.id=$2::uuid AND s.status='ACTIVE'
    AND s.starts_at<=now() AND s.expires_at>now()
  FOR UPDATE OF s`, tenantID, subscriptionID).Scan(&customerID, &oldDeviceID, &planQuota)

@@ -45,6 +45,7 @@ SELECT p.id::text,
        p.quota_bytes,
        p.quota_reset_policy,
        p.status,
+       COALESCE(p.superseded_by_plan_id::text, ''),
        COALESCE(counts.active_subscriptions, 0),
        p.created_at,
        p.updated_at
@@ -101,6 +102,7 @@ SELECT p.id::text,
 				&quotaBytes,
 				&plan.QuotaResetPolicy,
 				&plan.Status,
+				&plan.SupersededByID,
 				&plan.ActiveSubscriptions,
 				&plan.CreatedAt,
 				&plan.UpdatedAt,
@@ -192,19 +194,27 @@ func (s *PostgresStore) Update(ctx context.Context, tenantID, planID string, act
 		if err != nil {
 			return fmt.Errorf("load plan for update: %w", err)
 		}
+		if previous.SupersededByID != "" {
+			return ErrPlanSuperseded
+		}
 		var used bool
 		if err := tx.QueryRow(ctx, `
 SELECT EXISTS (
     SELECT 1 FROM subscriptions WHERE tenant_id = $1 AND plan_id = $2::uuid
     UNION ALL
-    SELECT 1 FROM vouchers WHERE tenant_id = $1 AND plan_id = $2::uuid AND status IN ('UNUSED','REDEEMED')
+    SELECT 1 FROM vouchers WHERE tenant_id = $1 AND plan_id = $2::uuid
     UNION ALL
-    SELECT 1 FROM voucher_orders WHERE tenant_id = $1 AND plan_id = $2::uuid AND status IN ('PENDING','PAID')
+    SELECT 1 FROM voucher_orders WHERE tenant_id = $1 AND plan_id = $2::uuid
 )`, tenantID, planID).Scan(&used); err != nil {
 			return fmt.Errorf("check plan subscriptions: %w", err)
 		}
-		if used && !sameNonPriceTerms(previous, input) {
-			return ErrTermsLocked
+		if samePlanTerms(previous, input) {
+			plan = previous
+			return nil
+		}
+		if used {
+			plan, err = createPlanRevision(ctx, tx, tenantID, planID, actor, input)
+			return err
 		}
 
 		var quotaBytes pgtype.Int8
@@ -268,6 +278,51 @@ VALUES ($1, 'USER', $2, $3, 'plans', $4, NULLIF($5, '')::inet, NULLIF($6, ''))`,
 	return plan, nil
 }
 
+// createPlanRevision leaves every existing subscription, order and voucher on
+// the old row. The replacement is the only row published for new purchases.
+func createPlanRevision(ctx context.Context, tx pgx.Tx, tenantID, planID string, actor MutationActor, input WriteInput) (plan Plan, err error) {
+	var quotaBytes pgtype.Int8
+	row := tx.QueryRow(ctx, `
+INSERT INTO plans (
+    tenant_id, name, description, price_minor, currency, duration_seconds,
+    download_bps, upload_bps, burst_download_bps, burst_upload_bps,
+    max_devices, max_concurrent_sessions, quota_bytes, quota_reset_policy,
+    quota_exhausted_action, throttle_download_bps, throttle_upload_bps,
+    session_timeout_seconds, idle_timeout_seconds, priority, status
+)
+SELECT tenant_id, $3, NULLIF($4, ''), $5, $6, $7, $8, $9,
+       CASE WHEN burst_download_bps >= $8 THEN burst_download_bps ELSE NULL END,
+       CASE WHEN burst_upload_bps >= $9 THEN burst_upload_bps ELSE NULL END,
+       $10, $11, $12, $13, quota_exhausted_action,
+       throttle_download_bps, throttle_upload_bps,
+       session_timeout_seconds, idle_timeout_seconds, priority, $14
+  FROM plans WHERE tenant_id=$1 AND id=$2::uuid
+RETURNING id::text, name, COALESCE(description, ''), price_minor, currency,
+          duration_seconds, download_bps, upload_bps, max_devices,
+          max_concurrent_sessions, quota_bytes, quota_reset_policy, status,
+          created_at, updated_at`,
+		tenantID, planID, input.Name, input.Description, input.PriceMinor, input.Currency,
+		input.DurationSeconds, input.DownloadBPS, input.UploadBPS, input.MaxDevices,
+		input.MaxConcurrentSessions, input.QuotaBytes, input.QuotaResetPolicy, string(input.Status))
+	if err := row.Scan(&plan.ID, &plan.Name, &plan.Description, &plan.PriceMinor, &plan.Currency,
+		&plan.DurationSeconds, &plan.DownloadBPS, &plan.UploadBPS, &plan.MaxDevices,
+		&plan.MaxConcurrentSessions, &quotaBytes, &plan.QuotaResetPolicy, &plan.Status,
+		&plan.CreatedAt, &plan.UpdatedAt); err != nil {
+		return Plan{}, fmt.Errorf("create plan revision: %w", err)
+	}
+	if quotaBytes.Valid {
+		value := quotaBytes.Int64
+		plan.QuotaBytes = &value
+	}
+	if _, err := tx.Exec(ctx, `UPDATE plans SET status='RETIRED',superseded_by_plan_id=$3::uuid,updated_at=now() WHERE tenant_id=$1 AND id=$2::uuid`, tenantID, planID, plan.ID); err != nil {
+		return Plan{}, fmt.Errorf("retire previous plan revision: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_logs (tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata,ip_address,user_agent) VALUES ($1,'USER',$2::uuid,'PLAN_REVISED','plans',$3::uuid,jsonb_build_object('previous_plan_id',$4::uuid),NULLIF($5,'')::inet,NULLIF($6,''))`, tenantID, actor.UserID, plan.ID, planID, actor.IP, actor.UserAgent); err != nil {
+		return Plan{}, fmt.Errorf("audit plan revision: %w", err)
+	}
+	return plan, nil
+}
+
 // Retire removes a plan from the public catalogue without changing the plan
 // terms used by existing subscriptions. Active customers retain their normal
 // entitlement until that subscription expires, is cancelled, or is suspended.
@@ -292,6 +347,9 @@ func (s *PostgresStore) changePublication(ctx context.Context, tenantID, planID 
 		}
 		if err != nil {
 			return fmt.Errorf("load plan for publication change: %w", err)
+		}
+		if previous.SupersededByID != "" && status == StatusActive {
+			return ErrPlanSuperseded
 		}
 		if previous.Status == status {
 			plan = previous
@@ -354,6 +412,8 @@ SELECT EXISTS (
     SELECT 1 FROM vouchers WHERE tenant_id = $1 AND plan_id = $2::uuid
     UNION ALL
     SELECT 1 FROM voucher_orders WHERE tenant_id = $1 AND plan_id = $2::uuid
+    UNION ALL
+    SELECT 1 FROM plans WHERE tenant_id = $1 AND superseded_by_plan_id = $2::uuid
 )`, tenantID, planID).Scan(&hasHistory); err != nil {
 			return fmt.Errorf("check plan deletion history: %w", err)
 		}
@@ -383,12 +443,20 @@ func loadPlanForUpdate(ctx context.Context, tx pgx.Tx, tenantID, planID string) 
 SELECT id::text, name, COALESCE(description, ''), price_minor, currency,
        duration_seconds, download_bps, upload_bps, max_devices,
        max_concurrent_sessions, quota_bytes, quota_reset_policy, status,
-       created_at, updated_at
+       created_at, updated_at, COALESCE(superseded_by_plan_id::text, '')
   FROM plans
  WHERE tenant_id = $1 AND id = $2::uuid
  FOR UPDATE`, tenantID, planID)
-	if err := scanPlan(row, &plan); err != nil {
+	var quotaBytes pgtype.Int8
+	if err := row.Scan(&plan.ID, &plan.Name, &plan.Description, &plan.PriceMinor, &plan.Currency,
+		&plan.DurationSeconds, &plan.DownloadBPS, &plan.UploadBPS, &plan.MaxDevices,
+		&plan.MaxConcurrentSessions, &quotaBytes, &plan.QuotaResetPolicy, &plan.Status,
+		&plan.CreatedAt, &plan.UpdatedAt, &plan.SupersededByID); err != nil {
 		return Plan{}, err
+	}
+	if quotaBytes.Valid {
+		value := quotaBytes.Int64
+		plan.QuotaBytes = &value
 	}
 	return plan, nil
 }
@@ -431,6 +499,10 @@ func sameNonPriceTerms(plan Plan, input WriteInput) bool {
 		return plan.QuotaBytes == nil && input.QuotaBytes == nil
 	}
 	return *plan.QuotaBytes == *input.QuotaBytes
+}
+
+func samePlanTerms(plan Plan, input WriteInput) bool {
+	return plan.PriceMinor == input.PriceMinor && plan.Status == input.Status && sameNonPriceTerms(plan, input)
 }
 
 func nullableCursorTime(cursor Cursor) any {

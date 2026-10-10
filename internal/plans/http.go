@@ -158,8 +158,8 @@ func (h *HTTP) update(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNotFound):
 		security.WriteError(w, r, http.StatusNotFound, "PLAN_NOT_FOUND", "The plan was not found.")
 		return
-	case errors.Is(err, ErrTermsLocked):
-		security.WriteError(w, r, http.StatusConflict, "PLAN_TERMS_LOCKED", "Only price and publication status can change after a plan has subscriptions.")
+	case errors.Is(err, ErrPlanSuperseded):
+		security.WriteError(w, r, http.StatusConflict, "PLAN_SUPERSEDED", "This is a historical plan version. Edit its current replacement instead.")
 		return
 	case err != nil:
 		security.WriteError(w, r, http.StatusServiceUnavailable, "PLANS_UNAVAILABLE", "Plan data is temporarily unavailable.")
@@ -203,6 +203,9 @@ func (h *HTTP) changePublication(w http.ResponseWriter, r *http.Request, status 
 	switch {
 	case errors.Is(err, ErrNotFound):
 		security.WriteError(w, r, http.StatusNotFound, "PLAN_NOT_FOUND", "The plan was not found.")
+		return
+	case errors.Is(err, ErrPlanSuperseded):
+		security.WriteError(w, r, http.StatusConflict, "PLAN_SUPERSEDED", "This historical plan version cannot be restored.")
 		return
 	case err != nil:
 		security.WriteError(w, r, http.StatusServiceUnavailable, "PLANS_UNAVAILABLE", "Plan data is temporarily unavailable.")
@@ -364,6 +367,7 @@ type planResponse struct {
 	QuotaResetPolicy      string    `json:"quota_reset_policy"`
 	Status                Status    `json:"status"`
 	ActiveSubscriptions   int64     `json:"active_subscriptions"`
+	SupersededByID        string    `json:"superseded_by_plan_id,omitempty"`
 	CreatedAt             time.Time `json:"created_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
 }
@@ -384,6 +388,7 @@ func responsePlan(plan Plan) planResponse {
 		QuotaResetPolicy:      plan.QuotaResetPolicy,
 		Status:                plan.Status,
 		ActiveSubscriptions:   plan.ActiveSubscriptions,
+		SupersededByID:        plan.SupersededByID,
 		CreatedAt:             plan.CreatedAt,
 		UpdatedAt:             plan.UpdatedAt,
 	}

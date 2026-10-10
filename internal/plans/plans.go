@@ -16,6 +16,7 @@ var (
 	ErrInvalidInput = errors.New("plans: invalid plan input")
 	ErrNotFound     = errors.New("plans: plan not found")
 	ErrTermsLocked  = errors.New("plans: plan terms are locked by subscriptions")
+	ErrPlanSuperseded = errors.New("plans: historical plan revision cannot be restored or edited")
 	// ErrDeleteBlocked deliberately covers every historical plan reference. A
 	// plan that has ever been sold or issued must be retained for audit and
 	// entitlement history; operators should retire it instead.
@@ -51,6 +52,7 @@ type Plan struct {
 	QuotaResetPolicy      string
 	Status                Status
 	ActiveSubscriptions   int64
+	SupersededByID        string
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 }

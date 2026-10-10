@@ -27,7 +27,7 @@ func (s *PostgresStore) Grant(ctx context.Context, tenantID string, actor GrantA
 		if !customerOK || !planOK || !deviceOK {
 			return ErrGrantTargetNotFound
 		}
-		if err := tx.QueryRow(ctx, `SELECT duration_seconds, COALESCE(quota_bytes, 0) FROM plans WHERE tenant_id=$1 AND id=$2::uuid AND status='ACTIVE'`, tenantID, input.PlanID).Scan(&durationSeconds, &quotaBytes); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT duration_seconds, COALESCE(quota_bytes, 0) FROM plans WHERE tenant_id=$1 AND id=$2::uuid AND status='ACTIVE' FOR UPDATE`, tenantID, input.PlanID).Scan(&durationSeconds, &quotaBytes); err != nil {
 			return fmt.Errorf("subscriptions: read grant plan: %w", err)
 		}
 		if err := tx.QueryRow(ctx, `INSERT INTO subscriptions (tenant_id,customer_id,plan_id,device_id,status,payment_status,starts_at,expires_at) VALUES ($1,$2::uuid,$3::uuid,$4::uuid,'ACTIVE','GRANTED',now(),now()+$5*interval '1 second') RETURNING id::text, customer_id::text, plan_id::text, status, starts_at, expires_at, auto_renew, payment_status, created_at, updated_at`, tenantID, input.CustomerID, input.PlanID, input.DeviceID, durationSeconds).Scan(&subscription.ID, &subscription.CustomerID, &subscription.PlanID, &subscription.Status, &subscription.StartsAt, &subscription.ExpiresAt, &subscription.AutoRenew, &subscription.PaymentStatus, &subscription.CreatedAt, &subscription.UpdatedAt); err != nil {

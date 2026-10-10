@@ -21,7 +21,7 @@ SELECT u.email::text,s.customer_id::text,s.device_id::text,n.id::text
  FROM subscriptions s
  JOIN customers c ON c.id=s.customer_id AND c.tenant_id=s.tenant_id AND c.status='ACTIVE' AND c.user_id=$2::uuid
  JOIN users u ON u.id=c.user_id AND u.tenant_id=c.tenant_id AND u.email_verified_at IS NOT NULL
- JOIN plans p ON p.id=s.plan_id AND p.tenant_id=s.tenant_id AND p.status='ACTIVE'
+ JOIN plans p ON p.id=s.plan_id AND p.tenant_id=s.tenant_id AND p.status IN ('ACTIVE','RETIRED')
  JOIN nas n ON n.tenant_id=s.tenant_id AND n.hotspot_address=$5::inet AND n.status='ACTIVE'
  JOIN devices old ON old.id=s.device_id AND old.tenant_id=s.tenant_id AND old.customer_id=s.customer_id AND old.status='ACTIVE'
  WHERE s.tenant_id=$1::uuid AND s.id=$3::uuid AND s.status='ACTIVE' AND s.starts_at<=now() AND s.expires_at>now()
@@ -74,7 +74,7 @@ func (s *PostgresStore) VerifyChallenge(ctx context.Context, tenantID, userID, c
 			return err
 		}
 		var currentID string
-		err = tx.QueryRow(ctx, `SELECT s.device_id::text,p.quota_bytes FROM subscriptions s JOIN plans p ON p.id=s.plan_id AND p.tenant_id=s.tenant_id AND p.status='ACTIVE' JOIN customers c ON c.id=s.customer_id AND c.tenant_id=s.tenant_id AND c.user_id=$3::uuid AND c.status='ACTIVE' JOIN nas n ON n.id=$4::uuid AND n.tenant_id=s.tenant_id AND n.status='ACTIVE' WHERE s.tenant_id=$1::uuid AND s.id=$2::uuid AND s.customer_id=$5::uuid AND s.status='ACTIVE' AND s.starts_at<=now() AND s.expires_at>now() FOR UPDATE OF s`, tenantID, subID, userID, nasID, customerID).Scan(&currentID, &quota)
+		err = tx.QueryRow(ctx, `SELECT s.device_id::text,p.quota_bytes FROM subscriptions s JOIN plans p ON p.id=s.plan_id AND p.tenant_id=s.tenant_id AND p.status IN ('ACTIVE','RETIRED') JOIN customers c ON c.id=s.customer_id AND c.tenant_id=s.tenant_id AND c.user_id=$3::uuid AND c.status='ACTIVE' JOIN nas n ON n.id=$4::uuid AND n.tenant_id=s.tenant_id AND n.status='ACTIVE' WHERE s.tenant_id=$1::uuid AND s.id=$2::uuid AND s.customer_id=$5::uuid AND s.status='ACTIVE' AND s.starts_at<=now() AND s.expires_at>now() FOR UPDATE OF s`, tenantID, subID, userID, nasID, customerID).Scan(&currentID, &quota)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrReplacementNotEligible
 		}

@@ -26,3 +26,14 @@ test("ordinary plan editing cannot silently change a plan publication state", ()
   assert.doesNotMatch(source, /createInput\("Availability", "status"/);
   assert.match(source, /status: current && current\.status \? current\.status : "ACTIVE"/);
 });
+
+test("referenced plans expose every editable field and explain revision behavior", () => {
+  assert.doesNotMatch(source, /field\.name !== "price"\) field\.readOnly = true/);
+  assert.match(source, /Existing subscribers keep their terms until renewal; issued vouchers retain their original terms when redeemed/);
+  assert.match(source, /new plan version/);
+});
+
+test("superseded plan versions cannot be edited or restored from the list", () => {
+  assert.match(source, /plan\.superseded_by_plan_id/);
+  assert.match(source, /Previous version/);
+});

@@ -130,7 +130,7 @@
       if (canWrite()) {
         var actionCell = document.createElement("td"), reveal = document.createElement("button");
         reveal.type = "button"; reveal.className = "button"; reveal.textContent = "Manage codes";
-        reveal.addEventListener("click", function () { manageBatch(batch, row, reveal); });
+        reveal.addEventListener("click", function () { openManageDialog(batch); });
         actionCell.append(reveal); row.append(actionCell);
       }
       body.appendChild(row);
@@ -204,23 +204,54 @@
     else requestBatches();
   }
 
+  var dialogKeyHandler = null;
+  function closeVoucherDialog() {
+    var backdrop = document.querySelector("#voucher-dialog-backdrop");
+    if (backdrop) backdrop.remove();
+    if (dialogKeyHandler) document.removeEventListener("keydown", dialogKeyHandler);
+    dialogKeyHandler = null;
+  }
+
+  function openVoucherDialog(titleText) {
+    closeVoucherDialog();
+    var backdrop = document.createElement("div"), dialog = document.createElement("section"), heading = document.createElement("header"), title = document.createElement("h2"), close = document.createElement("button");
+    backdrop.id = "voucher-dialog-backdrop"; backdrop.className = "voucher-dialog-backdrop";
+    dialog.className = "voucher-dialog"; dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-labelledby", "voucher-dialog-title");
+    title.id = "voucher-dialog-title"; title.textContent = titleText;
+    close.type = "button"; close.className = "button"; close.textContent = "Close"; close.addEventListener("click", closeVoucherDialog);
+    heading.append(title, close); dialog.append(heading); backdrop.append(dialog); document.body.append(backdrop);
+    backdrop.addEventListener("click", function (event) { if (event.target === backdrop) closeVoucherDialog(); });
+    dialogKeyHandler = function (event) { if (event.key === "Escape") closeVoucherDialog(); };
+    document.addEventListener("keydown", dialogKeyHandler);
+    return dialog;
+  }
+
+  function voucherField(labelText, input) {
+    var label = document.createElement("label"); label.className = "voucher-field"; label.textContent = labelText; label.append(input); return label;
+  }
+
   function renderStaffControls() {
     if (!canWrite()) return;
-    var host = document.querySelector("#page-content");
-    if (!host || host.querySelector(".voucher-issue-control")) return;
-    var panel = document.createElement("section"); panel.className = "panel voucher-issue-control";
-    var title = document.createElement("h2"); title.textContent = "Issue prepaid vouchers";
-    var form = document.createElement("form");
+    var heading = document.querySelector("#page-content .page-heading");
+    if (!heading || heading.querySelector(".voucher-issue-control")) return;
+    var actions = heading.querySelector(".heading-actions");
+    if (!actions) { actions = document.createElement("div"); actions.className = "heading-actions"; heading.append(actions); }
+    var issue = document.createElement("button"); issue.type = "button"; issue.className = "button primary voucher-issue-control"; issue.textContent = "Issue vouchers";
+    issue.addEventListener("click", openIssueDialog); actions.append(issue);
+  }
+
+  function openIssueDialog() {
+    var dialog = openVoucherDialog("Issue prepaid vouchers"), form = document.createElement("form"), feedback = document.createElement("p"), footer = document.createElement("footer");
     var plan = document.createElement("select"); plan.required = true;
     var quantity = document.createElement("input"); quantity.type = "number"; quantity.min = "1"; quantity.max = "100"; quantity.value = "1"; quantity.required = true;
     var expiry = document.createElement("input"); expiry.type = "datetime-local";
-    var reason = document.createElement("input"); reason.maxLength = 500; reason.required = true;
-    var password = document.createElement("input"); password.type = "password"; password.required = true;
-    var mfa = document.createElement("input"); mfa.inputMode = "numeric"; mfa.maxLength = 6; mfa.required = true;
+    var reason = document.createElement("input"); reason.type = "text"; reason.maxLength = 500; reason.required = true;
+    var password = document.createElement("input"); password.type = "password"; password.autocomplete = "current-password"; password.required = true;
+    var mfa = document.createElement("input"); mfa.type = "text"; mfa.inputMode = "numeric"; mfa.maxLength = 6; mfa.required = true;
     var submit = document.createElement("button"); submit.type = "submit"; submit.className = "button primary"; submit.textContent = "Issue vouchers";
-    var feedback = document.createElement("p"); feedback.setAttribute("role", "status");
-    [["Plan",plan],["Quantity",quantity],["Expires before use (optional)",expiry],["Reason",reason],["Current password",password],["Authenticator code",mfa]].forEach(function (field) { var label=document.createElement("label"); label.textContent=field[0]; label.append(field[1]); form.append(label); });
-    form.append(submit, feedback); panel.append(title, form); host.prepend(panel);
+    form.className = "voucher-form"; feedback.className = "voucher-feedback"; feedback.setAttribute("role", "status");
+    [["Plan",plan],["Quantity",quantity],["Expires before use (optional)",expiry],["Reason",reason],["Current password",password],["Authenticator code",mfa]].forEach(function (field) { form.append(voucherField(field[0],field[1])); });
+    footer.append(submit); form.append(feedback,footer); dialog.append(form); plan.focus();
     fetch(apiBase + "/api/v1/plans?limit=100&status=ACTIVE", { credentials:"include", cache:"no-store" }).then(function (r) { if (!r.ok) return apiError(r); return r.json(); }).then(function (body) {
       (Array.isArray(body.data) ? body.data : []).forEach(function (item) { var option=document.createElement("option"); option.value=String(item.id || ""); option.textContent=String(item.name || "Internet plan"); plan.append(option); });
       if (!plan.options.length) feedback.textContent="No active plans are available.";
@@ -236,14 +267,13 @@
     });
   }
 
-  function manageBatch(batch, row, button) {
-    var cell = row.lastElementChild;
-    if (cell.querySelector("form")) return;
-    var form=document.createElement("form"), password=document.createElement("input"), mfa=document.createElement("input"), submit=document.createElement("button"), result=document.createElement("div");
-    password.type="password"; password.placeholder="Current password"; password.required=true;
-    mfa.inputMode="numeric"; mfa.maxLength=6; mfa.placeholder="Authenticator code"; mfa.required=true;
-    submit.type="submit"; submit.className="button"; submit.textContent="Reveal";
-    form.append(password,mfa,submit,result); cell.append(form); button.hidden=true;
+  function openManageDialog(batch) {
+    var dialog = openVoucherDialog("Manage batch " + safeText(String(batch.id || "").slice(0,8))), form = document.createElement("form"), password = document.createElement("input"), mfa = document.createElement("input"), submit = document.createElement("button"), result = document.createElement("div"), footer = document.createElement("footer");
+    password.type="password"; password.autocomplete="current-password"; password.required=true;
+    mfa.type="text"; mfa.inputMode="numeric"; mfa.maxLength=6; mfa.required=true;
+    submit.type="submit"; submit.className="button primary"; submit.textContent="Reveal codes";
+    form.className="voucher-form"; result.className="voucher-codes"; result.setAttribute("role","status");
+    form.append(voucherField("Current password",password),voucherField("Authenticator code",mfa)); footer.append(submit); form.append(footer); dialog.append(form,result); password.focus();
     form.addEventListener("submit", function (event) {
       event.preventDefault(); submit.disabled=true; result.textContent="Checking access…";
       fetch(apiBase + "/api/v1/vouchers/batches/" + encodeURIComponent(batch.id) + "/reveal", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ password:password.value, mfa_code:mfa.value }) })
@@ -251,7 +281,7 @@
         .then(function (body) {
           result.replaceChildren(); (Array.isArray(body.data) ? body.data : []).forEach(function (item) {
             var line=document.createElement("div"), code=document.createElement("code"), revoke=document.createElement("button");
-            code.textContent=String(item.code || ""); revoke.type="button"; revoke.className="button"; revoke.textContent="Revoke";
+            line.className="voucher-code-row"; code.textContent=String(item.code || ""); revoke.type="button"; revoke.className="button"; revoke.textContent="Revoke";
             revoke.addEventListener("click", function () { if (!window.confirm("Revoke this voucher? Active access may need an operator disconnect.")) return; revoke.disabled=true; fetch(apiBase + "/api/v1/vouchers/" + encodeURIComponent(item.voucher_id) + "/revoke", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ password:password.value, mfa_code:mfa.value }) }).then(function (r) { if (!r.ok) return apiError(r); code.textContent="Revoked"; requestBatches(true); }).catch(function (error) { result.textContent=error.message || "Revocation failed."; }).finally(function () { revoke.disabled=false; }); });
             line.append(code,revoke); result.append(line);
           });

@@ -51,7 +51,7 @@
   }
 
   function statusClass(status) { return status === "ACTIVE" ? "green" : "gray"; }
-  function statusLabel(status) { return status === "ACTIVE" ? "Published" : "Retired"; }
+  function statusLabel(status) { return status === "PREVIOUS" ? "Previous version" : status === "ACTIVE" ? "Published" : "Retired"; }
 
   function appendTextCell(row, value) {
     var cell = document.createElement("td");
@@ -98,7 +98,7 @@
   function appendActionCell(row, plan) {
     var cell = document.createElement("td");
     cell.className = "plan-actions";
-    if (canWritePlans()) {
+    if (canWritePlans() && !plan.superseded_by_plan_id) {
       cell.appendChild(actionButton("Edit", "plan-edit", function () { openPlanDialog(plan); }));
       if (plan.status === "ACTIVE") {
         cell.appendChild(actionButton("Retire", "plan-retire", function () { openPublicationDialog(plan, "RETIRED"); }));
@@ -106,7 +106,7 @@
         cell.appendChild(actionButton("Restore", "plan-restore", function () { openPublicationDialog(plan, "ACTIVE"); }));
       }
     }
-    if (canDeletePlans()) cell.appendChild(actionButton("Delete", "plan-delete", function () { openDeletePlanDialog(plan); }));
+    if (canDeletePlans() && !plan.superseded_by_plan_id) cell.appendChild(actionButton("Delete", "plan-delete", function () { openDeletePlanDialog(plan); }));
     row.appendChild(cell);
   }
 
@@ -155,7 +155,7 @@
       appendTextCell(row, formatPrice(plan.price_minor, plan.currency));
       appendTextCell(row, formatDuration(plan.duration_seconds));
       appendTextCell(row, plan.active_subscriptions);
-      appendStatusCell(row, plan.status);
+      appendStatusCell(row, plan.superseded_by_plan_id ? "PREVIOUS" : plan.status);
       if (canManagePlans()) appendActionCell(row, plan);
       body.appendChild(row);
     });
@@ -240,7 +240,7 @@
     dialog.className = "plan-dialog";
     title.textContent = plan ? "Edit plan" : "Create plan";
     note.className = "plan-dialog-note";
-    note.textContent = hasSubscriptions ? "Changing the price affects future purchases only. Existing subscriptions, invoices, and payments keep their original amounts. Other plan terms are locked." : "Published plans become visible in the customer portal once checkout is enabled.";
+    note.textContent = hasSubscriptions ? "Saving creates a new plan version for future purchases. Existing subscribers keep their terms until renewal; issued vouchers retain their original terms when redeemed." : "If this plan has purchase or voucher history, saving creates a new plan version for future purchases.";
     heading.append(title, note);
     form.className = "plan-form";
     form.noValidate = true;
@@ -255,11 +255,6 @@
       createInput("Concurrent sessions", "max_sessions", "number", current.max_concurrent_sessions || 1, { min: 1, max: 100, step: 1 }),
       createInput("Data cap (GB, optional)", "quota_gb", "text", current.quota_bytes ? numberString(current.quota_bytes, 1000000000) : "", { required: false })
     );
-    if (hasSubscriptions) {
-      Array.prototype.forEach.call(form.elements, function (field) {
-        if (field.name !== "price") field.readOnly = true;
-      });
-    }
     feedback.className = "plan-form-feedback";
     feedback.setAttribute("role", "alert");
     cancel.className = "button";
@@ -327,9 +322,10 @@
         if (!response.ok) throw new Error(body && body.error && body.error.message ? body.error.message : "The plan could not be saved.");
         return body;
       });
-    }).then(function () {
+    }).then(function (saved) {
       closePlanDialog();
       requestPlans(true);
+      if (plan && saved && saved.id && saved.id !== plan.id) showPlanMessage("New plan version saved. Existing subscribers and vouchers keep their previous terms.", false);
     }).catch(function (error) {
       feedback.textContent = error && error.message ? error.message : "The plan could not be saved.";
     }).finally(function () { submit.disabled = false; });
