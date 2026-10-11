@@ -1,0 +1,10 @@
+BEGIN;
+DROP TRIGGER router_wan_sample_insert ON router_telemetry_samples;
+DROP FUNCTION router_wan_sample_insert();
+DROP TABLE router_wan_daily;
+DROP TABLE router_telemetry_samples;
+DROP TRIGGER router_usage_accounting_insert ON accounting_records;
+DROP FUNCTION router_usage_accounting_insert();
+DROP TABLE router_usage_daily;
+DROP TABLE router_accounting_watermarks;
+COMMIT;

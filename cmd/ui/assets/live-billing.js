@@ -11,6 +11,7 @@
   var searchTimer = 0;
   var pendingQuery = "";
   var criteriaPending = false;
+  var advancedFilters = {};
   var requestVersion = 0;
   var selectedPaymentIDs = new Set();
   var clearBusy = false;
@@ -152,7 +153,7 @@
     mark.className = "entity-mark";
     mark.textContent = item.source === "PAYMENT" ? "₦" : "IN";
     title.textContent = safeText(item.reference);
-    detail.textContent = item.source === "PAYMENT" ? "Payment" : "Invoice";
+    detail.textContent = item.source === "PAYMENT" ? "Payment" + (item.gateway ? " · " + item.gateway : "") : "Invoice";
     copy.append(title, detail);
     entity.append(mark, copy);
     cell.appendChild(entity);
@@ -279,6 +280,79 @@
     return listConfig.filters.map(function (filter) { return { value: filter, label: filter || "All" }; });
   }
 
+  function renderAdvancedFilters() {
+    var toolbar = document.querySelector("#page-content .toolbar");
+    if (!toolbar || document.querySelector("#page-content .billing-advanced-filters")) return;
+    var panel = document.createElement("details");
+    panel.className = "billing-advanced-filters";
+    var summary = document.createElement("summary");
+    summary.textContent = "More filters";
+    var form = document.createElement("form");
+    var fields = [
+      ["status", "Status", "select"], ["gateway", "Payment gateway", "text"],
+      ["customer_id", "Customer ID", "text"], ["plan_id", "Plan ID", "text"],
+      ["from", "From date", "date"], ["to", "Through date", "date"],
+      ["min_amount", "Minimum amount (NGN)", "number"], ["max_amount", "Maximum amount (NGN)", "number"]
+    ];
+    fields.forEach(function (field) {
+      var label = document.createElement("label");
+      label.textContent = field[1];
+      var input = document.createElement(field[2] === "select" ? "select" : "input");
+      input.name = field[0];
+      if (field[2] !== "select") input.type = field[2];
+      if (field[2] === "number") { input.min = "0"; input.step = "0.01"; }
+      if (field[2] === "select") {
+        var statuses = listState.filter === "PAYMENT" ? ["PENDING", "SUCCESS", "FAILED", "ABANDONED", "REFUNDED"] : listState.filter === "INVOICE" ? ["DRAFT", "ISSUED", "PAID", "VOID"] : [];
+        [""].concat(statuses).forEach(function (status) { var option = document.createElement("option"); option.value = status; option.textContent = status || "Any status"; input.appendChild(option); });
+        input.disabled = !listState.filter;
+      }
+      if (field[0] === "gateway") input.disabled = listState.filter === "INVOICE";
+      input.value = advancedFilters[field[0]] || "";
+      label.appendChild(input);
+      form.appendChild(label);
+    });
+    var actions = document.createElement("div");
+    var apply = document.createElement("button"); apply.type = "submit"; apply.className = "button primary"; apply.textContent = "Apply filters";
+    var clear = document.createElement("button"); clear.type = "button"; clear.className = "button"; clear.textContent = "Clear filters";
+    clear.addEventListener("click", function () { advancedFilters = {}; panel.remove(); renderAdvancedFilters(); resetFilteredPage(); });
+    actions.append(apply, clear); form.appendChild(actions); panel.append(summary, form);
+    toolbar.insertAdjacentElement("afterend", panel);
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var next = {};
+      fields.forEach(function (field) { next[field[0]] = form.elements[field[0]].value.trim(); });
+      if (next.min_amount && next.max_amount && Number(next.min_amount) > Number(next.max_amount)) { form.elements.max_amount.setCustomValidity("Maximum must be at least the minimum."); form.reportValidity(); return; }
+      form.elements.max_amount.setCustomValidity("");
+      advancedFilters = next;
+      resetFilteredPage();
+    });
+  }
+
+  function resetFilteredPage() {
+    listState.cursor = "";
+    listState.previousCursors = [];
+    listState.nextCursor = "";
+    listState.hasMore = false;
+    requestVersion += 1;
+    requestTransactions(true);
+  }
+
+  function transactionsURL() {
+    var url = new URL(window.NetCoreLiveListControls.requestURL(apiBase, listConfig.endpoint, listState, 25), window.location.origin);
+    Object.keys(advancedFilters).forEach(function (key) {
+      var value = advancedFilters[key];
+      if (!value) return;
+      if (key === "from" || key === "to") {
+        var date = new Date(value + "T00:00:00");
+        if (key === "to") date.setDate(date.getDate() + 1);
+        url.searchParams.set(key, date.toISOString());
+      } else if (key === "min_amount" || key === "max_amount") {
+        url.searchParams.set(key + "_minor", String(Math.round(Number(value) * 100)));
+      } else url.searchParams.set(key, value);
+    });
+    return url.toString();
+  }
+
   function renderControls() {
     if (currentPage() !== "billing") return;
     livePage.renderListControls("billing", {
@@ -293,14 +367,15 @@
         window.NetCoreLiveListControls.applyCriteria(listState, query, listState.filter);
         searchTimer = setTimeout(function () { criteriaPending = false; requestVersion += 1; requestTransactions(true); }, 250);
       },
-      onFilter: function (filter) { applyCriteria(listState.query, filter); },
+      onFilter: function (filter) { advancedFilters.status = ""; if (filter === "INVOICE") advancedFilters.gateway = ""; applyCriteria(listState.query, filter); var panel = document.querySelector("#page-content .billing-advanced-filters"); if (panel) panel.remove(); renderAdvancedFilters(); },
       onNext: function () { if (criteriaPending) return; if (window.NetCoreLiveListControls.nextPage(listState)) requestTransactions(true); else renderControls(); },
       onPrevious: function () { if (criteriaPending) return; if (listState.previousCursors.length) { window.NetCoreLiveListControls.previousPage(listState); requestTransactions(true); } else renderControls(); }
     });
+    renderAdvancedFilters();
   }
 
   function applyCriteria(query, filter) {
-    if (window.NetCoreLiveListControls.applyCriteria(listState, query, filter)) requestTransactions(true);
+    if (window.NetCoreLiveListControls.applyCriteria(listState, query, filter)) { requestVersion += 1; requestTransactions(true); }
   }
 
   function requestTransactions(force) {
@@ -310,7 +385,7 @@
     renderControls();
     renderClearControls();
     if (!loadedTransactions) showState("loading");
-    fetch(window.NetCoreLiveListControls.requestURL(apiBase, listConfig.endpoint, listState, 25), {
+    fetch(transactionsURL(), {
       credentials: "include",
       cache: "no-store"
     })

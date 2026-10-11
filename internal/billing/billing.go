@@ -45,6 +45,8 @@ type Transaction struct {
 	AmountMinor       int64
 	Currency          string
 	Status            string
+	Gateway           string
+	PlanID            string
 	RecordedAt        time.Time
 	DueAt             *time.Time
 	VerifiedAt        *time.Time
@@ -53,10 +55,18 @@ type Transaction struct {
 // ListOptions is a bounded, keyset-paginated unified billing query. Source is
 // optional and lets the UI narrow to payments or invoices without a second API.
 type ListOptions struct {
-	Limit  int
-	Cursor Cursor
-	Search string
-	Source Source
+	Limit          int
+	Cursor         Cursor
+	Search         string
+	Source         Source
+	Status         string
+	Gateway        string
+	CustomerID     string
+	PlanID         string
+	From           time.Time
+	To             time.Time
+	MinAmountMinor *int64
+	MaxAmountMinor *int64
 }
 
 // Cursor selects rows after the preceding page's final row, ordered by
