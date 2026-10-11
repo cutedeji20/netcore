@@ -123,6 +123,7 @@ services:
       NETCORE_INTEGRATION_KEK_ID: ${NETCORE_INTEGRATION_KEK_ID:-}
       NETCORE_VOUCHER_CRYPTO_BACKEND: ${NETCORE_VOUCHER_CRYPTO_BACKEND:-disabled}
       NETCORE_VOUCHER_KEK_ID: ${NETCORE_VOUCHER_KEK_ID:-}
+      NETCORE_ROUTER_TELEMETRY_CONFIG_FILE: ${NETCORE_ROUTER_TELEMETRY_CONFIG_FILE:-}
     volumes:
       - ${NETCORE_RUNTIME_DIR:?set NETCORE_RUNTIME_DIR in deployments/production/.env}/app:/run/netcore/runtime:ro
       - postgres_tls:/run/netcore/postgres-tls:ro

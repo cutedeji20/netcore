@@ -191,11 +191,71 @@ func (h *HTTP) listOptions(r *http.Request) (ListOptions, error) {
 	if source != "" && !IsValidSource(source) {
 		return ListOptions{}, ErrInvalidPage
 	}
+	status := strings.ToUpper(strings.TrimSpace(query.Get("status")))
+	if status != "" {
+		allowed := map[Source]string{SourcePayment: "|PENDING|SUCCESS|FAILED|ABANDONED|REFUNDED|", SourceInvoice: "|DRAFT|ISSUED|PAID|VOID|"}
+		if source == "" || !strings.Contains(allowed[source], "|"+status+"|") {
+			return ListOptions{}, ErrInvalidPage
+		}
+	}
+	gateway := strings.ToLower(strings.TrimSpace(query.Get("gateway")))
+	if gateway != "" && (source == SourceInvoice || len(gateway) > 40 || !validFilterToken(gateway)) {
+		return ListOptions{}, ErrInvalidPage
+	}
+	customerID, planID := query.Get("customer_id"), query.Get("plan_id")
+	if (customerID != "" && !validUUID(customerID)) || (planID != "" && !validUUID(planID)) {
+		return ListOptions{}, ErrInvalidPage
+	}
+	from, to := parseBillingTime(query.Get("from")), parseBillingTime(query.Get("to"))
+	if query.Get("from") != "" && from.IsZero() || query.Get("to") != "" && to.IsZero() || !from.IsZero() && !to.IsZero() && !from.Before(to) {
+		return ListOptions{}, ErrInvalidPage
+	}
+	minAmount, err := parseBillingAmount(query.Get("min_amount_minor"))
+	if err != nil {
+		return ListOptions{}, ErrInvalidPage
+	}
+	maxAmount, err := parseBillingAmount(query.Get("max_amount_minor"))
+	if err != nil || minAmount != nil && maxAmount != nil && *minAmount > *maxAmount {
+		return ListOptions{}, ErrInvalidPage
+	}
 	cursor, err := decodeCursor(query.Get("cursor"))
 	if err != nil {
 		return ListOptions{}, ErrInvalidPage
 	}
-	return ListOptions{Limit: limit, Cursor: cursor, Search: search, Source: source}, nil
+	return ListOptions{Limit: limit, Cursor: cursor, Search: search, Source: source, Status: status, Gateway: gateway, CustomerID: customerID, PlanID: planID, From: from, To: to, MinAmountMinor: minAmount, MaxAmountMinor: maxAmount}, nil
+}
+
+func validFilterToken(value string) bool {
+	for _, c := range value {
+		if c < 'a' || c > 'z' {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+	}
+	return value != ""
+}
+
+func parseBillingTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed.UTC()
+}
+
+func parseBillingAmount(value string) (*int64, error) {
+	if value == "" {
+		return nil, nil
+	}
+	amount, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || amount < 0 {
+		return nil, ErrInvalidPage
+	}
+	return &amount, nil
 }
 
 type listResponse struct {
@@ -219,6 +279,8 @@ type transactionResponse struct {
 	AmountMinor string              `json:"amount_minor"`
 	Currency    string              `json:"currency"`
 	Status      string              `json:"status"`
+	Gateway     string              `json:"gateway,omitempty"`
+	PlanID      string              `json:"plan_id,omitempty"`
 	RecordedAt  time.Time           `json:"recorded_at"`
 	DueAt       *time.Time          `json:"due_at,omitempty"`
 	VerifiedAt  *time.Time          `json:"verified_at,omitempty"`
@@ -245,6 +307,8 @@ func responseTransaction(transaction Transaction) transactionResponse {
 		AmountMinor: strconv.FormatInt(transaction.AmountMinor, 10),
 		Currency:    transaction.Currency,
 		Status:      transaction.Status,
+		Gateway:     transaction.Gateway,
+		PlanID:      transaction.PlanID,
 		RecordedAt:  transaction.RecordedAt,
 		DueAt:       transaction.DueAt,
 		VerifiedAt:  transaction.VerifiedAt,

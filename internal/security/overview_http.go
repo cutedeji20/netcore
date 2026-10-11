@@ -43,5 +43,6 @@ func (h *OverviewHTTP) get(w http.ResponseWriter, r *http.Request) {
 		Customers           CustomerMetrics     `json:"customers"`
 		Plans               PlanMetrics         `json:"plans"`
 		Subscriptions       SubscriptionMetrics `json:"subscriptions"`
-	}{o.ActiveCustomers, o.OnlineSessions, o.CollectedTodayMinor, o.Attention, time.Now().UTC(), o.CustomerMetrics, o.PlanMetrics, o.SubscriptionMetrics})
+		Traffic             TrafficMetrics      `json:"traffic"`
+	}{o.ActiveCustomers, o.OnlineSessions, o.CollectedTodayMinor, o.Attention, time.Now().UTC(), o.CustomerMetrics, o.PlanMetrics, o.SubscriptionMetrics, o.Traffic})
 }

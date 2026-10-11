@@ -23,6 +23,7 @@ import (
 	"github.com/netcore-isp/netcore/internal/logger"
 	"github.com/netcore-isp/netcore/internal/notify"
 	"github.com/netcore-isp/netcore/internal/payments"
+	"github.com/netcore-isp/netcore/internal/routertelemetry"
 	"github.com/netcore-isp/netcore/internal/subscriptions"
 	"github.com/netcore-isp/netcore/internal/vouchers"
 )
@@ -71,6 +72,13 @@ func run() error {
 	if !found || tenant.ID == "" {
 		return fmt.Errorf("expiry portal tenant is not active")
 	}
+	var telemetry *routertelemetry.Collector
+	if configFile := os.Getenv("NETCORE_ROUTER_TELEMETRY_CONFIG_FILE"); configFile != "" {
+		telemetry, err = routertelemetry.NewCollector(postgres, configFile)
+		if err != nil {
+			return fmt.Errorf("configure router telemetry: %w", err)
+		}
+	}
 
 	webhookProcessor, err := configuredWebhookProcessor(startupCtx, cfg, postgres)
 	if err != nil {
@@ -88,12 +96,21 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	log.Info("worker started", slog.Bool("webhooks_enabled", webhookProcessor != nil), slog.Bool("receipts_enabled", receiptProcessor != nil), slog.Bool("expiry_enforcement_enabled", true))
+	log.Info("worker started", slog.Bool("webhooks_enabled", webhookProcessor != nil), slog.Bool("receipts_enabled", receiptProcessor != nil), slog.Bool("expiry_enforcement_enabled", true), slog.Bool("router_telemetry_enabled", telemetry != nil))
 	ticker := time.NewTicker(cfg.Payments.WebhookPollInterval)
 	defer ticker.Stop()
 	nextExpiry := time.Time{}
+	nextTelemetry := time.Time{}
 	for {
 		worked := false
+		if telemetry != nil && (nextTelemetry.IsZero() || !time.Now().Before(nextTelemetry)) {
+			pollCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if err := telemetry.Poll(pollCtx, tenant.ID); err != nil {
+				log.Error("router telemetry polling failed", slog.String("error", err.Error()))
+			}
+			cancel()
+			nextTelemetry = time.Now().Add(time.Minute)
+		}
 		if nextExpiry.IsZero() || !time.Now().Before(nextExpiry) {
 			expired, err := expiryProcessor.Process(ctx, tenant.ID)
 			if err != nil {

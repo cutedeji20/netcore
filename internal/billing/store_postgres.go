@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -131,6 +132,8 @@ WITH transactions AS (
            p.amount_minor,
            p.currency,
            p.status,
+		   p.gateway,
+		   COALESCE(ps.plan_id::text, vo.plan_id::text, '') AS plan_id,
            COALESCE(p.verified_at, p.created_at) AS recorded_at,
            NULL::timestamptz AS due_at,
            p.verified_at
@@ -138,6 +141,8 @@ WITH transactions AS (
       JOIN customers AS c
         ON c.id = p.customer_id
        AND c.tenant_id = p.tenant_id
+	  LEFT JOIN subscriptions AS ps ON ps.id=p.subscription_id AND ps.tenant_id=p.tenant_id
+	  LEFT JOIN voucher_orders AS vo ON vo.payment_id=p.id AND vo.tenant_id=p.tenant_id
 	     WHERE p.tenant_id = $1
 	       AND p.cleared_at IS NULL
 
@@ -153,6 +158,8 @@ WITH transactions AS (
            i.amount_minor,
            i.currency,
            i.status,
+		   ''::text AS gateway,
+		   COALESCE(isub.plan_id::text, '') AS plan_id,
            COALESCE(i.paid_at, i.issued_at, i.created_at) AS recorded_at,
            i.due_at,
            NULL::timestamptz AS verified_at
@@ -160,6 +167,7 @@ WITH transactions AS (
       JOIN customers AS c
         ON c.id = i.customer_id
        AND c.tenant_id = i.tenant_id
+	  LEFT JOIN subscriptions AS isub ON isub.id=i.subscription_id AND isub.tenant_id=i.tenant_id
      WHERE i.tenant_id = $1
 )
 SELECT source,
@@ -172,11 +180,21 @@ SELECT source,
        amount_minor,
        currency,
        status,
+       gateway,
+       plan_id,
        recorded_at,
        due_at,
        verified_at
   FROM transactions
  WHERE ($2 = '' OR source = $2)
+   AND ($4 = '' OR status = $4)
+   AND ($5 = '' OR gateway = $5)
+   AND ($6 = '' OR customer_id = NULLIF($6, '')::uuid)
+   AND ($7 = '' OR plan_id = $7)
+   AND ($8::timestamptz IS NULL OR recorded_at >= $8::timestamptz)
+   AND ($9::timestamptz IS NULL OR recorded_at < $9::timestamptz)
+   AND ($10::bigint IS NULL OR amount_minor >= $10::bigint)
+   AND ($11::bigint IS NULL OR amount_minor <= $11::bigint)
    AND (
        $3 = ''
        OR reference ILIKE '%' || $3 || '%'
@@ -185,14 +203,22 @@ SELECT source,
        OR last_name ILIKE '%' || $3 || '%'
    )
    AND (
-       $4::timestamptz IS NULL
-       OR (recorded_at, source, id) < ($4::timestamptz, $5::text, $6::uuid)
+       $12::timestamptz IS NULL
+       OR (recorded_at, source, id) < ($12::timestamptz, $13::text, $14::uuid)
    )
  ORDER BY recorded_at DESC, source DESC, id DESC
- LIMIT $7`,
+ LIMIT $15`,
 			tenantID,
 			string(options.Source),
 			options.Search,
+			options.Status,
+			options.Gateway,
+			options.CustomerID,
+			options.PlanID,
+			nullableBillingTime(options.From),
+			nullableBillingTime(options.To),
+			options.MinAmountMinor,
+			options.MaxAmountMinor,
 			nullableCursorTime(options.Cursor),
 			nullableCursorSource(options.Cursor),
 			nullableCursorID(options.Cursor),
@@ -217,6 +243,8 @@ SELECT source,
 				&transaction.AmountMinor,
 				&transaction.Currency,
 				&transaction.Status,
+				&transaction.Gateway,
+				&transaction.PlanID,
 				&transaction.RecordedAt,
 				&dueAt,
 				&verifiedAt,
@@ -250,6 +278,13 @@ SELECT source,
 		return Page{}, err
 	}
 	return page, nil
+}
+
+func nullableBillingTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
 }
 
 func (s *PostgresStore) Clear(ctx context.Context, tenantID string, actor MutationActor, request ClearRequest) (count int, err error) {

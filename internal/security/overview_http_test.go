@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 type overviewMemoryStore struct {
@@ -74,5 +75,12 @@ func TestOverviewRejectsMissingTenant(t *testing.T) {
 	h.get(w, httptest.NewRequest(http.MethodGet, "/api/v1/operations/overview", nil))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body)
+	}
+}
+
+func TestLagosDayBounds(t *testing.T) {
+	start, end := lagosDayBounds(time.Date(2026, 10, 10, 23, 30, 0, 0, time.UTC))
+	if start.Format(time.RFC3339) != "2026-10-10T23:00:00Z" || end.Format(time.RFC3339) != "2026-10-11T23:00:00Z" {
+		t.Fatalf("bounds=%s to %s", start, end)
 	}
 }

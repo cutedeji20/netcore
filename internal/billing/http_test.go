@@ -128,6 +128,38 @@ func TestListRejectsUnsafePageParameters(t *testing.T) {
 	}
 }
 
+func TestListAcceptsAdvancedFilters(t *testing.T) {
+	handler, store := newTestHTTP(t)
+	url := "/api/v1/billing/transactions?source=PAYMENT&status=SUCCESS&gateway=paystack&customer_id=33333333-3333-4333-8333-333333333333&plan_id=44444444-4444-4444-8444-444444444444&from=2026-10-01T00:00:00Z&to=2026-10-11T00:00:00Z&min_amount_minor=1000&max_amount_minor=500000"
+	request := httptest.NewRequest(http.MethodGet, url, nil)
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: billingTestTenantID}))
+	response := httptest.NewRecorder()
+	handler.list(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+	o := store.options
+	if o.Status != "SUCCESS" || o.Gateway != "paystack" || o.CustomerID != "33333333-3333-4333-8333-333333333333" || o.PlanID != "44444444-4444-4444-8444-444444444444" || o.From.IsZero() || o.To.IsZero() || o.MinAmountMinor == nil || *o.MinAmountMinor != 1000 || o.MaxAmountMinor == nil || *o.MaxAmountMinor != 500000 {
+		t.Fatalf("filters=%+v", o)
+	}
+}
+
+func TestListRejectsInvalidAdvancedFilters(t *testing.T) {
+	handler, _ := newTestHTTP(t)
+	for _, query := range []string{
+		"status=SUCCESS&source=INVOICE", "gateway=paystack&source=INVOICE", "customer_id=other-tenant",
+		"from=2026-10-12T00:00:00Z&to=2026-10-11T00:00:00Z", "min_amount_minor=-1", "min_amount_minor=200&max_amount_minor=100",
+	} {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/billing/transactions?"+query, nil)
+		request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: billingTestTenantID}))
+		response := httptest.NewRecorder()
+		handler.list(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("query=%q status=%d", query, response.Code)
+		}
+	}
+}
+
 func TestListRejectsMissingPrincipal(t *testing.T) {
 	handler, _ := newTestHTTP(t)
 	response := httptest.NewRecorder()

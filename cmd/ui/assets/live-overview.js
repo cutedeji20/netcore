@@ -3,6 +3,32 @@
   var timer = 0;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
   function money(kobo) { return "₦" + (Number(kobo || 0) / 100).toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function bytes(value) {
+    var amount = Number(value || 0), units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    if (!Number.isFinite(amount) || amount < 0) return "—";
+    var unit = 0;
+    while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+    return amount.toLocaleString("en-NG", { maximumFractionDigits: unit ? 2 : 0 }) + " " + units[unit];
+  }
+  function freshSample(value) { return value && Date.now() - new Date(value).getTime() < 180000; }
+  function showRouterTraffic(traffic) {
+    var host = document.querySelector("[data-router-traffic]");
+    if (!host) return;
+    host.replaceChildren();
+    if (!traffic || !Array.isArray(traffic.routers) || !traffic.routers.length) { host.textContent = "No managed routers are available."; return; }
+    var table = document.createElement("table"); table.className = "data-table";
+    var head = document.createElement("thead"), row = document.createElement("tr");
+    ["Router", "HotSpot used", "WAN observed", "Active devices", "HotSpot hosts", "WAN sample"].forEach(function (label) { var cell = document.createElement("th"); cell.textContent = label; row.appendChild(cell); });
+    head.appendChild(row); table.appendChild(head);
+    var body = document.createElement("tbody");
+    traffic.routers.forEach(function (router) {
+      var tr = document.createElement("tr");
+      var values = [router.name, bytes(router.hotspot_bytes), router.wan_sampled_at ? bytes(router.wan_bytes) : "—", String(router.active_devices || 0), freshSample(router.wan_sampled_at) ? String(router.observed_hosts || 0) : "—", router.wan_sampled_at ? new Date(router.wan_sampled_at).toLocaleString("en-NG") : "Awaiting sample"];
+      values.forEach(function (value) { var cell = document.createElement("td"); cell.textContent = value; tr.appendChild(cell); });
+      body.appendChild(tr);
+    });
+    table.appendChild(body); host.appendChild(table);
+  }
   function setMetric(label, value) {
     document.querySelectorAll("#page-content .metric").forEach(function (card) {
       if (card.querySelector(".metric-label") && card.querySelector(".metric-label").textContent === label) card.querySelector(".metric-value").textContent = value;
@@ -47,6 +73,16 @@
       setMetric("Online sessions", String(data.online_sessions));
       setMetric("Collected today", money(data.collected_today_minor));
       setMetric("Needs attention", String(data.attention));
+      if (page === "overview" && data.traffic) {
+        setMetric("HotSpot usage", bytes(data.traffic.hotspot_bytes));
+        setMetric("HotSpot today", bytes(data.traffic.hotspot_today_bytes));
+        setMetric("WAN observed", data.traffic.wan_available ? bytes(data.traffic.wan_bytes) : "—");
+        setMetric("WAN today", data.traffic.wan_available ? bytes(data.traffic.wan_today_bytes) : "—");
+        setMetric("Active devices", String(data.traffic.active_devices));
+        var freshHosts = data.traffic.routers && data.traffic.routers.filter(function (router) { return freshSample(router.wan_sampled_at); });
+        setMetric("Observed HotSpot hosts", freshHosts && freshHosts.length ? String(freshHosts.reduce(function (sum, router) { return sum + Number(router.observed_hosts || 0); }, 0)) : "—");
+        showRouterTraffic(data.traffic);
+      }
       setPageMetrics(page, data);
       var status = document.querySelector("#page-content .status span");
       if (status) status.textContent = "Live tenant data refreshed just now.";
