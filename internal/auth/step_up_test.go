@@ -51,3 +51,20 @@ func TestVerifyStepUpRejectsCustomerAndPrincipalMismatch(t *testing.T) {
 		t.Fatalf("mismatched principal step-up = %v, want invalid credentials", err)
 	}
 }
+
+func TestVerifyCurrentPasswordForCustomer(t *testing.T) {
+	service, store := newTestService(t)
+	store.user.RequiresMFA = false
+	store.user.EmailVerified = true
+	principal := Principal{TenantID: store.tenantID, UserID: store.user.ID, Email: store.user.Email}
+	if err := service.VerifyCurrentPassword(context.Background(), principal, "wrong password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("wrong password = %v", err)
+	}
+	if err := service.VerifyCurrentPassword(context.Background(), principal, "correct password"); err != nil {
+		t.Fatalf("current password = %v", err)
+	}
+	principal.UserID = "44444444-4444-4444-8444-444444444444"
+	if err := service.VerifyCurrentPassword(context.Background(), principal, "correct password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("mismatched account = %v", err)
+	}
+}

@@ -492,9 +492,13 @@
         detail.textContent = "Device: " + (subscription.deviceLabel ? subscription.deviceLabel + " · " : "") + boundMAC + " · Payment: " + formatState(subscription.paymentStatus) + " · Remaining: " + (subscription.metered ? (subscription.remainingBytes == null ? "temporarily unavailable" : subscription.remainingBytes.toLocaleString() + " bytes") : "unmetered");
         row.append(detail);
         if (accountPresentation && accountPresentation.canMoveSubscription(subscription, connection, account.deviceReplacementEnabled, Date.now())) {
-          var move = document.createElement("button"); move.type = "button"; move.className = "button"; move.textContent = "Move this plan to this Wi-Fi device";
-          move.addEventListener("click", function () { requestDeviceReplacement(subscription, move); });
-          row.append(move);
+          var moveForm = document.createElement("form"), passwordLabel = document.createElement("label"), password = document.createElement("input"), move = document.createElement("button"), moveNote = document.createElement("small");
+          passwordLabel.textContent = "Login password"; password.type = "password"; password.autocomplete = "current-password"; password.placeholder = "Enter your password"; password.required = true; passwordLabel.append(password);
+          move.type = "submit"; move.className = "button"; move.textContent = "Move this plan to this Wi-Fi device";
+          moveNote.textContent = "Disconnect the old device first. Your remaining time and quota stay the same.";
+          moveForm.append(moveNote, passwordLabel, move);
+          moveForm.addEventListener("submit", function (event) { event.preventDefault(); requestDeviceReplacement(subscription, move, password); });
+          row.append(moveForm);
         }
         accountSubscriptions.append(row);
       });
@@ -598,25 +602,16 @@
     });
   }
 
-  function requestDeviceReplacement(subscription, button) {
-    if (!connection || !window.confirm("Move " + subscription.planName + " to this Wi-Fi MAC? The old device will lose future access. Disconnect it first. Remaining time and quota will not reset.")) return;
+  function requestDeviceReplacement(subscription, button, password) {
+    if (!connection || !password.value) return;
     button.disabled = true;
-    accountStatus.textContent = "Sending a verification code to your verified email…";
-    postJSON("/api/v1/portal/device-replacement/request", { subscription_id: subscription.id, client_mac: connection.client_mac, nas_address: connection.nas_address }).then(function (result) {
-      if (!result.response.ok || !result.body.challenge_id) throw new Error(humanError(result.body, "Could not request a device move."));
-      var form = document.createElement("form"), label = document.createElement("label"), code = document.createElement("input"), submit = document.createElement("button"), status = document.createElement("p");
-      label.textContent = "Email verification code"; code.required = true; code.inputMode = "numeric"; code.maxLength = 6; code.autocomplete = "one-time-code";
-      submit.type = "submit"; submit.textContent = "Verify and connect"; label.append(code); form.append(label, submit, status); button.after(form);
-      accountStatus.textContent = "Enter the six-digit code sent to your verified email.";
-      form.addEventListener("submit", function (event) {
-        event.preventDefault(); submit.disabled = true; status.textContent = "Verifying…";
-        postJSON("/api/v1/portal/device-replacement/verify", { challenge_id: result.body.challenge_id, code: code.value }).then(function (verified) {
-          if (!verified.response.ok) throw new Error(humanError(verified.body, "The code or request is invalid or expired."));
-          status.textContent = "Verified. Asking the MikroTik to confirm this device…";
-          return finishHandoff();
-        }).catch(function (error) { status.textContent = error.message || "Device move failed."; }).finally(function () { submit.disabled = false; });
-      });
-    }).catch(function (error) { accountStatus.textContent = error.message || "Could not request a device move."; }).finally(function () { button.disabled = false; });
+    accountStatus.textContent = "Checking your password and moving the plan…";
+    var currentPassword = password.value; password.value = "";
+    postJSON("/api/v1/portal/device-replacement/request", { subscription_id: subscription.id, client_mac: connection.client_mac, nas_address: connection.nas_address, password: currentPassword }).then(function (result) {
+      if (!result.response.ok) throw new Error(humanError(result.body, "Could not move this plan."));
+      accountStatus.textContent = "Asking the MikroTik to confirm this device…";
+      return finishHandoff();
+    }).catch(function (error) { accountStatus.textContent = error.message || "Device move failed."; }).finally(function () { button.disabled = false; });
   }
 
   function accountRow(title, status, detail) {

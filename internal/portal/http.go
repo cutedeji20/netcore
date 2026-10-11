@@ -92,7 +92,6 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		mux.Handle("POST /api/v1/portal/voucher-handoff", http.HandlerFunc(h.guestIssue))
 	}
 	mux.Handle("POST /api/v1/portal/device-replacement/request", sessions.RequireAuth(http.HandlerFunc(h.requestReplacement)))
-	mux.Handle("POST /api/v1/portal/device-replacement/verify", sessions.RequireAuth(http.HandlerFunc(h.verifyReplacement)))
 	return nil
 }
 
@@ -122,6 +121,7 @@ func (h *HTTP) requestReplacement(w http.ResponseWriter, r *http.Request) {
 		SubscriptionID string `json:"subscription_id"`
 		ClientMAC      string `json:"client_mac"`
 		NASAddress     string `json:"nas_address"`
+		Password       string `json:"password"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	defer r.Body.Close()
@@ -139,7 +139,11 @@ func (h *HTTP) requestReplacement(w http.ResponseWriter, r *http.Request) {
 		security.WriteError(w, r, http.StatusTooManyRequests, "REPLACEMENT_UNAVAILABLE", "Please wait and try again.")
 		return
 	}
-	issued, err := h.replacement.Begin(r.Context(), p.TenantID, p.UserID, input.SubscriptionID, mac, nas.String())
+	err = h.replacement.Begin(r.Context(), p, input.Password, input.SubscriptionID, mac, nas.String())
+	if errors.Is(err, auth.ErrInvalidCredentials) {
+		security.WriteError(w, r, http.StatusUnauthorized, "INVALID_PASSWORD", "Your current login password is incorrect.")
+		return
+	}
 	if errors.Is(err, ErrReplacementNotEligible) {
 		security.WriteError(w, r, http.StatusConflict, "REPLACEMENT_NOT_ELIGIBLE", "This plan cannot be moved yet. Disconnect the old device or contact support.")
 		return
@@ -148,7 +152,7 @@ func (h *HTTP) requestReplacement(w http.ResponseWriter, r *http.Request) {
 		security.WriteError(w, r, http.StatusServiceUnavailable, "REPLACEMENT_UNAVAILABLE", "Device replacement is temporarily unavailable.")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"challenge_id": issued.ChallengeID, "expires_at": issued.ExpiresAt})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *HTTP) limitReplacement(ctx context.Context, tenantID, userID, mac string) error {
@@ -162,38 +166,6 @@ func (h *HTTP) limitReplacement(ctx context.Context, tenantID, userID, mac strin
 		}
 	}
 	return nil
-}
-
-func (h *HTTP) verifyReplacement(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.replacementPrincipal(w, r)
-	if !ok {
-		return
-	}
-	var input struct {
-		ChallengeID string `json:"challenge_id"`
-		Code        string `json:"code"`
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 2048)
-	defer r.Body.Close()
-	if decodeJSON(r, &input) != nil {
-		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Verification details are invalid.")
-		return
-	}
-	allowed, err := h.limiter.AllowSlidingWindow(r.Context(), rateLimitKey("portal:replacement:verify", p.TenantID, p.UserID), 5, 15*time.Minute)
-	if err != nil || !allowed {
-		security.WriteError(w, r, http.StatusTooManyRequests, "REPLACEMENT_UNAVAILABLE", "Please wait and try again.")
-		return
-	}
-	err = h.replacement.Verify(r.Context(), p.TenantID, p.UserID, input.ChallengeID, input.Code)
-	if errors.Is(err, auth.ErrInvalidOTP) || errors.Is(err, ErrReplacementNotEligible) {
-		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VERIFICATION_CODE", "The code or request is invalid or expired.")
-		return
-	}
-	if err != nil {
-		security.WriteError(w, r, http.StatusServiceUnavailable, "REPLACEMENT_UNAVAILABLE", "Device replacement is temporarily unavailable.")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *HTTP) issue(w http.ResponseWriter, r *http.Request) {

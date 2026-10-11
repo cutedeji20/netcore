@@ -374,19 +374,7 @@ func run() error {
 		portalHTTP.ConfigureGuestVoucher(guestRedeemer, guestTenantID, true)
 	}
 	if cfg.Portal.DeviceReplacementEnabled {
-		tenantID, found, resolveErr := authStore.ResolveTenant(startupCtx, cfg.Portal.TenantSlug)
-		if resolveErr != nil || !found {
-			return errors.New("device replacement tenant is unavailable")
-		}
-		notifier, notifyErr := notify.NewTenantResendNotifier(integrationCredentialResolver, tenantID, nil)
-		if notifyErr != nil {
-			return notifyErr
-		}
-		otp, otpErr := auth.NewOTPService(redisClient, notifier)
-		if otpErr != nil {
-			return otpErr
-		}
-		replacement, replacementErr := portal.NewReplacementService(portalStore, otp)
+		replacement, replacementErr := portal.NewReplacementService(portalStore, authService)
 		if replacementErr != nil {
 			return replacementErr
 		}

@@ -45,3 +45,23 @@ func (s *Service) VerifyStepUp(ctx context.Context, in StepUpInput) error {
 	}
 	return nil
 }
+
+// VerifyCurrentPassword rechecks the authenticated customer's login password
+// without creating or extending a session.
+func (s *Service) VerifyCurrentPassword(ctx context.Context, principal Principal, password string) error {
+	if s == nil || s.store == nil || principal.TenantID == "" || principal.UserID == "" || principal.Email == "" || password == "" {
+		return ErrInvalidCredentials
+	}
+	user, found, err := s.store.FindUser(ctx, principal.TenantID, NormalizeLoginIdentifier(principal.Email))
+	if err != nil {
+		return fmt.Errorf("auth: find current user: %w", err)
+	}
+	if !found || user.ID != principal.UserID || user.TenantID != principal.TenantID || user.Status != "ACTIVE" || user.PasswordHash == "" {
+		return ErrInvalidCredentials
+	}
+	matched, err := s.hasher.Verify(password, user.PasswordHash)
+	if err != nil || !matched {
+		return ErrInvalidCredentials
+	}
+	return nil
+}

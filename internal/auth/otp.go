@@ -35,7 +35,6 @@ const (
 	OTPPasswordReset     OTPPurpose = "PASSWORD_RESET"
 	OTPPhoneVerification OTPPurpose = "PHONE_VERIFICATION"
 	OTPPasswordlessLogin OTPPurpose = "PASSWORDLESS_LOGIN"
-	OTPDeviceReplacement OTPPurpose = "DEVICE_REPLACEMENT"
 )
 
 // OTPChallengeStore provides atomic, ephemeral OTP state. Its implementation
@@ -172,7 +171,7 @@ func emailOTPBinding(value string) (string, []byte, bool) {
 
 func validOTPPurpose(purpose OTPPurpose) bool {
 	switch purpose {
-	case OTPEmailVerification, OTPPasswordReset, OTPPhoneVerification, OTPPasswordlessLogin, OTPDeviceReplacement:
+	case OTPEmailVerification, OTPPasswordReset, OTPPhoneVerification, OTPPasswordlessLogin:
 		return true
 	default:
 		return false
