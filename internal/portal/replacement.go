@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/netcore-isp/netcore/internal/auth"
 	"github.com/netcore-isp/netcore/internal/security"
 )
@@ -24,7 +25,6 @@ type ReplacementCandidate struct {
 type ReplacementStore interface {
 	Candidate(context.Context, string, string, string, string, string) (ReplacementCandidate, error)
 	CreateChallenge(context.Context, string, string, ReplacementCandidate, string, time.Time) error
-	ChallengeEmail(context.Context, string, string, string) (string, error)
 	VerifyChallenge(context.Context, string, string, string) error
 }
 
@@ -32,49 +32,39 @@ type ReplacementStore interface {
 // RADIUS function may consume a verified pending request and swap device_id.
 type ReplacementService struct {
 	store ReplacementStore
-	otp   *auth.OTPService
+	auth  interface {
+		VerifyCurrentPassword(context.Context, auth.Principal, string) error
+	}
 }
 
-func NewReplacementService(store ReplacementStore, otp *auth.OTPService) (*ReplacementService, error) {
-	if store == nil || otp == nil {
+func NewReplacementService(store ReplacementStore, authService interface {
+	VerifyCurrentPassword(context.Context, auth.Principal, string) error
+}) (*ReplacementService, error) {
+	if store == nil || authService == nil {
 		return nil, errors.New("portal: replacement dependencies are required")
 	}
-	return &ReplacementService{store: store, otp: otp}, nil
+	return &ReplacementService{store: store, auth: authService}, nil
 }
 
-func (s *ReplacementService) Begin(ctx context.Context, tenantID, userID, subscriptionID, targetMAC, nas string) (auth.IssuedOTP, error) {
+func (s *ReplacementService) Begin(ctx context.Context, principal auth.Principal, password, subscriptionID, targetMAC, nas string) error {
 	canonical, ok := security.NormalizeMAC(targetMAC)
-	if !validUUID(tenantID) || !validUUID(userID) || !validUUID(subscriptionID) || !ok {
-		return auth.IssuedOTP{}, ErrReplacementNotEligible
+	if !validUUID(principal.TenantID) || !validUUID(principal.UserID) || !validUUID(subscriptionID) || !ok {
+		return ErrReplacementNotEligible
 	}
 	parsed, err := netip.ParseAddr(nas)
 	if err != nil {
-		return auth.IssuedOTP{}, ErrReplacementNotEligible
-	}
-	candidate, err := s.store.Candidate(ctx, tenantID, userID, subscriptionID, canonical, parsed.String())
-	if err != nil {
-		return auth.IssuedOTP{}, err
-	}
-	issued, err := s.otp.IssueForEmail(ctx, auth.OTPDeviceReplacement, candidate.Email)
-	if err != nil {
-		return auth.IssuedOTP{}, err
-	}
-	if err = s.store.CreateChallenge(ctx, tenantID, userID, candidate, issued.ChallengeID, issued.ExpiresAt); err != nil {
-		return auth.IssuedOTP{}, err
-	}
-	return issued, nil
-}
-
-func (s *ReplacementService) Verify(ctx context.Context, tenantID, userID, challengeID, code string) error {
-	if !validUUID(tenantID) || !validUUID(userID) || len(challengeID) > 128 {
 		return ErrReplacementNotEligible
 	}
-	email, err := s.store.ChallengeEmail(ctx, tenantID, userID, challengeID)
+	if err := s.auth.VerifyCurrentPassword(ctx, principal, password); err != nil {
+		return err
+	}
+	candidate, err := s.store.Candidate(ctx, principal.TenantID, principal.UserID, subscriptionID, canonical, parsed.String())
 	if err != nil {
 		return err
 	}
-	if err = s.otp.VerifyForEmail(ctx, auth.OTPDeviceReplacement, challengeID, email, code); err != nil {
+	challengeID := uuid.NewString()
+	if err = s.store.CreateChallenge(ctx, principal.TenantID, principal.UserID, candidate, challengeID, time.Now().UTC().Add(10*time.Minute)); err != nil {
 		return err
 	}
-	return s.store.VerifyChallenge(ctx, tenantID, userID, challengeID)
+	return s.store.VerifyChallenge(ctx, principal.TenantID, principal.UserID, challengeID)
 }

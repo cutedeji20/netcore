@@ -52,16 +52,6 @@ func (s *PostgresStore) CreateChallenge(ctx context.Context, tenantID, userID st
 	})
 }
 
-func (s *PostgresStore) ChallengeEmail(ctx context.Context, tenantID, userID, challengeID string) (email string, err error) {
-	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT u.email::text FROM device_replacements r JOIN users u ON u.id=r.user_id AND u.tenant_id=r.tenant_id AND u.email_verified_at IS NOT NULL WHERE r.tenant_id=$1::uuid AND r.user_id=$2::uuid AND r.challenge_id=$3 AND r.status='CHALLENGE' AND r.expires_at>now()`, tenantID, userID, challengeID).Scan(&email)
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrReplacementNotEligible
-	}
-	return email, err
-}
-
 func (s *PostgresStore) VerifyChallenge(ctx context.Context, tenantID, userID, challengeID string) error {
 	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var subID, customerID, oldID, targetMAC, nasID, replacementID string

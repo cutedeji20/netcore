@@ -23,24 +23,42 @@ type memoryLimiter struct {
 	limits  []int64
 }
 
-type guestRedeemerStub struct { calls int; err error }
-func (s *guestRedeemerStub) RedeemForDevice(_ context.Context, _, _, _, _ string) (string,error) { s.calls++; return "33333333-3333-4333-8333-333333333333",s.err }
+type guestRedeemerStub struct {
+	calls int
+	err   error
+}
+
+func (s *guestRedeemerStub) RedeemForDevice(_ context.Context, _, _, _, _ string) (string, error) {
+	s.calls++
+	return "33333333-3333-4333-8333-333333333333", s.err
+}
 
 func TestGuestVoucherHandoffIsGatedAndDoesNotExposeCode(t *testing.T) {
 	store := &memoryStore{}
-	h := newTestHTTP(t, store, &memoryLimiter{allowed:true})
+	h := newTestHTTP(t, store, &memoryLimiter{allowed: true})
 	code := "NC-ABCDEF-GHJKLM-NPQRST"
-	request := func() *http.Request { return httptest.NewRequest(http.MethodPost,"/api/v1/portal/voucher-handoff",strings.NewReader(`{"code":"`+code+`","client_mac":"AA:BB:CC:DD:EE:FF","nas_address":"10.10.0.1","hotspot_login_url":"http://10.10.0.1/login"}`)) }
+	request := func() *http.Request {
+		return httptest.NewRequest(http.MethodPost, "/api/v1/portal/voucher-handoff", strings.NewReader(`{"code":"`+code+`","client_mac":"AA:BB:CC:DD:EE:FF","nas_address":"10.10.0.1","hotspot_login_url":"http://10.10.0.1/login"}`))
+	}
 	response := httptest.NewRecorder()
-	h.guestIssue(response,request())
-	if response.Code != http.StatusNotFound { t.Fatalf("disabled status=%d",response.Code) }
+	h.guestIssue(response, request())
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("disabled status=%d", response.Code)
+	}
 	redeemer := &guestRedeemerStub{}
 	h.ConfigureGuestVoucher(redeemer, portalTestTenantID, true)
-	badOrigin := request(); badOrigin.Header.Set("Origin","https://other.example")
-	response = httptest.NewRecorder(); h.guestIssue(response,badOrigin)
-	if response.Code != http.StatusForbidden || redeemer.calls != 0 { t.Fatalf("bad origin status=%d calls=%d",response.Code,redeemer.calls) }
-	response = httptest.NewRecorder(); h.guestIssue(response,request())
-	if response.Code != http.StatusCreated || redeemer.calls != 1 || store.record.UserID != "" || store.record.SubscriptionID != "33333333-3333-4333-8333-333333333333" || strings.Contains(response.Body.String(),code) || strings.Contains(response.Body.String(),"client_mac") { t.Fatalf("guest response=%d body=%s record=%+v",response.Code,response.Body.String(),store.record) }
+	badOrigin := request()
+	badOrigin.Header.Set("Origin", "https://other.example")
+	response = httptest.NewRecorder()
+	h.guestIssue(response, badOrigin)
+	if response.Code != http.StatusForbidden || redeemer.calls != 0 {
+		t.Fatalf("bad origin status=%d calls=%d", response.Code, redeemer.calls)
+	}
+	response = httptest.NewRecorder()
+	h.guestIssue(response, request())
+	if response.Code != http.StatusCreated || redeemer.calls != 1 || store.record.UserID != "" || store.record.SubscriptionID != "33333333-3333-4333-8333-333333333333" || strings.Contains(response.Body.String(), code) || strings.Contains(response.Body.String(), "client_mac") {
+		t.Fatalf("guest response=%d body=%s record=%+v", response.Code, response.Body.String(), store.record)
+	}
 }
 
 func (l *memoryLimiter) AllowSlidingWindow(_ context.Context, key string, limit int64, _ time.Duration) (bool, error) {
@@ -146,15 +164,11 @@ func TestIssueExplainsActivePlanBoundToAnotherDevice(t *testing.T) {
 
 func TestDeviceReplacementEndpointsStayHiddenWhenFlagIsOff(t *testing.T) {
 	handler := newTestHTTP(t, &memoryStore{}, &memoryLimiter{allowed: true})
-	for _, path := range []string{"/api/v1/portal/device-replacement/request", "/api/v1/portal/device-replacement/verify"} {
+	for _, path := range []string{"/api/v1/portal/device-replacement/request"} {
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
 		request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: portalTestTenantID, UserID: portalTestUserID}))
 		response := httptest.NewRecorder()
-		if strings.HasSuffix(path, "/request") {
-			handler.requestReplacement(response, request)
-		} else {
-			handler.verifyReplacement(response, request)
-		}
+		handler.requestReplacement(response, request)
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
 		}
