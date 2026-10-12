@@ -108,7 +108,7 @@ func (c *Collector) pollTarget(ctx context.Context, tenantID string, target Targ
 	}); err != nil {
 		return fmt.Errorf("validate managed router: %w", err)
 	}
-	if managementIP != u.Hostname() {
+	if !managementIPMatchesURL(managementIP, u.Hostname()) {
 		return errors.New("telemetry URL does not match router management IP")
 	}
 	password, err := os.ReadFile(target.PasswordFile)
@@ -166,6 +166,18 @@ func (c *Collector) pollTarget(ctx context.Context, tenantID string, target Targ
 		_, err := tx.Exec(ctx, `INSERT INTO router_telemetry_samples (tenant_id,router_id,sampled_at,wan_interface,wan_rx_bytes,wan_tx_bytes,observed_hotspot_hosts) VALUES ($1::uuid,$2::uuid,date_trunc('minute',now()),$3,$4,$5,$6) ON CONFLICT DO NOTHING`, tenantID, target.RouterID, target.WANInterface, rx, txBytes, len(hosts))
 		return err
 	})
+}
+
+func managementIPMatchesURL(value, hostname string) bool {
+	ip, err := netip.ParseAddr(value)
+	if err != nil {
+		prefix, prefixErr := netip.ParsePrefix(value)
+		if prefixErr != nil {
+			return false
+		}
+		ip = prefix.Addr()
+	}
+	return ip.String() == hostname
 }
 
 func readList(ctx context.Context, client *http.Client, target Target, password []byte, path string, props []string, result any) error {

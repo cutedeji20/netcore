@@ -22,6 +22,17 @@ func TestTargetRequiresPrivateHTTPSOrigin(t *testing.T) {
 	}
 }
 
+func TestManagementIPMatchesURLHostForPostgresINETText(t *testing.T) {
+	for _, value := range []string{"192.168.88.1", "192.168.88.1/32"} {
+		if !managementIPMatchesURL(value, "192.168.88.1") {
+			t.Fatalf("management IP %q did not match its URL host", value)
+		}
+	}
+	if managementIPMatchesURL("192.168.88.1/32", "192.168.88.2") {
+		t.Fatal("different management IP matched URL host")
+	}
+}
+
 func TestReadListUsesReadOnlyRouterPrint(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/rest/interface/print" {
