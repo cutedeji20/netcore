@@ -21,7 +21,7 @@ func (s *overviewMemoryStore) Overview(_ context.Context, tenantID string) (Over
 }
 
 func TestOverviewUsesAuthenticatedTenant(t *testing.T) {
-	store := &overviewMemoryStore{overview: Overview{ActiveCustomers: 4, OnlineSessions: 2, CollectedTodayMinor: 51500, Attention: 1, CustomerMetrics: CustomerMetrics{Active: 4, NewThisMonth: 2}, PlanMetrics: PlanMetrics{Published: 3, MostSelected: "Phone Daily"}, SubscriptionMetrics: SubscriptionMetrics{Active: 4, RenewingThisWeek: 1, AverageLifetimeSeconds: 86400}}}
+	store := &overviewMemoryStore{overview: Overview{ActiveCustomers: 4, OnlineSessions: 2, CollectedTodayMinor: 51500, Attention: 1, CustomerMetrics: CustomerMetrics{Active: 4, NewThisMonth: 2}, PlanMetrics: PlanMetrics{Published: 3, MostSelected: "Phone Daily"}, SubscriptionMetrics: SubscriptionMetrics{Active: 4, RenewingThisWeek: 1, AverageLifetimeSeconds: 86400}, Traffic: TrafficMetrics{WANPeriods: []WANUsagePeriod{{Key: "yesterday", Label: "Yesterday", RxBytes: 10, TxBytes: 20}}, WANDaily: []WANDailyUsage{{UsageDay: "2026-10-12", RxBytes: 30, TxBytes: 40}}}}}
 	h, err := NewOverviewHTTP(store, func(ctx context.Context) (string, bool) {
 		id, ok := ctx.Value(activityTestTenantKey{}).(string)
 		return id, ok
@@ -57,11 +57,15 @@ func TestOverviewUsesAuthenticatedTenant(t *testing.T) {
 			Renewing int64   `json:"renewing_this_week"`
 			Average  float64 `json:"average_lifetime_seconds"`
 		} `json:"subscriptions"`
+		Traffic struct {
+			Periods []WANUsagePeriod `json:"wan_periods"`
+			Daily   []WANDailyUsage  `json:"wan_daily"`
+		} `json:"traffic"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body.ActiveCustomers != 4 || body.OnlineSessions != 2 || body.CollectedTodayMinor != 51500 || body.Attention != 1 || body.Customers.Active != 4 || body.Customers.NewThisMonth != 2 || body.Plans.Published != 3 || body.Plans.MostSelected != "Phone Daily" || body.Subscriptions.Active != 4 || body.Subscriptions.Renewing != 1 || body.Subscriptions.Average != 86400 {
+	if body.ActiveCustomers != 4 || body.OnlineSessions != 2 || body.CollectedTodayMinor != 51500 || body.Attention != 1 || body.Customers.Active != 4 || body.Customers.NewThisMonth != 2 || body.Plans.Published != 3 || body.Plans.MostSelected != "Phone Daily" || body.Subscriptions.Active != 4 || body.Subscriptions.Renewing != 1 || body.Subscriptions.Average != 86400 || len(body.Traffic.Periods) != 1 || body.Traffic.Periods[0].Key != "yesterday" || body.Traffic.Periods[0].TxBytes != 20 || len(body.Traffic.Daily) != 1 || body.Traffic.Daily[0].UsageDay != "2026-10-12" || body.Traffic.Daily[0].RxBytes != 30 {
 		t.Fatalf("body = %+v", body)
 	}
 }
@@ -82,5 +86,18 @@ func TestLagosDayBounds(t *testing.T) {
 	start, end := lagosDayBounds(time.Date(2026, 10, 10, 23, 30, 0, 0, time.UTC))
 	if start.Format(time.RFC3339) != "2026-10-10T23:00:00Z" || end.Format(time.RFC3339) != "2026-10-11T23:00:00Z" {
 		t.Fatalf("bounds=%s to %s", start, end)
+	}
+}
+
+func TestWANUsageRangesUseLagosCalendarDays(t *testing.T) {
+	ranges := wanUsageRanges(time.Date(2026, 3, 1, 0, 30, 0, 0, time.UTC))
+	if len(ranges) != 6 {
+		t.Fatalf("ranges = %#v", ranges)
+	}
+	if ranges[0].Key != "today" || ranges[0].start.Format("2006-01-02") != "2026-03-01" || ranges[0].end.Format("2006-01-02") != "2026-03-02" {
+		t.Fatalf("today = %#v", ranges[0])
+	}
+	if ranges[2].start.Format("2006-01-02") != "2026-02-23" || ranges[3].start.Format("2006-01-02") != "2026-03-01" || ranges[4].start.Format("2006-01-02") != "2026-02-01" || ranges[4].end.Format("2006-01-02") != "2026-03-01" || ranges[5].Key != "all_time" {
+		t.Fatalf("ranges = %#v", ranges)
 	}
 }

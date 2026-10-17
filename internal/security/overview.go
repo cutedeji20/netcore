@@ -21,14 +21,27 @@ type Overview struct {
 	Traffic                                    TrafficMetrics
 }
 type TrafficMetrics struct {
-	HotspotBytes      int64           `json:"hotspot_bytes"`
-	HotspotTodayBytes int64           `json:"hotspot_today_bytes"`
-	WANBytes          int64           `json:"wan_bytes"`
-	WANTodayBytes     int64           `json:"wan_today_bytes"`
-	WANAvailable      bool            `json:"wan_available"`
-	ActiveDevices     int64           `json:"active_devices"`
-	ObservedHosts     int64           `json:"observed_hosts"`
-	Routers           []RouterTraffic `json:"routers"`
+	HotspotBytes      int64            `json:"hotspot_bytes"`
+	HotspotTodayBytes int64            `json:"hotspot_today_bytes"`
+	WANBytes          int64            `json:"wan_bytes"`
+	WANTodayBytes     int64            `json:"wan_today_bytes"`
+	WANAvailable      bool             `json:"wan_available"`
+	ActiveDevices     int64            `json:"active_devices"`
+	ObservedHosts     int64            `json:"observed_hosts"`
+	Routers           []RouterTraffic  `json:"routers"`
+	WANPeriods        []WANUsagePeriod `json:"wan_periods"`
+	WANDaily          []WANDailyUsage  `json:"wan_daily"`
+}
+type WANUsagePeriod struct {
+	Key     string `json:"key"`
+	Label   string `json:"label"`
+	RxBytes int64  `json:"rx_bytes"`
+	TxBytes int64  `json:"tx_bytes"`
+}
+type WANDailyUsage struct {
+	UsageDay string `json:"usage_day"`
+	RxBytes  int64  `json:"rx_bytes"`
+	TxBytes  int64  `json:"tx_bytes"`
 }
 type RouterTraffic struct {
 	ID                string     `json:"id"`
@@ -75,7 +88,9 @@ func (s *OverviewPostgresStore) Overview(ctx context.Context, tenantID string) (
 		return out, ErrActivityUnavailable
 	}
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		dayStart, dayEnd := lagosDayBounds(time.Now())
+		now := time.Now()
+		dayStart, dayEnd := lagosDayBounds(now)
+		wanRanges := wanUsageRanges(now)
 		if err := tx.QueryRow(ctx, `SELECT
  (SELECT count(*) FROM customers WHERE tenant_id=$1 AND status='ACTIVE'),
  (SELECT count(*) FROM sessions WHERE tenant_id=$1 AND status='ACTIVE' AND last_interim_at >= now()-interval '10 minutes'),
@@ -105,6 +120,42 @@ func (s *OverviewPostgresStore) Overview(ctx context.Context, tenantID string) (
 			return err
 		}
 		if err := tx.QueryRow(ctx, `SELECT count(DISTINCT COALESCE(normalized_mac, device_id::text)) FROM sessions WHERE tenant_id=$1 AND status='ACTIVE' AND last_interim_at>=now()-interval '10 minutes'`, tenantID).Scan(&out.Traffic.ActiveDevices); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT
+ COALESCE(sum(rx_bytes) FILTER (WHERE usage_day >= $2 AND usage_day < $3),0), COALESCE(sum(tx_bytes) FILTER (WHERE usage_day >= $2 AND usage_day < $3),0),
+ COALESCE(sum(rx_bytes) FILTER (WHERE usage_day >= $4 AND usage_day < $5),0), COALESCE(sum(tx_bytes) FILTER (WHERE usage_day >= $4 AND usage_day < $5),0),
+ COALESCE(sum(rx_bytes) FILTER (WHERE usage_day >= $6 AND usage_day < $7),0), COALESCE(sum(tx_bytes) FILTER (WHERE usage_day >= $6 AND usage_day < $7),0),
+ COALESCE(sum(rx_bytes) FILTER (WHERE usage_day >= $8 AND usage_day < $9),0), COALESCE(sum(tx_bytes) FILTER (WHERE usage_day >= $8 AND usage_day < $9),0),
+ COALESCE(sum(rx_bytes) FILTER (WHERE usage_day >= $10 AND usage_day < $11),0), COALESCE(sum(tx_bytes) FILTER (WHERE usage_day >= $10 AND usage_day < $11),0),
+ COALESCE(sum(rx_bytes),0), COALESCE(sum(tx_bytes),0)
+ FROM router_wan_daily WHERE tenant_id=$1`, tenantID,
+			wanRanges[0].start, wanRanges[0].end, wanRanges[1].start, wanRanges[1].end, wanRanges[2].start, wanRanges[2].end, wanRanges[3].start, wanRanges[3].end, wanRanges[4].start, wanRanges[4].end,
+		).Scan(
+			&wanRanges[0].RxBytes, &wanRanges[0].TxBytes, &wanRanges[1].RxBytes, &wanRanges[1].TxBytes, &wanRanges[2].RxBytes, &wanRanges[2].TxBytes, &wanRanges[3].RxBytes, &wanRanges[3].TxBytes, &wanRanges[4].RxBytes, &wanRanges[4].TxBytes, &wanRanges[5].RxBytes, &wanRanges[5].TxBytes,
+		); err != nil {
+			return err
+		}
+		out.Traffic.WANPeriods = make([]WANUsagePeriod, 0, len(wanRanges))
+		for _, period := range wanRanges {
+			out.Traffic.WANPeriods = append(out.Traffic.WANPeriods, WANUsagePeriod{Key: period.Key, Label: period.Label, RxBytes: period.RxBytes, TxBytes: period.TxBytes})
+		}
+		trendStart := wanRanges[0].start.AddDate(0, 0, -29)
+		trendRows, err := tx.Query(ctx, `SELECT usage_day::text, COALESCE(sum(rx_bytes),0), COALESCE(sum(tx_bytes),0)
+ FROM router_wan_daily WHERE tenant_id=$1 AND usage_day >= $2 AND usage_day < $3
+ GROUP BY usage_day ORDER BY usage_day`, tenantID, trendStart, wanRanges[0].end)
+		if err != nil {
+			return err
+		}
+		defer trendRows.Close()
+		for trendRows.Next() {
+			var day WANDailyUsage
+			if err := trendRows.Scan(&day.UsageDay, &day.RxBytes, &day.TxBytes); err != nil {
+				return err
+			}
+			out.Traffic.WANDaily = append(out.Traffic.WANDaily, day)
+		}
+		if err := trendRows.Err(); err != nil {
 			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT r.id::text, r.name,
@@ -151,11 +202,35 @@ func (s *OverviewPostgresStore) Overview(ctx context.Context, tenantID string) (
 }
 
 func lagosDayBounds(at time.Time) (time.Time, time.Time) {
+	start := lagosDay(at)
+	return start.UTC(), start.AddDate(0, 0, 1).UTC()
+}
+
+type wanUsageRange struct {
+	Key, Label       string
+	start, end       time.Time
+	RxBytes, TxBytes int64
+}
+
+func wanUsageRanges(at time.Time) []wanUsageRange {
+	today := lagosDay(at)
+	monthStart := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, today.Location())
+	lastMonthStart := monthStart.AddDate(0, -1, 0)
+	return []wanUsageRange{
+		{Key: "today", Label: "Today", start: today, end: today.AddDate(0, 0, 1)},
+		{Key: "yesterday", Label: "Yesterday", start: today.AddDate(0, 0, -1), end: today},
+		{Key: "last_7_days", Label: "Last 7 days", start: today.AddDate(0, 0, -6), end: today.AddDate(0, 0, 1)},
+		{Key: "this_month", Label: "This month", start: monthStart, end: monthStart.AddDate(0, 1, 0)},
+		{Key: "last_month", Label: "Last month", start: lastMonthStart, end: monthStart},
+		{Key: "all_time", Label: "All time"},
+	}
+}
+
+func lagosDay(at time.Time) time.Time {
 	location, err := time.LoadLocation("Africa/Lagos")
 	if err != nil {
 		location = time.FixedZone("WAT", 3600)
 	}
 	local := at.In(location)
-	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location)
-	return start.UTC(), start.AddDate(0, 0, 1).UTC()
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location)
 }

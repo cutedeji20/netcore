@@ -29,6 +29,38 @@
     });
     table.appendChild(body); host.appendChild(table);
   }
+  function totalBytes(item) { return Number(item && item.rx_bytes || 0) + Number(item && item.tx_bytes || 0); }
+  function showWANHistory(traffic) {
+    var host = document.querySelector("[data-wan-traffic-history]");
+    if (!host) return;
+    host.replaceChildren();
+    var periods = traffic && Array.isArray(traffic.wan_periods) ? traffic.wan_periods : [];
+    var daily = traffic && Array.isArray(traffic.wan_daily) ? traffic.wan_daily : [];
+    if (!periods.length) { host.textContent = "No WAN telemetry has been recorded yet."; return; }
+    var table = document.createElement("table"); table.className = "data-table";
+    var head = document.createElement("thead"), row = document.createElement("tr");
+    ["Period", "Download", "Upload", "Total"].forEach(function (label) { var cell = document.createElement("th"); cell.textContent = label; row.appendChild(cell); });
+    head.appendChild(row); table.appendChild(head);
+    var body = document.createElement("tbody");
+    periods.forEach(function (period) {
+      var tr = document.createElement("tr");
+      [period.label, bytes(period.rx_bytes), bytes(period.tx_bytes), bytes(totalBytes(period))].forEach(function (value) { var cell = document.createElement("td"); cell.textContent = value; tr.appendChild(cell); });
+      body.appendChild(tr);
+    });
+    table.appendChild(body); host.appendChild(table);
+    if (!daily.length) return;
+    var trend = document.createElement("div"); trend.className = "wan-traffic-trend";
+    var title = document.createElement("p"); title.className = "wan-traffic-trend-title"; title.textContent = "Daily WAN totals (last 30 days)"; trend.appendChild(title);
+    var bars = document.createElement("div"); bars.className = "wan-traffic-bars";
+    var maximum = Math.max.apply(null, daily.map(totalBytes).concat([1]));
+    daily.forEach(function (day) {
+      var bar = document.createElement("div"); bar.className = "wan-traffic-bar";
+      var fill = document.createElement("i"); fill.style.height = Math.max(3, Math.round(totalBytes(day) / maximum * 100)) + "%";
+      var label = document.createElement("span"); label.textContent = day.usage_day.slice(5);
+      bar.title = day.usage_day + ": " + bytes(totalBytes(day)); bar.append(fill, label); bars.appendChild(bar);
+    });
+    trend.appendChild(bars); host.appendChild(trend);
+  }
   function setMetric(label, value) {
     document.querySelectorAll("#page-content .metric").forEach(function (card) {
       if (card.querySelector(".metric-label") && card.querySelector(".metric-label").textContent === label) card.querySelector(".metric-value").textContent = value;
@@ -82,6 +114,7 @@
         var freshHosts = data.traffic.routers && data.traffic.routers.filter(function (router) { return freshSample(router.wan_sampled_at); });
         setMetric("Observed HotSpot hosts", freshHosts && freshHosts.length ? String(freshHosts.reduce(function (sum, router) { return sum + Number(router.observed_hosts || 0); }, 0)) : "—");
         showRouterTraffic(data.traffic);
+        showWANHistory(data.traffic);
       }
       setPageMetrics(page, data);
       var status = document.querySelector("#page-content .status span");
