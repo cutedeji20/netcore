@@ -117,6 +117,15 @@
         accountRequested = false;
         showView("plans");
       }
+      if (action.dataset.action === "buy-vouchers") {
+        accountRequested = true;
+        if (customerAuthenticated) {
+          showView("account");
+          loadCustomerAccount();
+        } else {
+          showView("login");
+        }
+      }
       if (action.dataset.action === "checkout") beginCheckout();
     }
 
@@ -826,11 +835,6 @@
         voucherOrderKey = "";
         showView("account");
         return loadCustomerAccount().then(function () { voucherAccountStatus.textContent = "Payment confirmed. Your voucher codes are ready to reveal below."; });
-      }
-      if (action.dataset.action === "buy-vouchers") {
-        accountRequested = true;
-        if (customerAuthenticated) { showView("account"); loadCustomerAccount(); }
-        else showView("login");
       }
       if (!connection) {
         showView("login");
