@@ -31,6 +31,13 @@ if (typeof window !== "undefined") (function () {
   var requestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
   var livePage = window.NetCoreLivePage;
+  var listConfig = window.NetCoreLiveListConfig.get("customers");
+  var listState = window.NetCoreLiveListControls.createState(listConfig.filters, listConfig.initialFilter, listConfig.filterParam);
+  var loadedCustomersMeta = {};
+  var searchTimer = 0;
+  var pendingQuery = "";
+  var criteriaPending = false;
+  var requestVersion = 0;
   var selectedCustomerIDs = new Set();
 
   function canWrite() { var principal = window.NETCORE_PRINCIPAL || {}; return Array.isArray(principal.permissions) && principal.permissions.indexOf("customer.write") !== -1; }
@@ -187,11 +194,49 @@ if (typeof window !== "undefined") (function () {
     renderBulkActions();
   }
 
+  function renderControls() {
+    if (currentPage() !== "customers") return;
+    livePage.renderListControls("customers", {
+      query: criteriaPending ? pendingQuery : listState.query,
+      busy: requestInFlight,
+      hasPrevious: listState.previousCursors.length > 0,
+      hasNext: listState.hasMore,
+      searchPlaceholder: "Search customers by name, e-mail, phone, or number",
+      searchLabel: "Search customers",
+      onSearch: function (query) {
+        clearTimeout(searchTimer);
+        pendingQuery = query;
+        criteriaPending = true;
+        requestVersion += 1;
+        window.NetCoreLiveListControls.applyCriteria(listState, query, "");
+        searchTimer = setTimeout(function () {
+          criteriaPending = false;
+          requestVersion += 1;
+          requestCustomers(true);
+        }, 250);
+      },
+      onNext: function () {
+        if (criteriaPending) return;
+        if (window.NetCoreLiveListControls.nextPage(listState)) requestCustomers(true);
+        else renderControls();
+      },
+      onPrevious: function () {
+        if (criteriaPending) return;
+        if (listState.previousCursors.length) {
+          window.NetCoreLiveListControls.previousPage(listState);
+          requestCustomers(true);
+        } else renderControls();
+      }
+    });
+  }
+
   function requestCustomers(force) {
     if (requestInFlight || (loadedCustomers && !force)) return;
     requestInFlight = true;
+    var requestVersionAtStart = requestVersion;
+    renderControls();
     if (!loadedCustomers) showState("loading");
-    fetch(apiBase + "/api/v1/customers?limit=25", {
+    fetch(window.NetCoreLiveListControls.requestURL(apiBase, listConfig.endpoint, listState, 25), {
       credentials: "include",
       cache: "no-store"
     })
@@ -201,16 +246,22 @@ if (typeof window !== "undefined") (function () {
       })
       .then(function (payload) {
         if (!payload || !Array.isArray(payload.data)) throw new Error("Customers response was invalid");
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         loadedCustomers = payload.data;
+        loadedCustomersMeta = payload.meta || {};
+        window.NetCoreLiveListControls.applyResponseMeta(listState, loadedCustomersMeta);
         displayCustomers();
       })
       .catch(function () {
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         // Last verified records remain visible when a refresh fails.
         if (loadedCustomers) displayCustomers();
         showState("error", { message: "Customers could not be loaded. Please try again.", preserve: Boolean(loadedCustomers), retry: function () { requestCustomers(true); } });
       })
       .finally(function () {
         requestInFlight = false;
+        renderControls();
+        if (!criteriaPending && requestVersionAtStart !== requestVersion) requestCustomers(true);
       });
   }
 
@@ -218,6 +269,7 @@ if (typeof window !== "undefined") (function () {
     var page = event.detail;
     if (page !== "customers") return;
     bindHeaderAction();
+    renderControls();
     renderBulkActions();
     if (loadedCustomers) requestCustomers(true);
     else requestCustomers();

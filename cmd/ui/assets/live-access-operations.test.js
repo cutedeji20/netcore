@@ -6,7 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 test("access-operation adapters use their named shared configuration", () => {
-  for (const page of ["subscriptions", "sessions", "vouchers"]) {
+  for (const page of ["customers", "subscriptions", "sessions", "vouchers"]) {
     const source = fs.readFileSync(path.join(__dirname, "live-" + page + ".js"), "utf8");
     assert.match(source, new RegExp('NetCoreLiveListConfig\\.get\\("' + page + '"\\)'));
     assert.match(source, /NetCoreLiveListControls\.requestURL/);
@@ -24,4 +24,8 @@ test("shared access configuration creates only supported query strings", () => {
   vouchers.query = "August";
   vouchers.cursor = "opaque";
   assert.equal(controls.requestURL("https://hotspot.example", config.get("vouchers").endpoint, vouchers, 25), "https://hotspot.example/api/v1/vouchers/batches?limit=25&q=August&cursor=opaque");
+  const customers = controls.createState(config.get("customers").filters, "", "");
+  customers.query = "Chika";
+  customers.cursor = "opaque";
+  assert.equal(controls.requestURL("https://hotspot.example", config.get("customers").endpoint, customers, 25), "https://hotspot.example/api/v1/customers?limit=25&q=Chika&cursor=opaque");
 });

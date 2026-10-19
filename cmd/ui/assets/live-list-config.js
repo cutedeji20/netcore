@@ -4,6 +4,7 @@
   if (root) root.NetCoreLiveListConfig = api;
 })(typeof window !== "undefined" ? window : typeof globalThis !== "undefined" ? globalThis : this, function () {
   var configs = Object.freeze({
+    customers: { endpoint: "/api/v1/customers", filterParam: "", filters: [""], initialFilter: "" },
     subscriptions: { endpoint: "/api/v1/subscriptions", filterParam: "status", filters: ["", "PENDING", "ACTIVE", "SUSPENDED", "EXPIRED", "CANCELLED"], initialFilter: "" },
     sessions: { endpoint: "/api/v1/sessions", filterParam: "status", filters: ["", "ACTIVE", "SUSPECT", "CLOSED"], initialFilter: "ACTIVE" },
     vouchers: { endpoint: "/api/v1/vouchers/batches", filterParam: "", filters: [""], initialFilter: "" },

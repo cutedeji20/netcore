@@ -58,7 +58,7 @@ function environment(file, responses, initialHash) {
   const panel = new Element("section"); panel.className = "panel table"; const table = new Element("table"); table.className = "data-table";
   const head = new Element("thead"); const row = new Element("tr"); head.appendChild(row); for (let index = 0; index < 7; index++) row.appendChild(new Element("th"));
   const tableBody = new Element("tbody"); table.append(head, tableBody); panel.appendChild(table); split.appendChild(panel); content.append(heading, split); body.appendChild(content);
-  ["subscriptions", "sessions", "vouchers", "network", "billing", "security", "automations"].forEach((page) => {
+  ["customers", "subscriptions", "sessions", "vouchers", "network", "billing", "security", "automations"].forEach((page) => {
     const controls = new Element("div"); controls.setAttribute("data-live-list-controls", page);
     const pagination = new Element("div"); pagination.setAttribute("data-live-list-pagination", page);
     heading.append(controls, pagination);
@@ -76,7 +76,7 @@ function environment(file, responses, initialHash) {
   vm.runInNewContext(source("live-page.js"), { window, document });
   vm.runInNewContext(source("live-list-config.js"), { window });
   vm.runInNewContext(source("live-list-controls.js"), { window, URL });
-  vm.runInNewContext(source(file), { window, document, fetch, Promise, Date, Number, setTimeout, clearTimeout });
+  vm.runInNewContext(source(file), { window, document, fetch, Promise, Date, Number, URL, setTimeout, clearTimeout });
   return { content, table, tableBody, window, requests, render(page) { (listeners["netcore:page-rendered"] || []).forEach((listener) => listener({ detail: page })); }, state(kind) { return kind === "payment" ? content.querySelector("#payment-readiness") : kind === "integrations" ? content.querySelector("#integration-settings") : table; } };
 }
 
