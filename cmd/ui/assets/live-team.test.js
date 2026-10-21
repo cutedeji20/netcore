@@ -31,3 +31,9 @@ test("every sensitive team dialog has current-password and six-digit MFA fields"
     { label: "Authenticator code", name: "mfa_code", type: "text", pattern: "[0-9]{6}", maxLength: 6 }
   ]);
 });
+
+test("only the authenticator field receives an HTML pattern", () => {
+  const source = require("node:fs").readFileSync(__dirname + "/live-team.js", "utf8");
+  assert.match(source, /if \(field\.pattern\) input\.pattern = field\.pattern/);
+  assert.doesNotMatch(source, /input\.pattern = field\.pattern \|\| ""/);
+});

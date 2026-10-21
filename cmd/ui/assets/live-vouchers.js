@@ -268,21 +268,19 @@
   }
 
   function openManageDialog(batch) {
-    var dialog = openVoucherDialog("Manage batch " + safeText(String(batch.id || "").slice(0,8))), form = document.createElement("form"), password = document.createElement("input"), mfa = document.createElement("input"), submit = document.createElement("button"), result = document.createElement("div"), footer = document.createElement("footer");
-    password.type="password"; password.autocomplete="current-password"; password.required=true;
-    mfa.type="text"; mfa.inputMode="numeric"; mfa.maxLength=6; mfa.required=true;
+    var dialog = openVoucherDialog("Manage batch " + safeText(String(batch.id || "").slice(0,8))), form = document.createElement("form"), submit = document.createElement("button"), result = document.createElement("div"), footer = document.createElement("footer");
     submit.type="submit"; submit.className="button primary"; submit.textContent="Reveal codes";
     form.className="voucher-form"; result.className="voucher-codes"; result.setAttribute("role","status");
-    form.append(voucherField("Current password",password),voucherField("Authenticator code",mfa)); footer.append(submit); form.append(footer); dialog.append(form,result); password.focus();
+    footer.append(submit); form.append(footer); dialog.append(form,result); submit.focus();
     form.addEventListener("submit", function (event) {
       event.preventDefault(); submit.disabled=true; result.textContent="Checking access…";
-      fetch(apiBase + "/api/v1/vouchers/batches/" + encodeURIComponent(batch.id) + "/reveal", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ password:password.value, mfa_code:mfa.value }) })
+      fetch(apiBase + "/api/v1/vouchers/batches/" + encodeURIComponent(batch.id) + "/reveal", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body:"{}" })
         .then(function (r) { if (!r.ok) return apiError(r); return r.json(); })
         .then(function (body) {
           result.replaceChildren(); (Array.isArray(body.data) ? body.data : []).forEach(function (item) {
             var line=document.createElement("div"), code=document.createElement("code"), revoke=document.createElement("button");
             line.className="voucher-code-row"; code.textContent=String(item.code || ""); revoke.type="button"; revoke.className="button"; revoke.textContent="Revoke";
-            revoke.addEventListener("click", function () { if (!window.confirm("Revoke this voucher? Active access may need an operator disconnect.")) return; revoke.disabled=true; fetch(apiBase + "/api/v1/vouchers/" + encodeURIComponent(item.voucher_id) + "/revoke", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ password:password.value, mfa_code:mfa.value }) }).then(function (r) { if (!r.ok) return apiError(r); code.textContent="Revoked"; requestBatches(true); }).catch(function (error) { result.textContent=error.message || "Revocation failed."; }).finally(function () { revoke.disabled=false; }); });
+            revoke.addEventListener("click", function () { if (!window.confirm("Revoke this voucher? Active access may need an operator disconnect.")) return; var password=window.prompt("Current password required to revoke this voucher."); if (password===null) return; var mfa=window.prompt("Authenticator code required to revoke this voucher."); if (mfa===null) return; revoke.disabled=true; fetch(apiBase + "/api/v1/vouchers/" + encodeURIComponent(item.voucher_id) + "/revoke", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ password:password, mfa_code:mfa }) }).then(function (r) { if (!r.ok) return apiError(r); code.textContent="Revoked"; requestBatches(true); }).catch(function (error) { result.textContent=error.message || "Revocation failed."; }).finally(function () { revoke.disabled=false; }); });
             line.append(code,revoke); result.append(line);
           });
         }).catch(function (error) { result.textContent=error.message || "Codes could not be retrieved."; }).finally(function () { submit.disabled=false; });

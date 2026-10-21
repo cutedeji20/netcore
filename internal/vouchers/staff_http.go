@@ -91,11 +91,7 @@ func (h *HTTP) revealBatch(w http.ResponseWriter, r *http.Request) {
 		security.WriteError(w, r, http.StatusServiceUnavailable, "VOUCHERS_UNAVAILABLE", "Voucher retrieval is unavailable.")
 		return
 	}
-	var in struct {
-		Password string `json:"password"`
-		MFACode  string `json:"mfa_code"`
-	}
-	if !decodeVoucherMutation(w, r, &in) || !validUUID(r.PathValue("id")) {
+	if !decodeVoucherMutation(w, r, &struct{}{}) || !validUUID(r.PathValue("id")) {
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Voucher retrieval request is invalid.")
 		return
 	}
@@ -108,7 +104,7 @@ func (h *HTTP) revealBatch(w http.ResponseWriter, r *http.Request) {
 		security.WriteError(w, r, http.StatusTooManyRequests, "TOO_MANY_REQUESTS", "Please wait before trying again.")
 		return
 	}
-	codes, err := h.staff.Reveal(r.Context(), p, r.PathValue("id"), in.Password, in.MFACode)
+	codes, err := h.staff.Reveal(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "Voucher retrieval is not allowed.")
 		return

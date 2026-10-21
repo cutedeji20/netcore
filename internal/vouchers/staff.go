@@ -52,11 +52,12 @@ func (s *StaffService) Revoke(ctx context.Context, principal auth.Principal, vou
 	return s.revoker.RevokeVoucher(ctx, principal.TenantID, voucherID, principal.UserID)
 }
 
-func (s *StaffService) Reveal(ctx context.Context, principal auth.Principal, batchID, password, mfaCode string) ([]IssuedCode, error) {
+// Reveal returns a batch's codes to its active buyer or issuer. An authenticated
+// session and the ownership check performed by Issuer.RevealBatch are sufficient:
+// users must not have to enter their password and TOTP again just to retrieve a
+// purchase they already own.
+func (s *StaffService) Reveal(ctx context.Context, principal auth.Principal, batchID string) ([]IssuedCode, error) {
 	if s == nil || !validUUID(principal.TenantID) || !validUUID(principal.UserID) || !validUUID(batchID) {
-		return nil, ErrCodeUnavailable
-	}
-	if err := s.stepUp.VerifyStepUp(ctx, auth.StepUpInput{Principal: principal, Password: password, MFACode: mfaCode}); err != nil {
 		return nil, ErrCodeUnavailable
 	}
 	return s.issuer.RevealBatch(ctx, principal.TenantID, principal.UserID, batchID)

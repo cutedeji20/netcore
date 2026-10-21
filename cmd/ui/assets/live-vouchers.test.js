@@ -21,3 +21,10 @@ test("code management uses its own dialog instead of expanding a table cell", ()
   assert.match(css, /\.voucher-dialog/);
   assert.match(css, /\.voucher-form/);
 });
+
+test("revealing a batch uses the authenticated session without another challenge", () => {
+  const reveal = source.slice(source.indexOf("function openManageDialog"), source.indexOf("livePage.subscribe"));
+  assert.match(reveal, /body:"\{\}"/);
+  assert.doesNotMatch(reveal, /voucherField\("Current password"/);
+  assert.doesNotMatch(reveal, /voucherField\("Authenticator code"/);
+});

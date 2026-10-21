@@ -572,18 +572,15 @@
   function renderBuyerBatch(batch) {
     var row = accountRow(String(batch.plan_name || "Internet plan"), batch.status, String(batch.issued || 0) + " issued · " + String(batch.available || 0) + " unused");
     var form = document.createElement("form");
-    var password = document.createElement("input"); password.type = "password"; password.autocomplete = "current-password"; password.placeholder = "Current password"; password.required = true;
-    var mfa = document.createElement("input"); mfa.inputMode = "numeric"; mfa.pattern = "[0-9]{6}"; mfa.maxLength = 6; mfa.placeholder = "Authenticator code"; mfa.required = true;
     var button = document.createElement("button"); button.type = "submit"; button.className = "secondary-action"; button.textContent = "Reveal codes";
     var result = document.createElement("div"); result.setAttribute("role", "status");
-    form.append(password, mfa, button); row.append(form, result);
+    form.append(button); row.append(form, result);
     form.addEventListener("submit", function (event) {
       event.preventDefault(); button.disabled = true; result.textContent = "Checking access…";
-      postJSON("/api/v1/vouchers/batches/" + encodeURIComponent(batch.id) + "/reveal", { password: password.value, mfa_code: mfa.value }).then(function (response) {
+      postJSON("/api/v1/vouchers/batches/" + encodeURIComponent(batch.id) + "/reveal", {}).then(function (response) {
         if (!response.response.ok || !Array.isArray(response.body.data)) throw new Error(humanError(response.body, "Codes could not be retrieved."));
         result.replaceChildren();
         response.body.data.forEach(function (item) { var code = document.createElement("code"); code.className = "voucher-code"; code.textContent = String(item.code || ""); result.append(code); });
-        password.value = ""; mfa.value = "";
       }).catch(function (error) { result.textContent = error.message || "Codes could not be retrieved."; }).finally(function () { button.disabled = false; });
     });
     voucherBatchList.append(row);

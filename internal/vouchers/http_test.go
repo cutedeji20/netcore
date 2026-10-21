@@ -34,7 +34,7 @@ func TestRevealRateLimitAndNoStore(t *testing.T) {
 	h.ConfigureStaff(service)
 	limiter := &revealLimiterStub{}
 	h.ConfigureRevealLimiter(limiter)
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/vouchers/batches/33333333-3333-4333-8333-333333333333/reveal", strings.NewReader(`{"password":"secret","mfa_code":"123456"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/vouchers/batches/33333333-3333-4333-8333-333333333333/reveal", strings.NewReader(`{}`))
 	request.SetPathValue("id", "33333333-3333-4333-8333-333333333333")
 	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: voucherTestTenantID, UserID: "22222222-2222-4222-8222-222222222222"}))
 	response := httptest.NewRecorder()
@@ -43,7 +43,7 @@ func TestRevealRateLimitAndNoStore(t *testing.T) {
 		t.Fatalf("blocked reveal status=%d calls=%d", response.Code, store.revealed)
 	}
 	limiter.allowed = true
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/vouchers/batches/33333333-3333-4333-8333-333333333333/reveal", strings.NewReader(`{"password":"secret","mfa_code":"123456"}`))
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/vouchers/batches/33333333-3333-4333-8333-333333333333/reveal", strings.NewReader(`{}`))
 	request.SetPathValue("id", "33333333-3333-4333-8333-333333333333")
 	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: voucherTestTenantID, UserID: "22222222-2222-4222-8222-222222222222"}))
 	response = httptest.NewRecorder()

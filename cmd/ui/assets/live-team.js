@@ -79,7 +79,7 @@ if (typeof window !== "undefined") (function () {
     teamStepUpFields().forEach(function (field) {
       var label = document.createElement("label"); var input = document.createElement("input");
       label.className = "team-field"; label.appendChild(document.createTextNode(field.label));
-      input.name = field.name; input.type = field.type; input.required = true; input.autocomplete = field.name === "password" ? "current-password" : "one-time-code"; input.inputMode = field.name === "mfa_code" ? "numeric" : "text"; input.pattern = field.pattern || ""; input.maxLength = field.maxLength; label.appendChild(input); form.appendChild(label);
+      input.name = field.name; input.type = field.type; input.required = true; input.autocomplete = field.name === "password" ? "current-password" : "one-time-code"; input.inputMode = field.name === "mfa_code" ? "numeric" : "text"; if (field.pattern) input.pattern = field.pattern; input.maxLength = field.maxLength; label.appendChild(input); form.appendChild(label);
     });
     cancel.type = "button"; cancel.className = "button"; cancel.textContent = "Cancel"; cancel.addEventListener("click", function () { closeDialog(backdrop); });
     submit.type = "submit"; submit.className = "button primary"; submit.textContent = submitLabel;
