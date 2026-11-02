@@ -53,6 +53,23 @@ func TestRevealRateLimitAndNoStore(t *testing.T) {
 	}
 }
 
+func TestPrintBatchReturnsPrivatePDF(t *testing.T) {
+	h, _ := newTestHTTP(t)
+	store := &issuingStoreStub{}
+	issuer, _ := NewIssuer(store, voucherTestWrapper{}, "https://vault.test/keys/voucher/1")
+	service, _ := NewStaffService(issuer, &revokerStub{}, staffStepUpStub{})
+	h.ConfigureStaff(service)
+	h.ConfigureRevealLimiter(&revealLimiterStub{allowed: true})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/vouchers/batches/33333333-3333-4333-8333-333333333333/print", strings.NewReader(`{}`))
+	request.SetPathValue("id", "33333333-3333-4333-8333-333333333333")
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: voucherTestTenantID, UserID: "22222222-2222-4222-8222-222222222222"}))
+	response := httptest.NewRecorder()
+	h.printBatch(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/pdf" || response.Header().Get("Cache-Control") != "private, no-store" || !strings.HasPrefix(response.Body.String(), "%PDF-1.4") {
+		t.Fatalf("print status=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
+	}
+}
+
 const voucherTestTenantID = "11111111-1111-4111-8111-111111111111"
 
 type memoryStore struct {

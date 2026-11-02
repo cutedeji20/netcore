@@ -49,6 +49,12 @@ type GatewayProbe interface {
 	Check(context.Context) error
 }
 
+// ActiveGatewaySelector returns the tenant's operator-selected provider for
+// new checkout attempts. It contains no credentials.
+type ActiveGatewaySelector interface {
+	ActivePaymentGateway(context.Context, string) (string, bool, error)
+}
+
 type GatewayInitialization struct {
 	Reference     string
 	AmountMinor   int64
@@ -169,9 +175,43 @@ type ActivationResult struct {
 type Service struct {
 	store         Store
 	gateway       Gateway
+	gateways      map[string]Gateway
+	selector      ActiveGatewaySelector
 	callbackURL   string
 	voucherOrders VoucherOrderStore
 	voucherIssuer VoucherIssuer
+}
+
+// ConfigureGatewaySelector enables runtime provider changes without an API or
+// worker restart. The configured gateway remains the safe fallback until an
+// administrator explicitly selects a provider.
+func (s *Service) ConfigureGatewaySelector(selector ActiveGatewaySelector) error {
+	if s == nil || selector == nil {
+		return errors.New("payments: gateway selector is required")
+	}
+	s.selector = selector
+	return nil
+}
+
+func (s *Service) activeGateway(ctx context.Context, tenantID string) (Gateway, error) {
+	if s == nil || s.gateway == nil {
+		return nil, ErrGatewayUnavailable
+	}
+	if s.selector == nil {
+		return s.gateway, nil
+	}
+	provider, found, err := s.selector.ActivePaymentGateway(ctx, tenantID)
+	if err != nil {
+		return nil, ErrGatewayUnavailable
+	}
+	if !found {
+		return s.gateway, nil
+	}
+	gateway := s.gateways[strings.ToLower(strings.TrimSpace(provider))]
+	if gateway == nil {
+		return nil, ErrGatewayUnavailable
+	}
+	return gateway, nil
 }
 
 func NewService(store Store, gateway Gateway, callbackURLs ...string) (*Service, error) {
@@ -188,7 +228,30 @@ func NewService(store Store, gateway Gateway, callbackURLs ...string) (*Service,
 	if len(callbackURLs) == 1 {
 		callbackURL = strings.TrimSpace(callbackURLs[0])
 	}
-	return &Service{store: store, gateway: gateway, callbackURL: callbackURL}, nil
+	return &Service{store: store, gateway: gateway, gateways: map[string]Gateway{strings.ToLower(strings.TrimSpace(gateway.Name())): gateway}, callbackURL: callbackURL}, nil
+}
+
+// ConfigureGateways registers providers that may own historical or concurrent
+// payment attempts. The active gateway still controls new checkout creation;
+// verification always resolves the provider frozen on the payment row.
+func (s *Service) ConfigureGateways(gateways ...Gateway) error {
+	if s == nil || s.gateway == nil {
+		return errors.New("payments: service is unavailable")
+	}
+	if s.gateways == nil {
+		s.gateways = make(map[string]Gateway)
+	}
+	for _, gateway := range gateways {
+		if gateway == nil || strings.TrimSpace(gateway.Name()) == "" {
+			return errors.New("payments: registered gateway is invalid")
+		}
+		name := strings.ToLower(strings.TrimSpace(gateway.Name()))
+		if existing, found := s.gateways[name]; found && existing != gateway {
+			return fmt.Errorf("payments: duplicate gateway %q", name)
+		}
+		s.gateways[name] = gateway
+	}
+	return nil
 }
 
 func (s *Service) Quote(ctx context.Context, tenantID, userID, planID string) (PlanQuote, error) {
@@ -208,10 +271,11 @@ func (s *Service) Initiate(ctx context.Context, tenantID, userID, planID, device
 	if s == nil || s.store == nil || s.gateway == nil || !validUUID(tenantID) || !validUUID(userID) || !validUUID(planID) || !validUUID(deviceID) || !validIdempotencyKey(idempotencyKey) {
 		return Checkout{}, ErrInvalidRequest
 	}
-	if !s.gateway.Available() {
+	gateway, err := s.activeGateway(ctx, tenantID)
+	if err != nil || !gateway.Available() {
 		return Checkout{}, ErrGatewayUnavailable
 	}
-	if probe, ok := s.gateway.(GatewayProbe); ok {
+	if probe, ok := gateway.(GatewayProbe); ok {
 		if err := probe.Check(ctx); err != nil {
 			return Checkout{}, ErrGatewayUnavailable
 		}
@@ -222,7 +286,7 @@ func (s *Service) Initiate(ctx context.Context, tenantID, userID, planID, device
 	}
 	requestHash := initiationHash(planID, deviceID)
 	pending, replay, err := s.store.PrepareInitiation(ctx, Initiation{
-		TenantID: tenantID, UserID: userID, PlanID: planID, DeviceID: deviceID, Gateway: s.gateway.Name(),
+		TenantID: tenantID, UserID: userID, PlanID: planID, DeviceID: deviceID, Gateway: gateway.Name(),
 		Reference: reference, IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 	})
 	if err != nil {
@@ -232,7 +296,7 @@ func (s *Service) Initiate(ctx context.Context, tenantID, userID, planID, device
 		return *replay, nil
 	}
 
-	gatewayCheckout, err := s.gateway.Initialize(ctx, GatewayInitialization{
+	gatewayCheckout, err := gateway.Initialize(ctx, GatewayInitialization{
 		Reference: pending.Reference, AmountMinor: pending.AmountMinor,
 		Currency: pending.Currency, CustomerEmail: pending.CustomerEmail, CallbackURL: s.callbackURL,
 	})
@@ -256,15 +320,13 @@ func (s *Service) Verify(ctx context.Context, tenantID, userID, reference string
 	if s == nil || s.store == nil || s.gateway == nil || !validUUID(tenantID) || !validUUID(userID) || !validReference(reference) {
 		return ActivationResult{}, ErrInvalidRequest
 	}
-	if !s.gateway.Available() {
-		return ActivationResult{}, ErrGatewayUnavailable
-	}
 	payment, err := s.store.PaymentForVerification(ctx, tenantID, userID, reference)
-	if err != nil || payment.Gateway != s.gateway.Name() {
-		if err != nil {
-			return ActivationResult{}, err
-		}
-		return ActivationResult{}, ErrPaymentNotFound
+	if err != nil {
+		return ActivationResult{}, err
+	}
+	gateway := s.gateways[strings.ToLower(strings.TrimSpace(payment.Gateway))]
+	if gateway == nil || !gateway.Available() {
+		return ActivationResult{}, ErrGatewayUnavailable
 	}
 	if payment.Status == StatusSuccess {
 		if payment.VoucherOrderID != "" {
@@ -279,7 +341,7 @@ func (s *Service) Verify(ctx context.Context, tenantID, userID, reference string
 	if payment.Status != StatusPending {
 		return ActivationResult{}, ErrPaymentNotPending
 	}
-	verification, err := s.gateway.Verify(ctx, payment.Reference)
+	verification, err := gateway.Verify(ctx, payment.Reference)
 	if err != nil {
 		return ActivationResult{}, fmt.Errorf("%w: %v", ErrGatewayUnavailable, err)
 	}
@@ -330,12 +392,10 @@ func newReference() (string, error) {
 	if _, err := rand.Read(value[:]); err != nil {
 		return "", err
 	}
-	// Paystack permits alphanumerics plus '-', '.', and '=' in a reference.
-	// A URL-safe base64 value would occasionally produce '_', and the old
-	// `pay_` prefix was itself outside that documented alphabet. Hex gives a
-	// stable 36-character provider-compatible reference without weakening its
-	// cryptographic unpredictability.
-	return "pay-" + hex.EncodeToString(value[:]), nil
+	// PalmPay caps merchant order IDs at 32 characters. Keep 112 random bits,
+	// which is ample for collision resistance, and retain validation support
+	// for previously-created 36-character Paystack/Squad references.
+	return "pay-" + hex.EncodeToString(value[:14]), nil
 }
 
 func validIdempotencyKey(value string) bool {
@@ -353,7 +413,7 @@ func validIdempotencyKey(value string) bool {
 
 func validReference(value string) bool {
 	value = strings.TrimSpace(value)
-	if len(value) != 36 || (!strings.HasPrefix(value, "pay-") && !strings.HasPrefix(value, "pay_")) {
+	if (len(value) != 32 && len(value) != 36) || (!strings.HasPrefix(value, "pay-") && !strings.HasPrefix(value, "pay_")) {
 		return false
 	}
 	for _, char := range value[4:] {

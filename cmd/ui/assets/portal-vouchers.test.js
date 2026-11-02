@@ -11,6 +11,7 @@ test("voucher codes are normalized and masked without revealing the full code", 
 });
 
 test("new short and previously issued long voucher codes are accepted", () => {
+	assert.equal(vouchers.validateVoucherCode("NC-2345-6789-ABCD"), "");
   assert.equal(vouchers.validateVoucherCode("NC-ABCDEF-GHJKLM-NPQRST"), "");
   assert.equal(vouchers.validateVoucherCode("NC-ABCDEFGH-JKLMNPQR-STUVWXYZ-23456723"), "");
   assert.equal(vouchers.validateVoucherCode(""), "Enter a voucher code.");
@@ -25,8 +26,8 @@ test("guest requests only include the normalized code and connection context", (
     hotspot_login_url: "https://portal.example/login"
   };
 
-  assert.deepEqual(vouchers.guestRequest("  NC-ABCDEF-GHJKLM-NPQRST  ", connection), {
-    code: "NCABCDEFGHJKLMNPQRST",
+  assert.deepEqual(vouchers.guestRequest("  NC-2345-6789-ABCD  ", connection), {
+    code: "NC23456789ABCD",
     client_mac: "00:11:22:33:44:55",
     nas_address: "10.10.0.1",
     hotspot_login_url: "https://portal.example/login"

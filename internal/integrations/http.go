@@ -32,16 +32,49 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		return errors.New("integrations: mux, session authentication, and service are required")
 	}
 	mux.Handle("GET /api/v1/integrations", sessions.RequireAuth(auth.RequirePermission("integration.read", http.HandlerFunc(h.list))))
+	mux.Handle("PUT /api/v1/integrations/payment-gateway", sessions.RequireAuth(auth.RequirePermission("integration.write", http.HandlerFunc(h.selectPaymentGateway))))
 	mux.Handle("PUT /api/v1/integrations/resend", sessions.RequireAuth(auth.RequirePermission("integration.write", http.HandlerFunc(h.configureResend))))
 	mux.Handle("PUT /api/v1/integrations/paystack", sessions.RequireAuth(auth.RequirePermission("integration.write", http.HandlerFunc(h.configurePaystack))))
 	mux.Handle("PUT /api/v1/integrations/squad", sessions.RequireAuth(auth.RequirePermission("integration.write", http.HandlerFunc(h.configureSquad))))
+	mux.Handle("PUT /api/v1/integrations/palmpay", sessions.RequireAuth(auth.RequirePermission("integration.write", http.HandlerFunc(h.configurePalmPay))))
 	mux.Handle("POST /api/v1/integrations/resend/disable", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disable(ProviderResend))))
 	mux.Handle("POST /api/v1/integrations/paystack/disable", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disable(ProviderPaystack))))
 	mux.Handle("POST /api/v1/integrations/squad/disable", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disable(ProviderSquad))))
+	mux.Handle("POST /api/v1/integrations/palmpay/disable", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disable(ProviderPalmPay))))
 	mux.Handle("DELETE /api/v1/integrations/resend", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disconnect(ProviderResend))))
 	mux.Handle("DELETE /api/v1/integrations/paystack", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disconnect(ProviderPaystack))))
 	mux.Handle("DELETE /api/v1/integrations/squad", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disconnect(ProviderSquad))))
+	mux.Handle("DELETE /api/v1/integrations/palmpay", sessions.RequireAuth(auth.RequirePermission("integration.write", h.disconnect(ProviderPalmPay))))
 	return nil
+}
+
+func (h *HTTP) selectPaymentGateway(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if !principal.HasPermission("integration.write") {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "You do not have permission to manage integrations.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxConfigureBodyBytes)
+	defer r.Body.Close()
+	var input struct {
+		Provider string `json:"provider"`
+		Password string `json:"password"`
+		MFACode  string `json:"mfa_code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "A valid payment gateway is required.")
+		return
+	}
+	provider := Provider(strings.ToLower(strings.TrimSpace(input.Provider)))
+	err := h.service.SelectPaymentGateway(r.Context(), principal, input.Password, input.MFACode, provider)
+	if h.writeConfigureError(w, r, err, "Select an active Paystack, Squad, or PalmPay integration.") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {
@@ -152,6 +185,56 @@ func (h *HTTP) configureSquad(w http.ResponseWriter, r *http.Request) {
 	defer clear(credential)
 	err := h.service.Configure(r.Context(), ConfigureInput{Principal: principal, Password: input.Password, MFACode: input.MFACode, Provider: ProviderSquad, Credential: credential, SquadMode: input.Mode})
 	if h.writeConfigureError(w, r, err, "A valid Squad configuration is required.") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *HTTP) configurePalmPay(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	if !principal.HasPermission("integration.write") {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "You do not have permission to manage integrations.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxConfigureBodyBytes)
+	defer r.Body.Close()
+	var input struct {
+		Authorization      string `json:"authorization"`
+		MerchantPrivateKey string `json:"merchant_private_key"`
+		PalmPayPublicKey   string `json:"palmpay_public_key"`
+		CountryCode        string `json:"country_code"`
+		Mode               string `json:"mode"`
+		Password           string `json:"password"`
+		MFACode            string `json:"mfa_code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || strings.TrimSpace(input.Authorization) == "" || strings.TrimSpace(input.MerchantPrivateKey) == "" || strings.TrimSpace(input.PalmPayPublicKey) == "" {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "A valid PalmPay configuration is required.")
+		return
+	}
+	countryCode := strings.ToUpper(strings.TrimSpace(input.CountryCode))
+	if countryCode == "" {
+		countryCode = "NG"
+	}
+	credential, err := json.Marshal(struct {
+		Authorization      string `json:"authorization"`
+		MerchantPrivateKey string `json:"merchant_private_key"`
+		PalmPayPublicKey   string `json:"palmpay_public_key"`
+		CountryCode        string `json:"country_code"`
+	}{
+		Authorization: strings.TrimSpace(input.Authorization), MerchantPrivateKey: strings.TrimSpace(input.MerchantPrivateKey),
+		PalmPayPublicKey: strings.TrimSpace(input.PalmPayPublicKey), CountryCode: countryCode,
+	})
+	if err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "A valid PalmPay configuration is required.")
+		return
+	}
+	defer clear(credential)
+	err = h.service.Configure(r.Context(), ConfigureInput{Principal: principal, Password: input.Password, MFACode: input.MFACode, Provider: ProviderPalmPay, Credential: credential, PalmPayMode: input.Mode})
+	if h.writeConfigureError(w, r, err, "A valid PalmPay configuration is required.") {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

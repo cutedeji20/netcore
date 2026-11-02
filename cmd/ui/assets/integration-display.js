@@ -10,7 +10,9 @@
 
   var providers = [
     { provider: "resend", name: "Resend", fallback: "Email verification and receipts" },
-    { provider: "squad", name: "Squad", fallback: "Checkout and payment verification" }
+    { provider: "paystack", name: "Paystack", fallback: "Checkout and payment verification" },
+    { provider: "squad", name: "Squad", fallback: "Checkout and payment verification" },
+    { provider: "palmpay", name: "PalmPay", fallback: "Checkout and payment verification" }
   ];
 
   function labelStatus(value) {
@@ -22,13 +24,13 @@
   function toCards(items) {
     var configured = {};
     (Array.isArray(items) ? items : []).forEach(function (item) {
-      if (item && (item.provider === "resend" || item.provider === "squad" || item.provider === "paystack")) configured[item.provider] = item;
+      if (item && (item.provider === "resend" || item.provider === "squad" || item.provider === "paystack" || item.provider === "palmpay")) configured[item.provider] = item;
     });
     return providers.map(function (definition) {
       var item = configured[definition.provider];
-      if (!item) return { provider: definition.provider, name: definition.name, status: "Disconnected", detail: definition.fallback, action: "Connect" };
-      var detail = definition.provider === "resend" ? String(item.sender_email || definition.fallback) : (String(item.squad_mode || item.paystack_mode || "") === "LIVE" ? "Live mode" : "Test mode");
-      return { provider: definition.provider, name: definition.name, status: labelStatus(item.status), detail: detail, action: item.status === "ACTIVE" ? "Update" : "Connect" };
+      if (!item) return { provider: definition.provider, name: definition.name, status: "Disconnected", detail: definition.fallback, action: "Connect", paymentDefault: false };
+      var detail = definition.provider === "resend" ? String(item.sender_email || definition.fallback) : (String(item.squad_mode || item.paystack_mode || item.palmpay_mode || "") === "LIVE" ? "Live mode" : "Test mode");
+      return { provider: definition.provider, name: definition.name, status: labelStatus(item.status), detail: detail, action: item.status === "ACTIVE" ? "Update" : "Connect", paymentDefault: item.payment_default === true };
     });
   }
 

@@ -142,6 +142,63 @@ func (s *PostgresStore) RevealBatch(ctx context.Context, wrapper envelope.KeyWra
 	return codes, nil
 }
 
+func (s *PostgresStore) PrintableBatch(ctx context.Context, wrapper envelope.KeyWrapper, tenantID, actorUserID, batchID string) (PrintableBatch, error) {
+	var batch PrintableBatch
+	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var authorized bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1
+			FROM voucher_batches b
+			JOIN users u ON u.id=$3::uuid AND u.tenant_id=b.tenant_id AND u.status='ACTIVE'
+			WHERE b.tenant_id=$1::uuid AND b.id=$2::uuid
+			  AND (
+				b.buyer_user_id=u.id OR b.issuer_user_id=u.id OR EXISTS (
+					SELECT 1 FROM user_roles ur
+					JOIN role_permissions rp ON rp.role_id=ur.role_id
+					JOIN permissions p ON p.id=rp.permission_id
+					WHERE ur.user_id=u.id AND p.name='voucher.read'
+				)
+			  )
+		)`, tenantID, batchID, actorUserID).Scan(&authorized); err != nil {
+			return err
+		}
+		if !authorized {
+			return ErrCodeUnavailable
+		}
+		if err := tx.QueryRow(ctx, `SELECT b.id::text,p.name,p.duration_seconds,p.quota_bytes,p.max_devices,b.expires_at
+			FROM voucher_batches b JOIN plans p ON p.id=b.plan_id AND p.tenant_id=b.tenant_id
+			WHERE b.tenant_id=$1::uuid AND b.id=$2::uuid`, tenantID, batchID).Scan(&batch.ID, &batch.PlanName, &batch.DurationSeconds, &batch.QuotaBytes, &batch.MaxDevices, &batch.ExpiresAt); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT id::text,code_ciphertext,code_nonce,code_wrapped_dek,code_kek_key_id FROM vouchers WHERE tenant_id=$1::uuid AND batch_id=$2::uuid ORDER BY order_position NULLS LAST,id`, tenantID, batchID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			var record CodeEnvelope
+			if err := rows.Scan(&id, &record.Ciphertext, &record.Nonce, &record.WrappedDEK, &record.KEKKeyID); err != nil {
+				return err
+			}
+			code, err := OpenCode(ctx, wrapper, tenantID, id, record)
+			if err != nil {
+				return ErrCodeUnavailable
+			}
+			batch.Codes = append(batch.Codes, IssuedCode{VoucherID: id, Code: code})
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO audit_logs(tenant_id,actor_type,actor_id,action,resource_type,resource_id,metadata) VALUES($1::uuid,'USER',$2::uuid,'VOUCHER_BATCH_PRINTED','voucher_batches',$3::uuid,jsonb_build_object('quantity',$4::integer,'pages',$5::integer,'tickets_per_page',12))`, tenantID, actorUserID, batchID, len(batch.Codes), (len(batch.Codes)+11)/12)
+		return err
+	})
+	if err != nil {
+		return PrintableBatch{}, err
+	}
+	return batch, nil
+}
+
 func nullableVoucherUUID(value string) any {
 	if value == "" {
 		return nil

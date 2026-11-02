@@ -80,7 +80,7 @@ func run() error {
 		}
 	}
 
-	webhookProcessor, err := configuredWebhookProcessor(startupCtx, cfg, postgres)
+	webhookProcessors, err := configuredWebhookProcessors(startupCtx, cfg, postgres)
 	if err != nil {
 		return err
 	}
@@ -96,7 +96,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	log.Info("worker started", slog.Bool("webhooks_enabled", webhookProcessor != nil), slog.Bool("receipts_enabled", receiptProcessor != nil), slog.Bool("expiry_enforcement_enabled", true), slog.Bool("router_telemetry_enabled", telemetry != nil))
+	log.Info("worker started", slog.Bool("webhooks_enabled", len(webhookProcessors) > 0), slog.Bool("receipts_enabled", receiptProcessor != nil), slog.Bool("expiry_enforcement_enabled", true), slog.Bool("router_telemetry_enabled", telemetry != nil))
 	ticker := time.NewTicker(cfg.Payments.WebhookPollInterval)
 	defer ticker.Stop()
 	nextExpiry := time.Time{}
@@ -120,7 +120,7 @@ func run() error {
 			}
 			nextExpiry = time.Now().Add(time.Minute)
 		}
-		if webhookProcessor != nil {
+		for _, webhookProcessor := range webhookProcessors {
 			webhookWorked, err := webhookProcessor.ProcessOne(ctx)
 			if err != nil {
 				log.Error("payment webhook processing failed", slog.String("error", err.Error()))
@@ -148,7 +148,7 @@ func run() error {
 	}
 }
 
-func configuredWebhookProcessor(ctx context.Context, cfg *config.Config, db *database.Pool) (*payments.WebhookProcessor, error) {
+func configuredWebhookProcessors(ctx context.Context, cfg *config.Config, db *database.Pool) ([]*payments.WebhookProcessor, error) {
 	if cfg == nil || db == nil {
 		return nil, fmt.Errorf("payment worker configuration is required")
 	}
@@ -171,18 +171,27 @@ func configuredWebhookProcessor(ctx context.Context, cfg *config.Config, db *dat
 	if err != nil {
 		return nil, err
 	}
+	squad, err := payments.NewTenantSquadGateway(credentials, tenant.ID, nil)
+	if err != nil {
+		return nil, err
+	}
+	paystack, err := payments.NewTenantPaystackGateway(credentials, tenant.ID, nil)
+	if err != nil {
+		return nil, err
+	}
+	palmpay, err := payments.NewTenantPalmPayGateway(credentials, tenant.ID, nil)
+	if err != nil {
+		return nil, err
+	}
+	gateways := []payments.Gateway{squad, paystack, palmpay}
 	var gateway payments.Gateway
 	switch strings.ToLower(strings.TrimSpace(cfg.Payments.Gateway)) {
 	case "disabled", "squad", "":
-		gateway, err = payments.NewTenantSquadGateway(credentials, tenant.ID, nil)
-		if err != nil {
-			return nil, err
-		}
+		gateway = squad
 	case "paystack":
-		gateway, err = payments.NewTenantPaystackGateway(credentials, tenant.ID, nil)
-		if err != nil {
-			return nil, err
-		}
+		gateway = paystack
+	case "palmpay":
+		gateway = palmpay
 	default:
 		return nil, fmt.Errorf("unsupported payment gateway %q", cfg.Payments.Gateway)
 	}
@@ -192,6 +201,12 @@ func configuredWebhookProcessor(ctx context.Context, cfg *config.Config, db *dat
 	}
 	service, err := payments.NewService(paymentStore, gateway)
 	if err != nil {
+		return nil, err
+	}
+	if err := service.ConfigureGateways(gateways...); err != nil {
+		return nil, err
+	}
+	if err := service.ConfigureGatewaySelector(credentials); err != nil {
 		return nil, err
 	}
 	if cfg.VoucherCrypto.Backend == "azure-key-vault" {
@@ -211,7 +226,15 @@ func configuredWebhookProcessor(ctx context.Context, cfg *config.Config, db *dat
 			return nil, err
 		}
 	}
-	return payments.NewWebhookProcessor(paymentStore, service, gateway.Name(), cfg.Payments.WebhookMaxAttempts)
+	processors := make([]*payments.WebhookProcessor, 0, len(gateways))
+	for _, registered := range gateways {
+		processor, err := payments.NewWebhookProcessor(paymentStore, service, registered.Name(), cfg.Payments.WebhookMaxAttempts)
+		if err != nil {
+			return nil, err
+		}
+		processors = append(processors, processor)
+	}
+	return processors, nil
 }
 
 func configuredReceiptProcessor(ctx context.Context, cfg *config.Config, db *database.Pool) (*payments.ReceiptProcessor, error) {

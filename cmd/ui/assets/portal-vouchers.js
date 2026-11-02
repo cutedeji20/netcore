@@ -20,7 +20,7 @@
       return "Voucher codes use letters and numbers only.";
     }
     var code = normalizeVoucherCode(raw);
-    if (!/^NC(?:[A-Z2-7]{18}|[A-Z2-7]{32})$/.test(code)) {
+    if (!/^NC(?:[2-9A-HJKMNP-Z]{12}|[A-Z2-7]{18}|[A-Z2-7]{32})$/.test(code)) {
       return "Enter a valid voucher code.";
     }
     return "";

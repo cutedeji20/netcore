@@ -26,7 +26,20 @@ func NewRedeemer(store RedemptionStore) (*Redeemer, error) {
 
 func validBearerCode(code string) bool {
 	normalized := normalizeCode(code)
-	if (len(normalized) != 20 && len(normalized) != 34) || !strings.HasPrefix(normalized, "NC") {
+	if !strings.HasPrefix(normalized, "NC") {
+		return false
+	}
+	if len(normalized) == 14 {
+		for _, c := range normalized[2:] {
+			if !strings.ContainsRune(voucherAlphabet, c) {
+				return false
+			}
+		}
+		return true
+	}
+	// Preserve both voucher formats issued before the customer-entry format
+	// was shortened. Those formats used RFC 4648 base32 characters.
+	if len(normalized) != 20 && len(normalized) != 34 {
 		return false
 	}
 	for _, c := range normalized[2:] {

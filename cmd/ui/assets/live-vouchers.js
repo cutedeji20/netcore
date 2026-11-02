@@ -268,10 +268,18 @@
   }
 
   function openManageDialog(batch) {
-    var dialog = openVoucherDialog("Manage batch " + safeText(String(batch.id || "").slice(0,8))), form = document.createElement("form"), submit = document.createElement("button"), result = document.createElement("div"), footer = document.createElement("footer");
+    var dialog = openVoucherDialog("Manage batch " + safeText(String(batch.id || "").slice(0,8))), form = document.createElement("form"), submit = document.createElement("button"), print = document.createElement("button"), result = document.createElement("div"), footer = document.createElement("footer");
     submit.type="submit"; submit.className="button primary"; submit.textContent="Reveal codes";
+	print.type="button"; print.className="button"; print.textContent="Print PDF (12 per page)";
     form.className="voucher-form"; result.className="voucher-codes"; result.setAttribute("role","status");
-    footer.append(submit); form.append(footer); dialog.append(form,result); submit.focus();
+	footer.append(submit,print); form.append(footer); dialog.append(form,result); submit.focus();
+	print.addEventListener("click", function () {
+	  print.disabled=true; result.textContent="Preparing printable vouchers…";
+	  fetch(apiBase + "/api/v1/vouchers/batches/" + encodeURIComponent(batch.id) + "/print", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json","Accept":"application/pdf"}, body:"{}" })
+	    .then(function (response) { if (!response.ok) return apiError(response); return response.blob(); })
+	    .then(function (blob) { var url=URL.createObjectURL(blob), link=document.createElement("a"); link.href=url; link.download="voucher-batch-"+String(batch.id || "").slice(0,8)+".pdf"; document.body.append(link); link.click(); link.remove(); window.setTimeout(function () { URL.revokeObjectURL(url); },1000); result.textContent="Printable PDF downloaded."; })
+	    .catch(function (error) { result.textContent=error.message || "Printable vouchers could not be created."; }).finally(function () { print.disabled=false; });
+	});
     form.addEventListener("submit", function (event) {
       event.preventDefault(); submit.disabled=true; result.textContent="Checking access…";
       fetch(apiBase + "/api/v1/vouchers/batches/" + encodeURIComponent(batch.id) + "/reveal", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body:"{}" })

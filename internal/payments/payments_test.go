@@ -56,6 +56,7 @@ func (s *memoryPaymentStore) ActivateVerified(_ context.Context, activation Acti
 }
 
 type memoryGateway struct {
+	name           string
 	available      bool
 	checkout       GatewayCheckout
 	verify         GatewayVerification
@@ -66,7 +67,22 @@ type memoryGateway struct {
 	checkErr       error
 }
 
-func (g *memoryGateway) Name() string    { return "paystack" }
+type memoryGatewaySelector struct {
+	provider string
+	found    bool
+	err      error
+}
+
+func (s memoryGatewaySelector) ActivePaymentGateway(context.Context, string) (string, bool, error) {
+	return s.provider, s.found, s.err
+}
+
+func (g *memoryGateway) Name() string {
+	if g.name != "" {
+		return g.name
+	}
+	return "paystack"
+}
 func (g *memoryGateway) Available() bool { return g.available }
 func (g *memoryGateway) Initialize(_ context.Context, in GatewayInitialization) (GatewayCheckout, error) {
 	g.initCalls++
@@ -108,6 +124,54 @@ func TestInitiateFreezesServerPaymentAndReturnsOnlyCheckout(t *testing.T) {
 	}
 	if store.saveCalls != 1 {
 		t.Fatalf("checkout was not persisted for idempotent replay: save calls=%d", store.saveCalls)
+	}
+}
+
+func TestVerifyUsesProviderFrozenOnPaymentAfterActiveGatewaySwitch(t *testing.T) {
+	reference := "pay-0123456789abcdef0123456789ab"
+	store := &memoryPaymentStore{payment: Payment{
+		ID: "payment", SubscriptionID: "subscription", Gateway: "squad", Reference: reference,
+		AmountMinor: 500000, Currency: "NGN", Status: StatusPending,
+	}}
+	active := &memoryGateway{name: "palmpay", available: true}
+	historical := &memoryGateway{name: "squad", available: true, verify: GatewayVerification{
+		Reference: reference, Status: StatusSuccess, AmountMinor: 500000, Currency: "NGN", VerifiedAt: time.Now().UTC(),
+	}}
+	service, err := NewService(store, active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConfigureGateways(historical); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Verify(context.Background(), paymentTestTenant, paymentTestUser, reference); err != nil {
+		t.Fatal(err)
+	}
+	if historical.verifyCalls != 1 || active.verifyCalls != 0 {
+		t.Fatalf("historical calls=%d active calls=%d", historical.verifyCalls, active.verifyCalls)
+	}
+}
+
+func TestInitiateUsesRuntimeSelectedGatewayForNewPayment(t *testing.T) {
+	store := &memoryPaymentStore{pending: PendingPayment{AmountMinor: 500000, Currency: "NGN", CustomerEmail: "buyer@example.test"}}
+	fallback := &memoryGateway{name: "paystack", available: true, checkout: GatewayCheckout{AuthorizationURL: "https://paystack.example.test/pay"}}
+	selected := &memoryGateway{name: "squad", available: true, checkout: GatewayCheckout{AuthorizationURL: "https://squad.example.test/pay"}}
+	service, err := NewService(store, fallback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConfigureGateways(selected); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConfigureGatewaySelector(memoryGatewaySelector{provider: "squad", found: true}); err != nil {
+		t.Fatal(err)
+	}
+	checkout, err := service.Initiate(context.Background(), paymentTestTenant, paymentTestUser, paymentTestPlan, paymentTestDevice, "runtime-gateway-key-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkout.AuthorizationURL != "https://squad.example.test/pay" || store.prepareInput.Gateway != "squad" || selected.initCalls != 1 || fallback.initCalls != 0 {
+		t.Fatalf("checkout=%#v initiation=%#v selected=%d fallback=%d", checkout, store.prepareInput, selected.initCalls, fallback.initCalls)
 	}
 }
 

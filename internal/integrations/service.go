@@ -2,6 +2,11 @@ package integrations
 
 import (
 	"context"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/mail"
@@ -38,6 +43,8 @@ type Record struct {
 	SenderEmail       string
 	PaystackMode      string
 	SquadMode         string
+	PalmPayMode       string
+	PaymentDefault    bool
 	LastTestedAt      time.Time
 	LastTestSucceeded bool
 	ActivatedAt       time.Time
@@ -54,6 +61,10 @@ type Store interface {
 	Disconnect(context.Context, string, Provider, string, time.Time) error
 }
 
+type paymentGatewaySelectionStore interface {
+	SetActivePaymentGateway(context.Context, string, Provider, string, time.Time) error
+}
+
 // Snapshot is safe to return to a privileged browser. It deliberately omits
 // every envelope field and every Key Vault identifier.
 type Snapshot struct {
@@ -62,6 +73,8 @@ type Snapshot struct {
 	SenderEmail       string     `json:"sender_email,omitempty"`
 	PaystackMode      string     `json:"paystack_mode,omitempty"`
 	SquadMode         string     `json:"squad_mode,omitempty"`
+	PalmPayMode       string     `json:"palmpay_mode,omitempty"`
+	PaymentDefault    bool       `json:"payment_default"`
 	LastTestedAt      *time.Time `json:"last_tested_at,omitempty"`
 	LastTestSucceeded *bool      `json:"last_test_succeeded,omitempty"`
 	ActivatedAt       time.Time  `json:"activated_at"`
@@ -93,6 +106,7 @@ type ConfigureInput struct {
 	SenderEmail  string
 	PaystackMode string
 	SquadMode    string
+	PalmPayMode  string
 }
 
 type Service struct {
@@ -137,7 +151,7 @@ func (s *Service) Configure(ctx context.Context, input ConfigureInput) error {
 	if err := s.stepUp.VerifyStepUp(ctx, auth.StepUpInput{Principal: input.Principal, Password: input.Password, MFACode: input.MFACode}); err != nil {
 		return ErrStepUpFailed
 	}
-	validated := input.Provider != ProviderSquad
+	validated := input.Provider != ProviderSquad && input.Provider != ProviderPalmPay
 	if validated {
 		if err := s.validator.Validate(ctx, input); err != nil {
 			return ErrCredentialInvalid
@@ -150,16 +164,22 @@ func (s *Service) Configure(ctx context.Context, input ConfigureInput) error {
 	now := s.now().UTC()
 	paystackMode := strings.ToUpper(strings.TrimSpace(input.PaystackMode))
 	squadMode := strings.ToUpper(strings.TrimSpace(input.SquadMode))
+	palmpayMode := strings.ToUpper(strings.TrimSpace(input.PalmPayMode))
 	if input.Provider == ProviderSquad {
 		// The existing column is retained for migration compatibility; the
 		// public snapshot uses the provider-neutral Squad field.
 		paystackMode = squadMode
+	} else if input.Provider == ProviderPalmPay {
+		// The historical column stores the provider mode for payment providers.
+		// The public API exposes a provider-specific field and never leaks this
+		// storage compatibility detail.
+		paystackMode = palmpayMode
 	}
 	record := Record{
 		TenantID: input.Principal.TenantID, Provider: input.Provider, Status: StatusActive,
 		Envelope: envelope, SenderEmail: strings.TrimSpace(input.SenderEmail),
 		PaystackMode: paystackMode,
-		SquadMode: squadMode, LastTestedAt: now, LastTestSucceeded: validated, ActivatedAt: now, UpdatedAt: now, UpdatedBy: input.Principal.UserID,
+		SquadMode:    squadMode, PalmPayMode: palmpayMode, LastTestedAt: now, LastTestSucceeded: validated, ActivatedAt: now, UpdatedAt: now, UpdatedBy: input.Principal.UserID,
 	}
 	if err := s.store.Save(ctx, record); err != nil {
 		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
@@ -180,7 +200,7 @@ func (s *Service) List(ctx context.Context, tenantID string) ([]Snapshot, error)
 		if record.TenantID != tenantID || !record.Provider.Valid() {
 			return nil, ErrStoreUnavailable
 		}
-		snapshot := Snapshot{Provider: record.Provider, Status: record.Status, SenderEmail: record.SenderEmail, PaystackMode: record.PaystackMode, SquadMode: record.SquadMode, ActivatedAt: record.ActivatedAt, UpdatedAt: record.UpdatedAt}
+		snapshot := Snapshot{Provider: record.Provider, Status: record.Status, SenderEmail: record.SenderEmail, PaystackMode: record.PaystackMode, SquadMode: record.SquadMode, PalmPayMode: record.PalmPayMode, PaymentDefault: record.PaymentDefault, ActivatedAt: record.ActivatedAt, UpdatedAt: record.UpdatedAt}
 		if !record.LastTestedAt.IsZero() {
 			result := record.LastTestSucceeded
 			testedAt := record.LastTestedAt
@@ -190,6 +210,28 @@ func (s *Service) List(ctx context.Context, tenantID string) ([]Snapshot, error)
 		out = append(out, snapshot)
 	}
 	return out, nil
+}
+
+// SelectPaymentGateway changes only the provider used for new attempts.
+// Existing payments remain pinned to the gateway stored on their payment row.
+func (s *Service) SelectPaymentGateway(ctx context.Context, principal auth.Principal, password, mfaCode string, provider Provider) error {
+	if s == nil || s.store == nil || s.stepUp == nil || !paymentProvider(provider) || !validTenantID(principal.TenantID) || strings.TrimSpace(principal.UserID) == "" {
+		return ErrInvalidSettings
+	}
+	if err := s.stepUp.VerifyStepUp(ctx, auth.StepUpInput{Principal: principal, Password: password, MFACode: mfaCode}); err != nil {
+		return ErrStepUpFailed
+	}
+	store, ok := s.store.(paymentGatewaySelectionStore)
+	if !ok {
+		return ErrStoreUnavailable
+	}
+	if err := store.SetActivePaymentGateway(ctx, principal.TenantID, provider, principal.UserID, s.now().UTC()); err != nil {
+		if errors.Is(err, ErrInvalidSettings) {
+			return ErrInvalidSettings
+		}
+		return ErrStoreUnavailable
+	}
+	return nil
 }
 
 func (s *Service) Disable(ctx context.Context, principal auth.Principal, password, mfaCode string, provider Provider) error {
@@ -229,7 +271,52 @@ func validProviderSettings(input ConfigureInput) bool {
 		return strings.TrimSpace(input.SenderEmail) == "" && (strings.EqualFold(strings.TrimSpace(input.PaystackMode), "TEST") || strings.EqualFold(strings.TrimSpace(input.PaystackMode), "LIVE"))
 	case ProviderSquad:
 		return strings.TrimSpace(input.SenderEmail) == "" && (strings.EqualFold(strings.TrimSpace(input.SquadMode), "TEST") || strings.EqualFold(strings.TrimSpace(input.SquadMode), "LIVE"))
+	case ProviderPalmPay:
+		return strings.TrimSpace(input.SenderEmail) == "" && (strings.EqualFold(strings.TrimSpace(input.PalmPayMode), "TEST") || strings.EqualFold(strings.TrimSpace(input.PalmPayMode), "LIVE")) && validPalmPayCredential(input.Credential)
 	default:
 		return false
 	}
+}
+
+func validPalmPayCredential(raw []byte) bool {
+	var credential struct {
+		Authorization      string `json:"authorization"`
+		MerchantPrivateKey string `json:"merchant_private_key"`
+		PalmPayPublicKey   string `json:"palmpay_public_key"`
+		CountryCode        string `json:"country_code"`
+	}
+	if json.Unmarshal(raw, &credential) != nil || strings.TrimSpace(credential.Authorization) == "" || !strings.EqualFold(strings.TrimSpace(credential.CountryCode), "NG") {
+		return false
+	}
+	privateDER, ok := integrationKeyBytes(credential.MerchantPrivateKey)
+	if !ok {
+		return false
+	}
+	privateKey, err := x509.ParsePKCS8PrivateKey(privateDER)
+	if err != nil {
+		if key, parseErr := x509.ParsePKCS1PrivateKey(privateDER); parseErr != nil || key.Validate() != nil {
+			return false
+		}
+	} else if key, valid := privateKey.(*rsa.PrivateKey); !valid || key.Validate() != nil {
+		return false
+	}
+	publicDER, ok := integrationKeyBytes(credential.PalmPayPublicKey)
+	if !ok {
+		return false
+	}
+	if parsed, err := x509.ParsePKIXPublicKey(publicDER); err == nil {
+		_, ok = parsed.(*rsa.PublicKey)
+		return ok
+	}
+	_, err = x509.ParsePKCS1PublicKey(publicDER)
+	return err == nil
+}
+
+func integrationKeyBytes(value string) ([]byte, bool) {
+	trimmed := strings.TrimSpace(value)
+	if block, _ := pem.Decode([]byte(trimmed)); block != nil {
+		return block.Bytes, true
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(trimmed), ""))
+	return decoded, err == nil && len(decoded) > 0
 }

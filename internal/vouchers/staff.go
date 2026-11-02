@@ -62,3 +62,13 @@ func (s *StaffService) Reveal(ctx context.Context, principal auth.Principal, bat
 	}
 	return s.issuer.RevealBatch(ctx, principal.TenantID, principal.UserID, batchID)
 }
+
+// PrintableBatch permits an active owner/issuer or staff member with
+// voucher.read permission to create a cut-ready copy. The store repeats the
+// authorization check in the tenant transaction and audits every print.
+func (s *StaffService) PrintableBatch(ctx context.Context, principal auth.Principal, batchID string) (PrintableBatch, error) {
+	if s == nil || !validUUID(principal.TenantID) || !validUUID(principal.UserID) || !validUUID(batchID) {
+		return PrintableBatch{}, ErrCodeUnavailable
+	}
+	return s.issuer.PrintableBatch(ctx, principal.TenantID, principal.UserID, batchID)
+}

@@ -60,6 +60,7 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		mux.Handle("POST /api/v1/vouchers/batches", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("voucher.write", http.HandlerFunc(h.issueBatch)))))
 		mux.Handle("POST /api/v1/vouchers/{id}/revoke", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("voucher.write", http.HandlerFunc(h.revokeVoucher)))))
 		mux.Handle("POST /api/v1/vouchers/batches/{id}/reveal", sessions.RequireAuth(sessions.RequireAllowedOrigin(http.HandlerFunc(h.revealBatch))))
+		mux.Handle("POST /api/v1/vouchers/batches/{id}/print", sessions.RequireAuth(sessions.RequireAllowedOrigin(http.HandlerFunc(h.printBatch))))
 	}
 	return nil
 }

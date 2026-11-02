@@ -404,12 +404,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	paymentGateway, webhookGateway, err := configuredPaymentGateway(startupCtx, cfg, authStore, integrationCredentialResolver)
+	paymentGateway, paymentGateways, webhookGateways, err := configuredPaymentGateways(startupCtx, cfg, authStore, integrationCredentialResolver)
 	if err != nil {
 		return err
 	}
 	paymentService, err := payments.NewService(paymentStore, paymentGateway, cfg.Payments.CallbackURL)
 	if err != nil {
+		return err
+	}
+	if err := paymentService.ConfigureGateways(paymentGateways...); err != nil {
+		return err
+	}
+	if err := paymentService.ConfigureGatewaySelector(integrationCredentialResolver); err != nil {
 		return err
 	}
 	paymentHTTP, err := payments.NewHTTP(paymentService, cfg.Security.AllowedOrigins)
@@ -428,12 +434,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	var paymentWebhookHTTP *payments.WebhookHTTP
-	if webhookGateway != nil {
-		paymentWebhookHTTP, err = payments.NewWebhookHTTP(webhookGateway, paymentStore, cfg.Limits.MaxWebhookBytes)
-		if err != nil {
-			return err
+	paymentWebhookHTTP := make([]*payments.WebhookHTTP, 0, len(webhookGateways))
+	for _, webhookGateway := range webhookGateways {
+		handler, handlerErr := payments.NewWebhookHTTP(webhookGateway, paymentStore, cfg.Limits.MaxWebhookBytes)
+		if handlerErr != nil {
+			return handlerErr
 		}
+		paymentWebhookHTTP = append(paymentWebhookHTTP, handler)
 	}
 
 	h := health.New(cfg.ServiceName, 2*time.Second,
@@ -515,8 +522,8 @@ func run() error {
 	if err := paymentReadinessHTTP.Routes(mux, authHTTP); err != nil {
 		return err
 	}
-	if paymentWebhookHTTP != nil {
-		if err := paymentWebhookHTTP.Routes(mux); err != nil {
+	for _, webhookHTTP := range paymentWebhookHTTP {
+		if err := webhookHTTP.Routes(mux); err != nil {
 			return err
 		}
 	}
@@ -604,36 +611,62 @@ func configuredAccountHTTP(ctx context.Context, cfg *config.Config, store auth.A
 	return auth.NewAccountHTTP(accountService, loginService, runtime, cfg.Portal.TenantSlug, cfg.Env != config.EnvDevelopment, cfg.Security.AllowedOrigins, cfg.Security.TrustedProxies)
 }
 
-// configuredPaymentGateway binds checkout and webhook verification to the
-// active Squad credential configured for the public portal tenant. It does
-// not resolve or retain any payment key at process startup.
-func configuredPaymentGateway(ctx context.Context, cfg *config.Config, store auth.AccountStore, credentials *integrations.CredentialResolver) (payments.Gateway, payments.WebhookGateway, error) {
+// configuredPaymentGateways keeps every provider callback live while selecting
+// one provider for new checkouts. Credentials remain tenant-scoped and are
+// resolved only when a provider operation occurs.
+func configuredPaymentGateways(ctx context.Context, cfg *config.Config, store auth.AccountStore, credentials *integrations.CredentialResolver) (payments.Gateway, []payments.Gateway, []payments.WebhookGateway, error) {
 	if cfg == nil || store == nil || credentials == nil {
-		return nil, nil, errors.New("payment configuration is required")
+		return nil, nil, nil, errors.New("payment configuration is required")
 	}
 	tenantID, found, err := store.ResolveTenant(ctx, cfg.Portal.TenantSlug)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve payment portal tenant: %w", err)
+		return nil, nil, nil, fmt.Errorf("resolve payment portal tenant: %w", err)
 	}
 	if !found || tenantID == "" {
-		return nil, nil, errors.New("payment portal tenant is not active")
+		return nil, nil, nil, errors.New("payment portal tenant is not active")
 	}
+	squad, err := payments.NewTenantSquadGateway(credentials, tenantID, nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	paystack, err := payments.NewTenantPaystackGateway(credentials, tenantID, nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	palmpay, err := payments.NewTenantPalmPayGateway(credentials, tenantID, nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	gateways := []payments.Gateway{squad, paystack, palmpay}
+	webhooks := []payments.WebhookGateway{squad, paystack, palmpay}
+	var active payments.Gateway
 	switch strings.ToLower(strings.TrimSpace(cfg.Payments.Gateway)) {
 	case "disabled", "squad", "":
-		gateway, err := payments.NewTenantSquadGateway(credentials, tenantID, nil)
-		if err != nil {
-			return nil, nil, err
-		}
-		return gateway, gateway, nil
+		active = squad
 	case "paystack":
-		gateway, err := payments.NewTenantPaystackGateway(credentials, tenantID, nil)
-		if err != nil {
-			return nil, nil, err
-		}
-		return gateway, gateway, nil
+		active = paystack
+	case "palmpay":
+		active = palmpay
 	default:
-		return nil, nil, fmt.Errorf("unsupported payment gateway %q", cfg.Payments.Gateway)
+		return nil, nil, nil, fmt.Errorf("unsupported payment gateway %q", cfg.Payments.Gateway)
 	}
+	return active, gateways, webhooks, nil
+}
+
+// configuredPaymentGateway is retained for focused construction tests and
+// callers that need only the active provider. Runtime setup uses the plural
+// form so inactive-provider callbacks remain available.
+func configuredPaymentGateway(ctx context.Context, cfg *config.Config, store auth.AccountStore, credentials *integrations.CredentialResolver) (payments.Gateway, payments.WebhookGateway, error) {
+	active, _, webhooks, err := configuredPaymentGateways(ctx, cfg, store, credentials)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, webhook := range webhooks {
+		if webhook.Name() == active.Name() {
+			return active, webhook, nil
+		}
+	}
+	return nil, nil, errors.New("active payment webhook is unavailable")
 }
 
 // healthcheck is the Docker health-check entry point. It probes liveness over

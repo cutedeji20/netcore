@@ -13,12 +13,17 @@ type ActiveCredentialStore interface {
 	LoadActive(context.Context, string, Provider) (Record, bool, error)
 }
 
+type activePaymentGatewayStore interface {
+	ActivePaymentGateway(context.Context, string) (Provider, bool, error)
+}
+
 // CredentialMetadata contains the non-secret settings needed by a provider
 // adapter after it has obtained an active credential.
 type CredentialMetadata struct {
 	SenderEmail  string
 	PaystackMode string
 	SquadMode    string
+	PalmPayMode  string
 }
 
 // CredentialResolver decrypts a provider key on demand. It never caches
@@ -54,7 +59,7 @@ func (r *CredentialResolver) Resolve(ctx context.Context, tenantID string, provi
 	if err != nil || len(credential) == 0 {
 		return nil, CredentialMetadata{}, ErrCredentialInvalid
 	}
-	metadata := CredentialMetadata{SenderEmail: strings.TrimSpace(record.SenderEmail), PaystackMode: strings.ToUpper(strings.TrimSpace(record.PaystackMode)), SquadMode: strings.ToUpper(strings.TrimSpace(record.SquadMode))}
+	metadata := CredentialMetadata{SenderEmail: strings.TrimSpace(record.SenderEmail), PaystackMode: strings.ToUpper(strings.TrimSpace(record.PaystackMode)), SquadMode: strings.ToUpper(strings.TrimSpace(record.SquadMode)), PalmPayMode: strings.ToUpper(strings.TrimSpace(record.PalmPayMode))}
 	if !validResolvedMetadata(provider, metadata) {
 		for index := range credential {
 			credential[index] = 0
@@ -72,7 +77,26 @@ func validResolvedMetadata(provider Provider, metadata CredentialMetadata) bool 
 		return metadata.SenderEmail == "" && (metadata.PaystackMode == "TEST" || metadata.PaystackMode == "LIVE")
 	case ProviderSquad:
 		return metadata.SenderEmail == "" && (metadata.SquadMode == "TEST" || metadata.SquadMode == "LIVE")
+	case ProviderPalmPay:
+		return metadata.SenderEmail == "" && (metadata.PalmPayMode == "TEST" || metadata.PalmPayMode == "LIVE")
 	default:
 		return false
 	}
+}
+
+// ActivePaymentGateway exposes only the safe provider selector. It does not
+// resolve a credential and therefore cannot leak payment secrets.
+func (r *CredentialResolver) ActivePaymentGateway(ctx context.Context, tenantID string) (string, bool, error) {
+	if r == nil || !validTenantID(tenantID) {
+		return "", false, ErrCredentialInvalid
+	}
+	store, ok := r.store.(activePaymentGatewayStore)
+	if !ok {
+		return "", false, ErrStoreUnavailable
+	}
+	provider, found, err := store.ActivePaymentGateway(ctx, tenantID)
+	if err != nil || (found && !paymentProvider(provider)) {
+		return "", false, ErrStoreUnavailable
+	}
+	return string(provider), found, nil
 }

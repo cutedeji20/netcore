@@ -26,6 +26,16 @@ type IssuedCode struct {
 	Code      string `json:"code"`
 }
 
+type PrintableBatch struct {
+	ID              string
+	PlanName        string
+	DurationSeconds int64
+	QuotaBytes      *int64
+	MaxDevices      int
+	ExpiresAt       *time.Time
+	Codes           []IssuedCode
+}
+
 type sealedCode struct {
 	id       string
 	code     string
@@ -37,6 +47,14 @@ type sealedCode struct {
 type IssuanceStore interface {
 	SaveBatch(context.Context, string, IssueRequest, string, []sealedCode) (Batch, error)
 	RevealBatch(context.Context, envelope.KeyWrapper, string, string, string) ([]IssuedCode, error)
+	PrintableBatch(context.Context, envelope.KeyWrapper, string, string, string) (PrintableBatch, error)
+}
+
+func (s *Issuer) PrintableBatch(ctx context.Context, tenantID, actorUserID, batchID string) (PrintableBatch, error) {
+	if s == nil || tenantID == "" || actorUserID == "" || batchID == "" {
+		return PrintableBatch{}, ErrCodeUnavailable
+	}
+	return s.store.PrintableBatch(ctx, s.wrapper, tenantID, actorUserID, batchID)
 }
 
 type Issuer struct {

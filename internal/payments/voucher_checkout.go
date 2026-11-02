@@ -80,10 +80,11 @@ func (s *Service) InitiateVoucherOrder(ctx context.Context, tenantID, userID, pl
 	if s == nil || s.voucherOrders == nil || s.gateway == nil || !validUUID(tenantID) || !validUUID(userID) || !validUUID(planID) || quantity < 1 || quantity > 100 || !validIdempotencyKey(key) {
 		return VoucherCheckout{}, ErrInvalidRequest
 	}
-	if !s.gateway.Available() {
+	gateway, err := s.activeGateway(ctx, tenantID)
+	if err != nil || !gateway.Available() {
 		return VoucherCheckout{}, ErrGatewayUnavailable
 	}
-	if probe, ok := s.gateway.(GatewayProbe); ok {
+	if probe, ok := gateway.(GatewayProbe); ok {
 		if err := probe.Check(ctx); err != nil {
 			return VoucherCheckout{}, ErrGatewayUnavailable
 		}
@@ -93,14 +94,14 @@ func (s *Service) InitiateVoucherOrder(ctx context.Context, tenantID, userID, pl
 		return VoucherCheckout{}, ErrGatewayUnavailable
 	}
 	hash := voucherInitiationHash(planID, quantity)
-	pending, replay, err := s.voucherOrders.PrepareVoucherOrder(ctx, VoucherInitiation{TenantID: tenantID, UserID: userID, PlanID: planID, Quantity: quantity, Gateway: s.gateway.Name(), Reference: reference, IdempotencyKey: key, RequestHash: hash[:]})
+	pending, replay, err := s.voucherOrders.PrepareVoucherOrder(ctx, VoucherInitiation{TenantID: tenantID, UserID: userID, PlanID: planID, Quantity: quantity, Gateway: gateway.Name(), Reference: reference, IdempotencyKey: key, RequestHash: hash[:]})
 	if err != nil {
 		return VoucherCheckout{}, err
 	}
 	if replay != nil {
 		return *replay, nil
 	}
-	gatewayCheckout, err := s.gateway.Initialize(ctx, GatewayInitialization{Reference: pending.Reference, AmountMinor: pending.AmountMinor, Currency: pending.Currency, CustomerEmail: pending.CustomerEmail, CallbackURL: s.callbackURL})
+	gatewayCheckout, err := gateway.Initialize(ctx, GatewayInitialization{Reference: pending.Reference, AmountMinor: pending.AmountMinor, Currency: pending.Currency, CustomerEmail: pending.CustomerEmail, CallbackURL: s.callbackURL})
 	if err != nil {
 		return VoucherCheckout{}, fmt.Errorf("%w: %v", ErrGatewayUnavailable, err)
 	}

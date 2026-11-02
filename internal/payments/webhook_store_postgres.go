@@ -57,7 +57,7 @@ SELECT payment_webhook_audit($1::uuid, 'WEBHOOK_REPLAY_DETECTED',
 }
 
 func (s *PostgresStore) ClaimWebhook(ctx context.Context, provider string, maxAttempts int) (event QueuedWebhook, found bool, err error) {
-	if (provider != paystackName && provider != squadName) || maxAttempts < 1 {
+	if (provider != paystackName && provider != squadName && provider != palmpayName) || maxAttempts < 1 {
 		return QueuedWebhook{}, false, ErrInvalidRequest
 	}
 	err = s.db.InSystemTx(ctx, func(tx pgx.Tx) error {
@@ -160,7 +160,7 @@ UPDATE webhook_events
 }
 
 func (s *PostgresStore) PaymentOwnerForWebhook(ctx context.Context, gateway, reference string) (owner WebhookPaymentOwner, found bool, err error) {
-	if gateway != paystackName && gateway != squadName || !validReference(reference) {
+	if gateway != paystackName && gateway != squadName && gateway != palmpayName || !validReference(reference) {
 		return WebhookPaymentOwner{}, false, ErrInvalidRequest
 	}
 	err = s.db.InSystemTx(ctx, func(tx pgx.Tx) error {

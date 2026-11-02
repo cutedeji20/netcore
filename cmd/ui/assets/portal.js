@@ -573,8 +573,16 @@
     var row = accountRow(String(batch.plan_name || "Internet plan"), batch.status, String(batch.issued || 0) + " issued · " + String(batch.available || 0) + " unused");
     var form = document.createElement("form");
     var button = document.createElement("button"); button.type = "submit"; button.className = "secondary-action"; button.textContent = "Reveal codes";
+    var print = document.createElement("button"); print.type = "button"; print.className = "secondary-action"; print.textContent = "Print PDF";
     var result = document.createElement("div"); result.setAttribute("role", "status");
-    form.append(button); row.append(form, result);
+    form.append(button, print); row.append(form, result);
+	print.addEventListener("click", function () {
+	  print.disabled = true; result.textContent = "Preparing printable vouchers…";
+	  window.fetch(endpoint("/api/v1/vouchers/batches/" + encodeURIComponent(batch.id) + "/print"), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json", "Accept": "application/pdf" }, body: "{}" }).then(function (response) {
+	    if (!response.ok) return responseBody(response).then(function (body) { throw new Error(humanError(body, "Printable vouchers could not be created.")); });
+	    return response.blob();
+	  }).then(function (blob) { var url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = "voucher-batch-" + String(batch.id || "").slice(0, 8) + ".pdf"; document.body.append(link); link.click(); link.remove(); window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000); result.textContent = "Printable PDF downloaded."; }).catch(function (error) { result.textContent = error.message || "Printable vouchers could not be created."; }).finally(function () { print.disabled = false; });
+	});
     form.addEventListener("submit", function (event) {
       event.preventDefault(); button.disabled = true; result.textContent = "Checking access…";
       postJSON("/api/v1/vouchers/batches/" + encodeURIComponent(batch.id) + "/reveal", {}).then(function (response) {

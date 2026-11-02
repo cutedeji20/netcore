@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/netcore-isp/netcore/internal/auth"
@@ -112,4 +113,47 @@ func (h *HTTP) revealBatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		Data []IssuedCode `json:"data"`
 	}{codes})
+}
+
+func (h *HTTP) printBatch(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	p, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || h.staff == nil || h.revealLimiter == nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "VOUCHERS_UNAVAILABLE", "Voucher printing is unavailable.")
+		return
+	}
+	batchID := r.PathValue("id")
+	if !decodeVoucherMutation(w, r, &struct{}{}) || !validUUID(batchID) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Voucher print request is invalid.")
+		return
+	}
+	allowed, err := h.revealLimiter.AllowSlidingWindow(r.Context(), revealRateKey(p.TenantID, p.UserID, "print:"+batchID), 5, 15*time.Minute)
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "VOUCHERS_UNAVAILABLE", "Voucher printing is unavailable.")
+		return
+	}
+	if !allowed {
+		security.WriteError(w, r, http.StatusTooManyRequests, "TOO_MANY_REQUESTS", "Please wait before printing again.")
+		return
+	}
+	batch, err := h.staff.PrintableBatch(r.Context(), p, batchID)
+	if err != nil {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "Voucher printing is not allowed.")
+		return
+	}
+	document, err := RenderPrintableBatchPDF(batch)
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "VOUCHERS_UNAVAILABLE", "Voucher printing is unavailable.")
+		return
+	}
+	name := batchID
+	if len(name) > 8 {
+		name = name[:8]
+	}
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", `attachment; filename="voucher-batch-`+name+`.pdf"`)
+	w.Header().Set("Content-Length", strconv.Itoa(len(document)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(document)
 }

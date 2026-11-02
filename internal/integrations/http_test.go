@@ -3,6 +3,10 @@ package integrations
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -135,6 +139,59 @@ func TestConfigureSquadHTTPPersistsTestModeWithoutReturningCredential(t *testing
 	}
 	if strings.Contains(response.Body.String(), "sk_test_private_value") {
 		t.Fatalf("response exposed submitted credential: %s", response.Body)
+	}
+}
+
+func TestConfigurePalmPayHTTPEncryptsStructuredKeys(t *testing.T) {
+	handler, store := newTestIntegrationHTTP(t)
+	merchantKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbackKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	merchantDER, err := x509.MarshalPKCS8PrivateKey(merchantKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbackDER, err := x509.MarshalPKIXPublicKey(&callbackKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]string{
+		"authorization": "merchant-authorization", "merchant_private_key": base64.StdEncoding.EncodeToString(merchantDER),
+		"palmpay_public_key": base64.StdEncoding.EncodeToString(callbackDER), "country_code": "NG", "mode": "TEST",
+		"password": "current", "mfa_code": "123456",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.configurePalmPay(response, integrationPrincipalRequest(http.MethodPut, "/api/v1/integrations/palmpay", body))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+	if store.saved.Provider != ProviderPalmPay || store.saved.PalmPayMode != "TEST" || store.saved.PaystackMode != "TEST" {
+		t.Fatalf("saved PalmPay configuration=%#v", store.saved)
+	}
+	if bytes.Contains(store.saved.Envelope.Ciphertext, []byte("merchant-authorization")) {
+		t.Fatal("PalmPay credential was persisted in plaintext")
+	}
+}
+
+func TestSelectPaymentGatewayChangesNewCheckoutProviderOnly(t *testing.T) {
+	handler, store := newTestIntegrationHTTP(t)
+	store.items = append(store.items, Record{TenantID: "tenant-a", Provider: ProviderPalmPay, Status: StatusActive})
+	response := httptest.NewRecorder()
+	request := integrationPrincipalRequest(http.MethodPut, "/api/v1/integrations/payment-gateway", []byte(`{"provider":"palmpay","password":"current","mfa_code":"123456"}`))
+	handler.selectPaymentGateway(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+	if store.selected != ProviderPalmPay {
+		t.Fatalf("selected provider=%q", store.selected)
 	}
 }
 

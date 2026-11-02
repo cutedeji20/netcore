@@ -268,14 +268,14 @@ func Load(getenv func(string) string) (*Config, error) {
 			DeviceReplacementEnabled: boolDefault(getenv("NETCORE_DEVICE_REPLACEMENT_ENABLED"), false),
 		},
 		Payments: Payments{
-			Gateway:              strDefault(getenv("NETCORE_PAYMENT_GATEWAY"), "disabled"),
-			VoucherSalesEnabled:  boolDefault(getenv("NETCORE_VOUCHER_SALES_ENABLED"), false),
-			VoucherGuestEnabled:  boolDefault(getenv("NETCORE_VOUCHER_GUEST_ENABLED"), false),
-			PaystackSecretRef:    getenv("NETCORE_PAYSTACK_SECRET_REF"),
-			CallbackURL:          callbackURL,
-			PaystackCallbackURL:  callbackURL,
-			WebhookPollInterval:  durDefault(getenv("NETCORE_WEBHOOK_POLL_INTERVAL"), time.Second),
-			WebhookMaxAttempts:   intDefault(getenv("NETCORE_WEBHOOK_MAX_ATTEMPTS"), 8),
+			Gateway:             strDefault(getenv("NETCORE_PAYMENT_GATEWAY"), "disabled"),
+			VoucherSalesEnabled: boolDefault(getenv("NETCORE_VOUCHER_SALES_ENABLED"), false),
+			VoucherGuestEnabled: boolDefault(getenv("NETCORE_VOUCHER_GUEST_ENABLED"), false),
+			PaystackSecretRef:   getenv("NETCORE_PAYSTACK_SECRET_REF"),
+			CallbackURL:         callbackURL,
+			PaystackCallbackURL: callbackURL,
+			WebhookPollInterval: durDefault(getenv("NETCORE_WEBHOOK_POLL_INTERVAL"), time.Second),
+			WebhookMaxAttempts:  intDefault(getenv("NETCORE_WEBHOOK_MAX_ATTEMPTS"), 8),
 		},
 		Radius: Radius{ServerAddress: strings.TrimSpace(getenv("NETCORE_RADIUS_SERVER_ADDRESS"))},
 		Staff: Staff{
@@ -416,8 +416,14 @@ func (c *Config) Validate() error {
 		} else if !callbackOriginAllowed(c.Payments.CallbackURL, c.Security.AllowedOrigins) {
 			p = append(p, "NETCORE_PAYMENT_CALLBACK_URL must use an origin listed in NETCORE_ALLOWED_ORIGINS")
 		}
+	case "palmpay":
+		if !validHTTPSURL(c.Payments.CallbackURL) {
+			p = append(p, "NETCORE_PAYMENT_CALLBACK_URL must be a valid HTTPS URL when NETCORE_PAYMENT_GATEWAY=palmpay")
+		} else if !callbackOriginAllowed(c.Payments.CallbackURL, c.Security.AllowedOrigins) {
+			p = append(p, "NETCORE_PAYMENT_CALLBACK_URL must use an origin listed in NETCORE_ALLOWED_ORIGINS")
+		}
 	default:
-		p = append(p, fmt.Sprintf("NETCORE_PAYMENT_GATEWAY %q must be disabled or paystack; squad is also supported", c.Payments.Gateway))
+		p = append(p, fmt.Sprintf("NETCORE_PAYMENT_GATEWAY %q must be disabled or paystack; squad and palmpay are also supported", c.Payments.Gateway))
 	}
 	switch c.Email.Provider {
 	case "disabled":

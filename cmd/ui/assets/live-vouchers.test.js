@@ -28,3 +28,11 @@ test("revealing a batch uses the authenticated session without another challenge
   assert.doesNotMatch(reveal, /voucherField\("Current password"/);
   assert.doesNotMatch(reveal, /voucherField\("Authenticator code"/);
 });
+
+test("batch management downloads the audited twelve-ticket PDF", () => {
+  const manage = source.slice(source.indexOf("function openManageDialog"), source.indexOf("livePage.subscribe"));
+  assert.match(manage, /\/print/);
+  assert.match(manage, /Print PDF \(12 per page\)/);
+  assert.match(manage, /response\.blob\(\)/);
+  assert.match(manage, /URL\.revokeObjectURL/);
+});

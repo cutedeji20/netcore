@@ -128,7 +128,7 @@ func NewWebhookReceipt(event GatewayWebhook, raw []byte) (WebhookReceipt, error)
 }
 
 func isChargeSuccess(provider, eventType string) bool {
-	return (provider == paystackName && eventType == paystackChargeSuccess) || (provider == squadName && eventType == squadChargeSuccess)
+	return (provider == paystackName && eventType == paystackChargeSuccess) || (provider == squadName && eventType == squadChargeSuccess) || (provider == palmpayName && eventType == palmpayChargeSuccess)
 }
 
 func validWebhookProviderEvent(provider, eventType string) bool {
@@ -137,6 +137,8 @@ func validWebhookProviderEvent(provider, eventType string) bool {
 		return validPaystackEventType(eventType)
 	case squadName:
 		return eventType == squadChargeSuccess
+	case palmpayName:
+		return eventType == palmpayChargeSuccess || eventType == palmpayChargeFailed || eventType == palmpayChargeClosed
 	default:
 		return false
 	}

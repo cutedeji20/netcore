@@ -25,6 +25,10 @@ func (s *issuingStoreStub) RevealBatch(_ context.Context, _ envelope.KeyWrapper,
 	s.revealTenant, s.revealActor, s.revealBatch = tenantID, actorID, batchID
 	return []IssuedCode{{VoucherID: "44444444-4444-4444-8444-444444444444", Code: "NC-ABCDEF-GHJKLM-NPQRST"}}, nil
 }
+func (s *issuingStoreStub) PrintableBatch(_ context.Context, _ envelope.KeyWrapper, tenantID, actorID, batchID string) (PrintableBatch, error) {
+	s.revealTenant, s.revealActor, s.revealBatch = tenantID, actorID, batchID
+	return PrintableBatch{ID: batchID, PlanName: "Daily", Codes: []IssuedCode{{Code: "NC-2345-6789-ABCD"}}}, nil
+}
 
 func TestIssueBatchEncryptsAndHashesAllCodes(t *testing.T) {
 	store := &issuingStoreStub{}

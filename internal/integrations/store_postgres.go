@@ -112,7 +112,7 @@ func (s *PostgresStore) List(ctx context.Context, tenantID string) (records []Re
 		rows, err := tx.Query(ctx, `
 SELECT tenant_id::text, provider, status, COALESCE(sender_email::text, ''),
        COALESCE(paystack_mode, ''), last_tested_at, last_test_succeeded,
-       activated_at, updated_at
+       activated_at, updated_at, is_payment_default
   FROM integration_providers
  WHERE tenant_id = $1
  ORDER BY provider`, tenantID)
@@ -124,7 +124,7 @@ SELECT tenant_id::text, provider, status, COALESCE(sender_email::text, ''),
 			var record Record
 			var testedAt, activatedAt pgtype.Timestamptz
 			var tested pgtype.Bool
-			if err := rows.Scan(&record.TenantID, &record.Provider, &record.Status, &record.SenderEmail, &record.PaystackMode, &testedAt, &tested, &activatedAt, &record.UpdatedAt); err != nil {
+			if err := rows.Scan(&record.TenantID, &record.Provider, &record.Status, &record.SenderEmail, &record.PaystackMode, &testedAt, &tested, &activatedAt, &record.UpdatedAt, &record.PaymentDefault); err != nil {
 				return fmt.Errorf("scan integration settings: %w", err)
 			}
 			if testedAt.Valid {
@@ -136,6 +136,10 @@ SELECT tenant_id::text, provider, status, COALESCE(sender_email::text, ''),
 			}
 			if record.Provider == ProviderSquad {
 				record.SquadMode = record.PaystackMode
+				record.PaystackMode = ""
+			} else if record.Provider == ProviderPalmPay {
+				record.PalmPayMode = record.PaystackMode
+				record.PaystackMode = ""
 			}
 			records = append(records, record)
 		}
@@ -166,6 +170,10 @@ SELECT tenant_id::text, provider, status, credential_ciphertext, credential_nonc
 		)
 		if record.Provider == ProviderSquad {
 			record.SquadMode = record.PaystackMode
+			record.PaystackMode = ""
+		} else if record.Provider == ProviderPalmPay {
+			record.PalmPayMode = record.PaystackMode
+			record.PaystackMode = ""
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			found = false
@@ -201,11 +209,11 @@ func (s *PostgresStore) changeStatus(ctx context.Context, tenantID string, provi
 			query = `UPDATE integration_providers
   SET status = 'DISCONNECTED', credential_ciphertext = NULL, credential_nonce = NULL,
       wrapped_dek = NULL, kek_key_id = NULL, activated_at = NULL, disabled_at = NULL,
-      updated_at = $4, updated_by = $3::uuid
+      is_payment_default = false, updated_at = $4, updated_by = $3::uuid
  WHERE tenant_id = $1 AND provider = $2`
 		} else {
 			query = `UPDATE integration_providers
-  SET status = 'DISABLED', disabled_at = $4, updated_at = $4, updated_by = $3::uuid
+  SET status = 'DISABLED', disabled_at = $4, is_payment_default = false, updated_at = $4, updated_by = $3::uuid
  WHERE tenant_id = $1 AND provider = $2 AND status = 'ACTIVE'`
 		}
 		var integrationID string
@@ -222,6 +230,67 @@ func (s *PostgresStore) changeStatus(ctx context.Context, tenantID string, provi
 		return ErrStoreUnavailable
 	}
 	return nil
+}
+
+// ActivePaymentGateway returns the operator-selected provider for new
+// checkouts. Historical payments do not use this setting; they keep the
+// provider frozen on their own rows.
+func (s *PostgresStore) ActivePaymentGateway(ctx context.Context, tenantID string) (Provider, bool, error) {
+	if s == nil || s.db == nil || !validTenantID(tenantID) {
+		return "", false, ErrStoreUnavailable
+	}
+	var provider Provider
+	found := false
+	err := s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `
+SELECT provider
+  FROM integration_providers
+ WHERE tenant_id = $1
+   AND is_payment_default
+   AND status = 'ACTIVE'
+   AND provider IN ('paystack', 'squad', 'palmpay')`, tenantID).Scan(&provider)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		found = true
+		return nil
+	})
+	if err != nil || (found && !provider.Valid()) {
+		return "", false, ErrStoreUnavailable
+	}
+	return provider, found, nil
+}
+
+// SetActivePaymentGateway atomically moves the selector to an already-active
+// encrypted integration and records the operator action.
+func (s *PostgresStore) SetActivePaymentGateway(ctx context.Context, tenantID string, provider Provider, actorID string, at time.Time) error {
+	if s == nil || s.db == nil || !validTenantID(tenantID) || !paymentProvider(provider) || actorID == "" {
+		return ErrInvalidSettings
+	}
+	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+UPDATE integration_providers
+   SET is_payment_default = false
+ WHERE tenant_id = $1 AND is_payment_default`, tenantID); err != nil {
+			return ErrStoreUnavailable
+		}
+		var integrationID string
+		if err := tx.QueryRow(ctx, `
+UPDATE integration_providers
+   SET is_payment_default = true, updated_at = $4, updated_by = $3::uuid
+ WHERE tenant_id = $1 AND provider = $2 AND status = 'ACTIVE'
+ RETURNING id::text`, tenantID, string(provider), actorID, at).Scan(&integrationID); err != nil {
+			return ErrInvalidSettings
+		}
+		return writeAudit(ctx, tx, tenantID, actorID, "PAYMENT_GATEWAY_SELECTED", integrationID, provider)
+	})
+}
+
+func paymentProvider(provider Provider) bool {
+	return provider == ProviderPaystack || provider == ProviderSquad || provider == ProviderPalmPay
 }
 
 func writeAudit(ctx context.Context, tx pgx.Tx, tenantID, actorID, action, integrationID string, provider Provider) error {

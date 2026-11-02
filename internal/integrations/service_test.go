@@ -11,9 +11,23 @@ import (
 )
 
 type memoryIntegrationStore struct {
-	saved Record
-	err   error
-	items []Record
+	saved    Record
+	err      error
+	items    []Record
+	selected Provider
+}
+
+func (s *memoryIntegrationStore) SetActivePaymentGateway(_ context.Context, tenantID string, provider Provider, actorID string, at time.Time) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.selected = provider
+	for index := range s.items {
+		s.items[index].PaymentDefault = s.items[index].TenantID == tenantID && s.items[index].Provider == provider && s.items[index].Status == StatusActive
+	}
+	s.saved.UpdatedBy = actorID
+	s.saved.UpdatedAt = at
+	return nil
 }
 
 func (s *memoryIntegrationStore) Disable(_ context.Context, tenantID string, provider Provider, actorID string, at time.Time) error {
@@ -148,6 +162,22 @@ func TestConfigureSquadDoesNotRequireProviderValidation(t *testing.T) {
 	}
 	if store.saved.Provider != ProviderSquad || store.saved.Status != StatusActive || store.saved.LastTestedAt.IsZero() || store.saved.LastTestSucceeded {
 		t.Fatalf("saved Squad record = %#v", store.saved)
+	}
+}
+
+func TestSelectPaymentGatewayRequiresStepUpAndChangesOnlySelector(t *testing.T) {
+	store := &memoryIntegrationStore{items: []Record{{TenantID: "tenant-a", Provider: ProviderSquad, Status: StatusActive}, {TenantID: "tenant-a", Provider: ProviderPalmPay, Status: StatusActive}}}
+	stepUp := &testStepUpVerifier{}
+	service, err := NewService(store, testKeyWrapper{keyID: "https://vault.example/keys/integrations/1"}, stepUp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := auth.Principal{TenantID: "tenant-a", UserID: "staff-a", Email: "admin@example.test"}
+	if err := service.SelectPaymentGateway(context.Background(), principal, "current", "123456", ProviderPalmPay); err != nil {
+		t.Fatal(err)
+	}
+	if stepUp.calls != 1 || store.selected != ProviderPalmPay {
+		t.Fatalf("step-up=%d selected=%q", stepUp.calls, store.selected)
 	}
 }
 

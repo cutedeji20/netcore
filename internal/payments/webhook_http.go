@@ -77,4 +77,9 @@ func (h *WebhookHTTP) receive(w http.ResponseWriter, r *http.Request) {
 	// the store. Acknowledge it so a provider retry cannot manufacture a storm.
 	_ = result
 	w.WriteHeader(http.StatusOK)
+	if h.gateway.Name() == palmpayName {
+		// PalmPay retries any callback that is not acknowledged with this exact
+		// plain-text body after durable receipt storage.
+		_, _ = w.Write([]byte("success"))
+	}
 }
