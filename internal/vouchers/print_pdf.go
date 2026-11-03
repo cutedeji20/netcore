@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-const ticketsPerPage = 12
+const ticketsPerPage = 20
 
-// RenderPrintableBatchPDF creates an A4 sheet with three columns and four rows.
+// RenderPrintableBatchPDF creates an A4 sheet with four columns and five rows.
 // It intentionally uses only the standard PDF fonts so production rendering
 // does not depend on a browser, system font, or external service.
 func RenderPrintableBatchPDF(batch PrintableBatch) ([]byte, error) {
@@ -55,9 +55,10 @@ func RenderPrintableBatchPDF(batch PrintableBatch) ([]byte, error) {
 func printablePageContent(batch PrintableBatch, page int) string {
 	const (
 		margin = 22.0
-		gap    = 6.0
-		width  = (595.28 - margin*2 - gap*2) / 3
-		height = (841.89 - margin*2 - gap*3) / 4
+		hGap   = 6.0
+		vGap   = 18.0
+		width  = (595.28 - margin*2 - hGap*3) / 4
+		height = 139.0
 	)
 	var content strings.Builder
 	content.WriteString("0.45 w [3 2] 0 d 0.70 G\n")
@@ -68,24 +69,23 @@ func printablePageContent(batch PrintableBatch, page int) string {
 	}
 	for index := start; index < end; index++ {
 		slot := index - start
-		column, row := slot%3, slot/3
-		x := margin + float64(column)*(width+gap)
-		y := 841.89 - margin - float64(row+1)*height - float64(row)*gap
+		column, row := slot%4, slot/4
+		x := margin + float64(column)*(width+hGap)
+		y := 841.89 - margin - float64(row+1)*height - float64(row)*vGap
 		fmt.Fprintf(&content, "%.2f %.2f %.2f %.2f re S\n", x, y, width, height)
-		writePDFText(&content, "F2", 10, x+9, y+height-18, "DATA HUB")
-		writePDFText(&content, "F1", 6.5, x+9, y+height-29, "PREPAID INTERNET ACCESS")
+		writePDFText(&content, "F2", 8.5, x+7, y+height-17, "DATA HUB")
+		writePDFText(&content, "F1", 5.5, x+7, y+height-28, "PREPAID INTERNET ACCESS")
 		content.WriteString("[] 0 d 0.86 G\n")
-		fmt.Fprintf(&content, "%.2f %.2f m %.2f %.2f l S\n", x+9, y+height-36, x+width-9, y+height-36)
-		writePDFText(&content, "F1", 6.5, x+9, y+height-52, "VOUCHER CODE")
-		writePDFText(&content, "F2", 12, x+9, y+height-70, batch.Codes[index].Code)
-		writePDFText(&content, "F2", 8, x+9, y+height-89, truncatePDFText(batch.PlanName, 29))
-		writePDFText(&content, "F1", 7, x+9, y+height-103, "Duration: "+formatVoucherDuration(batch.DurationSeconds))
-		writePDFText(&content, "F1", 7, x+9, y+height-115, "Quota: "+formatVoucherQuota(batch.QuotaBytes))
-		writePDFText(&content, "F1", 7, x+9, y+height-127, "Devices: "+strconv.Itoa(batch.MaxDevices))
+		fmt.Fprintf(&content, "%.2f %.2f m %.2f %.2f l S\n", x+7, y+height-34, x+width-7, y+height-34)
+		writePDFText(&content, "F1", 5.5, x+7, y+height-49, "VOUCHER CODE")
+		writePDFText(&content, "F2", 7.5, x+7, y+height-65, batch.Codes[index].Code)
+		writePDFText(&content, "F2", 7, x+7, y+height-83, truncatePDFText(batch.PlanName, 20))
+		writePDFText(&content, "F1", 5.75, x+7, y+height-97, "Duration: "+formatVoucherDuration(batch.DurationSeconds))
+		writePDFText(&content, "F1", 5.75, x+7, y+height-109, "Quota: "+formatVoucherQuota(batch.QuotaBytes))
+		writePDFText(&content, "F1", 5.75, x+7, y+height-121, "Devices: "+strconv.Itoa(batch.MaxDevices))
 		if batch.ExpiresAt != nil {
-			writePDFText(&content, "F1", 6.5, x+9, y+height-139, "Use before: "+batch.ExpiresAt.UTC().Format("02 Jan 2006 15:04 UTC"))
+			writePDFText(&content, "F1", 5.25, x+7, y+height-133, "Use before: "+batch.ExpiresAt.UTC().Format("02 Jan 2006 15:04 UTC"))
 		}
-		writePDFText(&content, "F1", 5.5, x+9, y+7, fmt.Sprintf("Batch %s  Ticket %d/%d", truncatePDFText(batch.ID, 8), index+1, len(batch.Codes)))
 		content.WriteString("[3 2] 0 d 0.70 G\n")
 	}
 	return content.String()

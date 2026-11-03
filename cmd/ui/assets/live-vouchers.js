@@ -287,7 +287,7 @@
   function openManageDialog(batch) {
     var dialog = openVoucherDialog("Manage batch " + safeText(String(batch.id || "").slice(0,8))), form = document.createElement("form"), submit = document.createElement("button"), print = document.createElement("button"), result = document.createElement("div"), footer = document.createElement("footer");
     submit.type="submit"; submit.className="button primary"; submit.textContent="Reveal codes";
-	print.type="button"; print.className="button"; print.textContent="Print PDF (12 per page)";
+	print.type="button"; print.className="button"; print.textContent="Print PDF (20 per page)";
     form.className="voucher-form"; result.className="voucher-codes"; result.setAttribute("role","status");
 	footer.append(submit,print); form.append(footer); dialog.append(form,result); submit.focus();
 	print.addEventListener("click", function () {
