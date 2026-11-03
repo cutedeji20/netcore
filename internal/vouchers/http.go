@@ -20,6 +20,10 @@ import (
 
 const maxSearchLength = 120
 
+var voucherBatchStatuses = map[string]struct{}{
+	"": {}, "ACTIVE": {}, "COMPLETED": {}, "EXPIRED": {}, "REVOKED": {}, "MIXED": {},
+}
+
 // HTTP exposes staff-only voucher inventory read endpoints.
 type HTTP struct {
 	store           Store
@@ -158,6 +162,10 @@ func (h *HTTP) listOptions(r *http.Request) (ListOptions, error) {
 	if len(search) > maxSearchLength {
 		return ListOptions{}, ErrInvalidPage
 	}
+	status := strings.ToUpper(strings.TrimSpace(query.Get("status")))
+	if _, ok := voucherBatchStatuses[status]; !ok {
+		return ListOptions{}, ErrInvalidPage
+	}
 
 	limit := h.defaultPageSize
 	if rawLimit := query.Get("limit"); rawLimit != "" {
@@ -171,7 +179,7 @@ func (h *HTTP) listOptions(r *http.Request) (ListOptions, error) {
 	if err != nil {
 		return ListOptions{}, ErrInvalidPage
 	}
-	return ListOptions{Limit: limit, Cursor: cursor, Search: search}, nil
+	return ListOptions{Limit: limit, Cursor: cursor, Search: search, Status: status}, nil
 }
 
 type listResponse struct {
@@ -187,26 +195,30 @@ type pageMeta struct {
 // batchResponse exposes aggregate operational data only: not one character of
 // a voucher code, its hash, or its support prefix leaves this boundary.
 type batchResponse struct {
-	ID        string     `json:"id"`
-	PlanName  string     `json:"plan_name"`
-	Issued    int64      `json:"issued"`
-	Redeemed  int64      `json:"redeemed"`
-	Available int64      `json:"available"`
-	Status    string     `json:"status"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID           string     `json:"id"`
+	PlanName     string     `json:"plan_name"`
+	OwnerDisplay string     `json:"owner_display"`
+	OwnerType    string     `json:"owner_type"`
+	Issued       int64      `json:"issued"`
+	Redeemed     int64      `json:"redeemed"`
+	Available    int64      `json:"available"`
+	Status       string     `json:"status"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 func responseBatch(batch Batch) batchResponse {
 	return batchResponse{
-		ID:        batch.ID,
-		PlanName:  batch.PlanName,
-		Issued:    batch.Issued,
-		Redeemed:  batch.Redeemed,
-		Available: batch.Available,
-		Status:    batch.Status,
-		ExpiresAt: batch.ExpiresAt,
-		CreatedAt: batch.CreatedAt,
+		ID:           batch.ID,
+		PlanName:     batch.PlanName,
+		OwnerDisplay: batch.OwnerDisplay,
+		OwnerType:    batch.OwnerType,
+		Issued:       batch.Issued,
+		Redeemed:     batch.Redeemed,
+		Available:    batch.Available,
+		Status:       batch.Status,
+		ExpiresAt:    batch.ExpiresAt,
+		CreatedAt:    batch.CreatedAt,
 	}
 }
 

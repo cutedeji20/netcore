@@ -17,14 +17,18 @@ var (
 // Batch is an aggregated, staff-safe voucher inventory row. BatchID is an
 // opaque UUID; code_hash and code_prefix are intentionally absent.
 type Batch struct {
-	ID        string
-	PlanName  string
-	Issued    int64
-	Redeemed  int64
-	Available int64
-	Status    string
-	ExpiresAt *time.Time
-	CreatedAt time.Time
+	ID       string
+	PlanName string
+	// OwnerDisplay identifies the account that purchased a batch, or the staff
+	// member who issued a manual batch. It never contains a voucher code.
+	OwnerDisplay string
+	OwnerType    string
+	Issued       int64
+	Redeemed     int64
+	Available    int64
+	Status       string
+	ExpiresAt    *time.Time
+	CreatedAt    time.Time
 }
 
 // ListOptions is a bounded keyset-paginated batch inventory query.
@@ -32,6 +36,7 @@ type ListOptions struct {
 	Limit  int
 	Cursor Cursor
 	Search string
+	Status string
 }
 
 type Cursor struct {

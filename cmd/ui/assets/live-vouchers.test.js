@@ -22,6 +22,14 @@ test("code management uses its own dialog instead of expanding a table cell", ()
   assert.match(css, /\.voucher-form/);
 });
 
+test("voucher inventory shows the purchasing customer or issuing staff and supports status filters", () => {
+  assert.match(source, /Owner/);
+  assert.match(source, /owner_display/);
+  assert.match(source, /Purchased by customer/);
+  assert.match(source, /filterOptions/);
+  assert.match(source, /Search batch, plan, or customer/);
+});
+
 test("revealing a batch uses the authenticated session without another challenge", () => {
   const reveal = source.slice(source.indexOf("function openManageDialog"), source.indexOf("livePage.subscribe"));
   assert.match(reveal, /body:"\{\}"/);

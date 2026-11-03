@@ -91,14 +91,16 @@ func newTestHTTP(t *testing.T) (*HTTP, *memoryStore) {
 	store := &memoryStore{
 		page: Page{
 			Batches: []Batch{{
-				ID:        "22222222-2222-4222-8222-222222222222",
-				PlanName:  "Campus 24 hour",
-				Issued:    1000,
-				Redeemed:  861,
-				Available: 139,
-				Status:    "ACTIVE",
-				ExpiresAt: &expiresAt,
-				CreatedAt: time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC),
+				ID:           "22222222-2222-4222-8222-222222222222",
+				PlanName:     "Campus 24 hour",
+				OwnerDisplay: "Chika Nwosu",
+				OwnerType:    "CUSTOMER",
+				Issued:       1000,
+				Redeemed:     861,
+				Available:    139,
+				Status:       "ACTIVE",
+				ExpiresAt:    &expiresAt,
+				CreatedAt:    time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC),
 			}},
 		},
 	}
@@ -115,7 +117,7 @@ func TestListUsesTenantScopedCursorOptions(t *testing.T) {
 		CreatedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC),
 		ID:        "33333333-3333-4333-8333-333333333333",
 	})
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/vouchers/batches?limit=10&q=campus&cursor="+cursor, nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/vouchers/batches?limit=10&q=chika&status=ACTIVE&cursor="+cursor, nil)
 	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: voucherTestTenantID}))
 	response := httptest.NewRecorder()
 
@@ -124,14 +126,14 @@ func TestListUsesTenantScopedCursorOptions(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", response.Code, response.Body)
 	}
-	if store.tenantID != voucherTestTenantID || store.options.Limit != 10 || store.options.Search != "campus" || store.options.Cursor.ID != "33333333-3333-4333-8333-333333333333" {
+	if store.tenantID != voucherTestTenantID || store.options.Limit != 10 || store.options.Search != "chika" || store.options.Status != "ACTIVE" || store.options.Cursor.ID != "33333333-3333-4333-8333-333333333333" {
 		t.Fatalf("unexpected store request: tenant=%q options=%+v", store.tenantID, store.options)
 	}
 	var body listResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Data) != 1 || body.Data[0].Available != 139 || body.Data[0].PlanName != "Campus 24 hour" || body.Data[0].ExpiresAt == nil {
+	if len(body.Data) != 1 || body.Data[0].Available != 139 || body.Data[0].PlanName != "Campus 24 hour" || body.Data[0].OwnerDisplay != "Chika Nwosu" || body.Data[0].OwnerType != "CUSTOMER" || body.Data[0].ExpiresAt == nil {
 		t.Fatalf("unexpected response: %+v", body)
 	}
 }
@@ -146,6 +148,17 @@ func TestListRejectsUnsafePageParameters(t *testing.T) {
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body=%s", response.Code, response.Body)
+	}
+}
+
+func TestListRejectsUnknownStatusFilter(t *testing.T) {
+	handler, _ := newTestHTTP(t)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/vouchers/batches?status=UNSAFE", nil)
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: voucherTestTenantID}))
+	response := httptest.NewRecorder()
+	handler.list(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
 	}
 }
 

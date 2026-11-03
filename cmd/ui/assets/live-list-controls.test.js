@@ -44,6 +44,6 @@ test("configuration exposes only the documented server filters", () => {
   const config = require("./live-list-config.js");
   assert.deepEqual(config.get("subscriptions"), { endpoint: "/api/v1/subscriptions", filterParam: "status", filters: ["", "PENDING", "ACTIVE", "SUSPENDED", "EXPIRED", "CANCELLED"], initialFilter: "" });
   assert.deepEqual(config.get("sessions").filters, ["", "ACTIVE", "SUSPECT", "CLOSED"]);
-  assert.deepEqual(config.get("vouchers"), { endpoint: "/api/v1/vouchers/batches", filterParam: "", filters: [""], initialFilter: "" });
+  assert.deepEqual(config.get("vouchers"), { endpoint: "/api/v1/vouchers/batches", filterParam: "status", filters: ["", "ACTIVE", "COMPLETED", "EXPIRED", "REVOKED", "MIXED"], initialFilter: "" });
   assert.deepEqual(config.get("billing").filters, ["", "PAYMENT", "INVOICE"]);
 });

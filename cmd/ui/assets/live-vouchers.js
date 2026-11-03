@@ -95,8 +95,19 @@
     row.appendChild(cell);
   }
 
+  function appendOwnerCell(row, batch) {
+    var cell = document.createElement("td");
+    var entity = document.createElement("div");
+    var copy = document.createElement("span");
+    var name = document.createElement("strong");
+    var detail = document.createElement("small");
+    name.textContent = safeText(batch.owner_display);
+    detail.textContent = batch.owner_type === "CUSTOMER" ? "Purchased by customer" : batch.owner_type === "STAFF" ? "Issued by staff" : "Owner unavailable";
+    entity.className = "entity"; copy.append(name, detail); entity.append(copy); cell.append(entity); row.appendChild(cell);
+  }
+
   function setHeadings(table) {
-    var headings = ["Batch", "Access bundle", "Issued", "Redeemed", "Status"];
+    var headings = ["Batch", "Access bundle", "Owner", "Issued", "Redeemed", "Status"];
     if (canWrite()) headings.push("Actions");
     var headingRow = table.querySelector("thead tr");
     headingRow.replaceChildren();
@@ -124,6 +135,7 @@
       var row = document.createElement("tr");
       appendBatchCell(row, batch);
       appendPlanCell(row, batch);
+	  appendOwnerCell(row, batch);
       appendTextCell(row, batch.issued);
       appendTextCell(row, batch.redeemed);
       appendStatusCell(row, batch.status);
@@ -141,24 +153,29 @@
   function renderControls() {
     if (currentPage() !== "vouchers") return;
     livePage.renderListControls("vouchers", {
-      query: criteriaPending ? pendingQuery : listState.query, busy: requestInFlight,
+      query: criteriaPending ? pendingQuery : listState.query, filter: listState.filter, filters: filterOptions(), busy: requestInFlight,
       hasPrevious: listState.previousCursors.length > 0, hasNext: listState.hasMore,
-      searchPlaceholder: "Search voucher batches", searchLabel: "Search voucher batches",
+      searchPlaceholder: "Search batch, plan, or customer", searchLabel: "Search voucher batches or customers", filterLabel: "Filter voucher status",
       onSearch: function (query) {
         clearTimeout(searchTimer);
         pendingQuery = query;
         criteriaPending = true;
         requestVersion += 1;
-        window.NetCoreLiveListControls.applyCriteria(listState, query, "");
+        window.NetCoreLiveListControls.applyCriteria(listState, query, listState.filter);
         searchTimer = setTimeout(function () { criteriaPending = false; requestVersion += 1; requestBatches(true); }, 250);
       },
+	  onFilter: function (filter) { applyCriteria(listState.query, filter); },
       onNext: function () { if (criteriaPending) return; if (window.NetCoreLiveListControls.nextPage(listState)) requestBatches(true); else renderControls(); },
       onPrevious: function () { if (criteriaPending) return; if (listState.previousCursors.length) { window.NetCoreLiveListControls.previousPage(listState); requestBatches(true); } else renderControls(); }
     });
   }
 
-  function applyCriteria(query) {
-    if (window.NetCoreLiveListControls.applyCriteria(listState, query, "")) requestBatches(true);
+  function filterOptions() {
+    return listConfig.filters.map(function (filter) { return { value: filter, label: filter ? statusLabel(filter) : "All statuses" }; });
+  }
+
+  function applyCriteria(query, filter) {
+    if (window.NetCoreLiveListControls.applyCriteria(listState, query, filter)) requestBatches(true);
   }
 
   function requestBatches(force) {

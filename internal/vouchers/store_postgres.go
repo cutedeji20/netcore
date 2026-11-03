@@ -39,12 +39,19 @@ func (s *PostgresStore) listBatches(ctx context.Context, tenantID, buyerUserID s
 		return Page{}, ErrInvalidPage
 	}
 	options.Search = strings.TrimSpace(options.Search)
+	options.Status = strings.ToUpper(strings.TrimSpace(options.Status))
+	if _, ok := voucherBatchStatuses[options.Status]; !ok {
+		return Page{}, ErrInvalidPage
+	}
 
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 WITH batches AS (
     SELECT COALESCE(v.batch_id, v.id) AS id,
            p.name AS plan_name,
+		   COALESCE(NULLIF(btrim(concat_ws(' ', buyer_customer.first_name, buyer_customer.last_name)), ''), buyer.email::text, issuer.email::text, 'Manual or legacy batch') AS owner_display,
+		   concat_ws(' ', buyer_customer.first_name, buyer_customer.last_name, buyer_customer.customer_number, buyer_customer.email::text, buyer_customer.phone, buyer.email::text, issuer.email::text) AS owner_search,
+		   CASE WHEN b.buyer_user_id IS NOT NULL THEN 'CUSTOMER' WHEN b.issuer_user_id IS NOT NULL THEN 'STAFF' ELSE 'UNKNOWN' END AS owner_type,
            COUNT(*)::bigint AS issued,
            COUNT(*) FILTER (WHERE v.status = 'REDEEMED')::bigint AS redeemed,
            COUNT(*) FILTER (WHERE v.status = 'UNUSED')::bigint AS available,
@@ -71,11 +78,17 @@ WITH batches AS (
         ON p.id = v.plan_id
        AND p.tenant_id = v.tenant_id
       LEFT JOIN voucher_batches AS b ON b.id=v.batch_id AND b.tenant_id=v.tenant_id
+      LEFT JOIN users AS buyer ON buyer.id=b.buyer_user_id AND buyer.tenant_id=v.tenant_id
+      LEFT JOIN customers AS buyer_customer ON buyer_customer.user_id=buyer.id AND buyer_customer.tenant_id=v.tenant_id
+      LEFT JOIN users AS issuer ON issuer.id=b.issuer_user_id AND issuer.tenant_id=v.tenant_id
      WHERE v.tenant_id = $1 AND ($6::uuid IS NULL OR b.buyer_user_id=$6::uuid)
-     GROUP BY COALESCE(v.batch_id, v.id), p.name
+     GROUP BY COALESCE(v.batch_id, v.id), p.name, b.buyer_user_id, b.issuer_user_id,
+              buyer_customer.first_name, buyer_customer.last_name, buyer_customer.customer_number, buyer_customer.email, buyer_customer.phone, buyer.email, issuer.email
 )
 SELECT id::text,
        plan_name,
+	   owner_display,
+	   owner_type,
        issued,
        redeemed,
        available,
@@ -87,7 +100,9 @@ SELECT id::text,
        $2 = ''
        OR plan_name ILIKE '%' || $2 || '%'
        OR id::text ILIKE '%' || $2 || '%'
+	   OR owner_search ILIKE '%' || $2 || '%'
    )
+	   AND ($7 = '' OR status = $7)
    AND (
        $3::timestamptz IS NULL
        OR (created_at, id) < ($3::timestamptz, $4::uuid)
@@ -100,6 +115,7 @@ SELECT id::text,
 			nullableCursorID(options.Cursor),
 			options.Limit+1,
 			nullableVoucherUUID(buyerUserID),
+			options.Status,
 		)
 		if err != nil {
 			return fmt.Errorf("query voucher batches: %w", err)
@@ -112,6 +128,8 @@ SELECT id::text,
 			if err := rows.Scan(
 				&batch.ID,
 				&batch.PlanName,
+				&batch.OwnerDisplay,
+				&batch.OwnerType,
 				&batch.Issued,
 				&batch.Redeemed,
 				&batch.Available,
