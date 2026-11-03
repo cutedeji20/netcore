@@ -85,8 +85,6 @@ func printablePageContent(batch PrintableBatch, page int) string {
 		if batch.ExpiresAt != nil {
 			writePDFText(&content, "F1", 6.5, x+9, y+height-139, "Use before: "+batch.ExpiresAt.UTC().Format("02 Jan 2006 15:04 UTC"))
 		}
-		writePDFText(&content, "F1", 6.5, x+9, y+28, "Connect to Data Hub Wi-Fi, then")
-		writePDFText(&content, "F1", 6.5, x+9, y+18, "enter this code on the voucher form.")
 		writePDFText(&content, "F1", 5.5, x+9, y+7, fmt.Sprintf("Batch %s  Ticket %d/%d", truncatePDFText(batch.ID, 8), index+1, len(batch.Codes)))
 		content.WriteString("[3 2] 0 d 0.70 G\n")
 	}

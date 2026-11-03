@@ -30,6 +30,9 @@ func TestPrintableBatchPDFUsesTwelveTicketsPerA4Page(t *testing.T) {
 	if strings.Count(text, "PREPAID INTERNET ACCESS") != 13 {
 		t.Fatalf("expected 13 ticket layouts")
 	}
+	if strings.Contains(text, "Connect to Data Hub Wi-Fi") || strings.Contains(text, "enter this code on the voucher form") {
+		t.Fatal("obsolete connection instructions were included in the printable ticket")
+	}
 }
 
 func TestPrintableBatchPDFRejectsEmptyBatch(t *testing.T) {
