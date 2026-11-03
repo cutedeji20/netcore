@@ -56,7 +56,7 @@ func TestListUsesTenantScopedCursorOptions(t *testing.T) {
 		CreatedAt: time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC),
 		ID:        "33333333-3333-4333-8333-333333333333",
 	})
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/team/members?limit=10&q=operations&cursor="+cursor, nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/team/members?limit=10&q=operations&status=ACTIVE&role=Operations&cursor="+cursor, nil)
 	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: teamTestTenantID}))
 	response := httptest.NewRecorder()
 
@@ -65,7 +65,7 @@ func TestListUsesTenantScopedCursorOptions(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", response.Code, response.Body)
 	}
-	if store.tenantID != teamTestTenantID || store.options.Limit != 10 || store.options.Search != "operations" || store.options.Cursor.ID != "33333333-3333-4333-8333-333333333333" {
+	if store.tenantID != teamTestTenantID || store.options.Limit != 10 || store.options.Search != "operations" || store.options.Status != "ACTIVE" || store.options.Role != "Operations" || store.options.Cursor.ID != "33333333-3333-4333-8333-333333333333" {
 		t.Fatalf("unexpected store request: tenant=%q options=%+v", store.tenantID, store.options)
 	}
 	var body listResponse
@@ -87,6 +87,23 @@ func TestListRejectsUnsafePageParameters(t *testing.T) {
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body=%s", response.Code, response.Body)
+	}
+}
+
+func TestListRejectsUnknownMemberFilters(t *testing.T) {
+	handler, _ := newTestHTTP(t)
+	for _, rawQuery := range []string{
+		"/api/v1/team/members?status=LOCKED",
+		"/api/v1/team/members?role=Owner",
+	} {
+		request := httptest.NewRequest(http.MethodGet, rawQuery, nil)
+		request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: teamTestTenantID}))
+		response := httptest.NewRecorder()
+
+		handler.list(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("query %q status = %d body=%s", rawQuery, response.Code, response.Body)
+		}
 	}
 }
 

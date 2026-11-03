@@ -30,6 +30,8 @@ type ListOptions struct {
 	Limit  int
 	Cursor Cursor
 	Search string
+	Status string
+	Role   string
 }
 
 type Cursor struct {

@@ -8,6 +8,7 @@
     subscriptions: { endpoint: "/api/v1/subscriptions", filterParam: "status", filters: ["", "PENDING", "ACTIVE", "SUSPENDED", "EXPIRED", "CANCELLED"], initialFilter: "" },
     sessions: { endpoint: "/api/v1/sessions", filterParam: "status", filters: ["", "ACTIVE", "SUSPECT", "CLOSED"], initialFilter: "ACTIVE" },
     vouchers: { endpoint: "/api/v1/vouchers/batches", filterParam: "status", filters: ["", "ACTIVE", "COMPLETED", "EXPIRED", "REVOKED", "MIXED"], initialFilter: "" },
+    team: { endpoint: "/api/v1/team/members", filterParam: "status", filters: ["", "ACTIVE", "DISABLED"], initialFilter: "" },
     network: { endpoint: "/api/v1/network/routers", filterParam: "status", filters: ["", "PROVISIONING", "ONLINE", "OFFLINE", "RETIRED"], initialFilter: "" },
     billing: { endpoint: "/api/v1/billing/transactions", filterParam: "source", filters: ["", "PAYMENT", "INVOICE"], initialFilter: "" },
     security: { endpoint: "/api/v1/security/events", filterParam: "", filters: [""], initialFilter: "" },

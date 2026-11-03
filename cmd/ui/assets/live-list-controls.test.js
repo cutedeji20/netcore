@@ -45,5 +45,6 @@ test("configuration exposes only the documented server filters", () => {
   assert.deepEqual(config.get("subscriptions"), { endpoint: "/api/v1/subscriptions", filterParam: "status", filters: ["", "PENDING", "ACTIVE", "SUSPENDED", "EXPIRED", "CANCELLED"], initialFilter: "" });
   assert.deepEqual(config.get("sessions").filters, ["", "ACTIVE", "SUSPECT", "CLOSED"]);
   assert.deepEqual(config.get("vouchers"), { endpoint: "/api/v1/vouchers/batches", filterParam: "status", filters: ["", "ACTIVE", "COMPLETED", "EXPIRED", "REVOKED", "MIXED"], initialFilter: "" });
+  assert.deepEqual(config.get("team"), { endpoint: "/api/v1/team/members", filterParam: "status", filters: ["", "ACTIVE", "DISABLED"], initialFilter: "" });
   assert.deepEqual(config.get("billing").filters, ["", "PAYMENT", "INVOICE"]);
 });

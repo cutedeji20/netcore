@@ -98,6 +98,11 @@ type ReactivateInput struct {
 	Password  string
 	MFACode   string
 }
+type ForceLogoutInput struct {
+	Principal         auth.Principal
+	UserID            string
+	Password, MFACode string
+}
 type PasswordResetInput struct {
 	Principal           auth.Principal
 	UserID, NewPassword string
@@ -138,12 +143,17 @@ type InvitationStore interface {
 	ChangeStaffRole(context.Context, string, string, string, BuiltInRole) error
 	DeactivateStaff(context.Context, string, string, string) error
 	ReactivateStaff(context.Context, string, string, string) error
+	InvalidateStaffSessions(context.Context, string, string, string) (int, error)
 	CreateMFARecovery(context.Context, string, string, string, []byte, time.Time) (MFARecovery, error)
 	ActivateStaffPasswordReset(context.Context, MFARecovery, string) error
 	RevokeMFARecovery(context.Context, string, string, string) error
 	FindMFARecoveryByDigest(context.Context, []byte) (MFARecovery, bool, error)
 	CreateOrReuseMFARecoveryMFA(context.Context, MFARecovery, []byte, auth.MFASecretEnvelope) (auth.MFASecretEnvelope, error)
 	CompleteMFARecovery(context.Context, MFARecovery, auth.MFASecretEnvelope, int64) error
+}
+
+type bulkLifecycleStore interface {
+	BulkStaffLifecycle(context.Context, string, string, []string, bool) error
 }
 
 type Service struct {
@@ -321,6 +331,20 @@ func (s *Service) Reactivate(ctx context.Context, in ReactivateInput) error {
 	return mapStoreError(s.store.ReactivateStaff(ctx, in.Principal.TenantID, in.Principal.UserID, in.UserID))
 }
 
+// ForceLogout invalidates every current session for an active staff member
+// without disabling their account. It is deliberately an administrator-only,
+// step-up-protected operation and never permits signing out the actor.
+func (s *Service) ForceLogout(ctx context.Context, in ForceLogoutInput) (int, error) {
+	if s == nil || !validMutationPrincipal(in.Principal) || !validUUID(in.UserID) || in.UserID == in.Principal.UserID {
+		return 0, ErrInvitationInvalid
+	}
+	if err := s.stepUp.VerifyStepUp(ctx, auth.StepUpInput{Principal: in.Principal, Password: in.Password, MFACode: in.MFACode}); err != nil {
+		return 0, ErrStepUpFailed
+	}
+	count, err := s.store.InvalidateStaffSessions(ctx, in.Principal.TenantID, in.Principal.UserID, in.UserID)
+	return count, mapStoreError(err)
+}
+
 // ResetStaffPassword replaces another active staff member's password after a
 // step-up challenge. MFA enrollment is deliberately retained and all existing
 // sessions are invalidated in the same tenant transaction.
@@ -439,6 +463,12 @@ func (s *Service) BulkLifecycle(ctx context.Context, principal auth.Principal, u
 		return 0, ErrInvitationInvalid
 	}
 	seen := map[string]struct{}{}
+	if atomicStore, ok := s.store.(bulkLifecycleStore); ok {
+		if err := atomicStore.BulkStaffLifecycle(ctx, principal.TenantID, principal.UserID, userIDs, active); err != nil {
+			return 0, mapStoreError(err)
+		}
+		return len(userIDs), nil
+	}
 	for _, id := range userIDs {
 		if !validUUID(id) || id == principal.UserID {
 			return 0, ErrInvitationInvalid

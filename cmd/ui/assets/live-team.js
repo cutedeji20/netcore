@@ -30,6 +30,15 @@ if (typeof window !== "undefined") (function () {
   var invitationRequestInFlight = false;
   var apiBase = String(window.NETCORE_API_URL || window.location.origin).replace(/\/$/, "");
   var livePage = window.NetCoreLivePage;
+  var listConfig = window.NetCoreLiveListConfig.get("team");
+  var listState = window.NetCoreLiveListControls.createState(listConfig.filters, listConfig.initialFilter, listConfig.filterParam);
+  var roleFilter = "";
+  var teamRoles = ["", "Administrator", "Operations", "Billing", "Support", "UNASSIGNED"];
+  var loadedMembersMeta = {};
+  var searchTimer = 0;
+  var pendingQuery = "";
+  var criteriaPending = false;
+  var requestVersion = 0;
   var issuedInvitations = [];
   var selectedMemberIDs = new Set();
 
@@ -51,7 +60,7 @@ if (typeof window !== "undefined") (function () {
 
   function closeDialog(dialog) { dialog.remove(); }
 
-  function sensitiveDialog(title, fields, submitLabel, onSubmit) {
+  function sensitiveDialog(title, fields, submitLabel, onSubmit, noteText) {
     var backdrop = document.createElement("div");
     var form = document.createElement("form");
     var heading = document.createElement("h2");
@@ -63,7 +72,7 @@ if (typeof window !== "undefined") (function () {
     backdrop.className = "team-dialog-backdrop";
     form.className = "team-dialog";
     heading.textContent = title;
-    note.textContent = "Confirm this sensitive action with your current password and six-digit authenticator code.";
+    note.textContent = noteText || "Confirm this sensitive action with your current password and six-digit authenticator code.";
     feedback.className = "team-form-feedback";
     fields.forEach(function (field) {
       var label = document.createElement("label");
@@ -141,6 +150,19 @@ if (typeof window !== "undefined") (function () {
 
   function safeText(value) {
     return value == null || value === "" ? "—" : String(value);
+  }
+
+  function showOperationNotice(message) {
+    var toolbar = document.querySelector("#page-content .toolbar");
+    if (!toolbar) return;
+    var notice = toolbar.querySelector(".team-operation-notice");
+    if (!notice) {
+      notice = document.createElement("p");
+      notice.className = "team-operation-notice description";
+      notice.setAttribute("role", "status");
+      toolbar.appendChild(notice);
+    }
+    notice.textContent = message;
   }
 
   function displayName(member) {
@@ -228,7 +250,84 @@ if (typeof window !== "undefined") (function () {
   function renderBulkActions() {
     if (!canWrite() || currentPage() !== "team") return;
     var toolbar=document.querySelector("#page-content .toolbar"); if(!toolbar)return; var old=toolbar.querySelector(".team-bulk-actions"); if(old)old.remove(); var wrap=document.createElement("div"); wrap.className="team-bulk-actions";
-    [["Deactivate selected",false],["Reactivate selected",true]].forEach(function(action){var button=document.createElement("button");button.type="button";button.className="button team-row-action";button.textContent=action[0];button.disabled=selectedMemberIDs.size===0;button.onclick=function(){sensitiveDialog(action[0]+" members",[],action[0],function(values){values.user_ids=Array.from(selectedMemberIDs);values.active=action[1];return postJSON("/api/v1/team/members/bulk-lifecycle","POST",values).then(function(response){if(!response.ok)return safeError(response).then(Promise.reject.bind(Promise));selectedMemberIDs.clear();});});};wrap.appendChild(button);});toolbar.appendChild(wrap);
+    [["Disable and sign out selected",false],["Reactivate selected",true]].forEach(function(action){var button=document.createElement("button");button.type="button";button.className="button team-row-action";button.textContent=action[0];button.disabled=selectedMemberIDs.size===0;button.onclick=function(){var note=action[1]?"Reactivate the selected staff accounts. Previously issued sessions remain invalid and staff must sign in again.":"This immediately disables each selected account and signs it out from all devices.";sensitiveDialog(action[0]+" members",[],action[0],function(values){values.user_ids=Array.from(selectedMemberIDs);values.active=action[1];return postJSON("/api/v1/team/members/bulk-lifecycle","POST",values).then(function(response){if(!response.ok)return safeError(response).then(Promise.reject.bind(Promise));selectedMemberIDs.clear();});},note);};wrap.appendChild(button);});toolbar.appendChild(wrap);
+  }
+
+  function statusLabel(value) {
+    return safeText(value).toLowerCase().replace(/_/g, " ").replace(/\b\w/g, function (letter) { return letter.toUpperCase(); });
+  }
+
+  function roleOptions() {
+    return teamRoles.map(function (role) {
+      return { value: role, label: role === "" ? "All roles" : role === "UNASSIGNED" ? "No role assigned" : role };
+    });
+  }
+
+  function applyTeamCriteria(query, status, role, refresh) {
+    var changed = window.NetCoreLiveListControls.applyCriteria(listState, query, status);
+    var nextRole = teamRoles.indexOf(role) >= 0 ? role : "";
+    if (roleFilter !== nextRole) {
+      roleFilter = nextRole;
+      listState.cursor = "";
+      listState.previousCursors = [];
+      listState.nextCursor = "";
+      listState.hasMore = false;
+      changed = true;
+    }
+    if (changed && refresh) {
+      requestVersion += 1;
+      requestMembers(true);
+    }
+  }
+
+  function memberRequestURL() {
+    var url = new URL(window.NetCoreLiveListControls.requestURL(apiBase, listConfig.endpoint, listState, 25));
+    if (roleFilter) url.searchParams.set("role", roleFilter);
+    return url.toString();
+  }
+
+  function renderControls() {
+    if (currentPage() !== "team") return;
+    livePage.renderListControls("team", {
+      query: criteriaPending ? pendingQuery : listState.query,
+      filter: listState.filter,
+      filters: listConfig.filters.map(function (status) { return { value: status, label: status ? statusLabel(status) : "All access states" }; }),
+      busy: requestInFlight,
+      hasPrevious: listState.previousCursors.length > 0,
+      hasNext: listState.hasMore,
+      searchPlaceholder: "Search team members",
+      searchLabel: "Search team members by email, phone, or role",
+      filterLabel: "Filter access state",
+      onSearch: function (query) {
+        clearTimeout(searchTimer);
+        pendingQuery = query;
+        criteriaPending = true;
+        requestVersion += 1;
+        applyTeamCriteria(query, listState.filter, roleFilter, false);
+        searchTimer = setTimeout(function () {
+          criteriaPending = false;
+          requestVersion += 1;
+          requestMembers(true);
+        }, 250);
+      },
+      onFilter: function (status) { applyTeamCriteria(listState.query, status, roleFilter, true); },
+      onNext: function () { if (criteriaPending) return; if (window.NetCoreLiveListControls.nextPage(listState)) requestMembers(true); else renderControls(); },
+      onPrevious: function () { if (criteriaPending) return; if (listState.previousCursors.length) { window.NetCoreLiveListControls.previousPage(listState); requestMembers(true); } else renderControls(); }
+    });
+    var mount = livePage.listMount("team");
+    if (!mount) return;
+    var role = document.createElement("select");
+    role.setAttribute("aria-label", "Filter team role");
+    role.disabled = requestInFlight;
+    roleOptions().forEach(function (option) {
+      var choice = document.createElement("option");
+      choice.value = option.value;
+      choice.textContent = option.label;
+      choice.selected = option.value === roleFilter;
+      role.appendChild(choice);
+    });
+    role.addEventListener("change", function () { if (!requestInFlight) applyTeamCriteria(listState.query, listState.filter, role.value, true); });
+    mount.appendChild(role);
   }
 
   function displayMembers() {
@@ -261,12 +360,13 @@ if (typeof window !== "undefined") (function () {
         var actions = document.createElement("td");
         var memberActions = [
           ["Change role", "PUT", "/api/v1/team/members/" + member.id + "/role", "role"],
-          [member.status === "DISABLED" ? "Reactivate" : "Deactivate", "POST", "/api/v1/team/members/" + member.id + (member.status === "DISABLED" ? "/reactivate" : "/deactivate"), ""]
+          [member.status === "DISABLED" ? "Reactivate" : "Disable and sign out", "POST", "/api/v1/team/members/" + member.id + (member.status === "DISABLED" ? "/reactivate" : "/deactivate"), ""]
         ];
+        if (member.status !== "DISABLED") memberActions.push(["Sign out everywhere", "POST", "/api/v1/team/members/" + member.id + "/sign-out", "logout"]);
         if (!window.NETCORE_PRINCIPAL || window.NETCORE_PRINCIPAL.id !== member.id) memberActions.push(["Reset password", "POST", "/api/v1/team/members/" + member.id + "/password-reset", "password"]);
         memberActions.forEach(function (action) {
           var button = document.createElement("button"); button.type = "button"; button.className = "button team-row-action"; button.textContent = action[0];
-          button.addEventListener("click", function () { var fields = action[3] === "role" ? [{ label: "New role", name: "role", options: ["Administrator", "Operations", "Billing", "Support"] }] : action[3] === "password" ? [{ label: "New password (at least 16 characters)", name: "new_password", type: "password", minLength: 16, maxLength: 1024 }] : []; sensitiveDialog(action[0] + " member", fields, action[0], function (values) { return postJSON(action[2], action[1], values).then(function (response) { return response.ok ? undefined : safeError(response).then(Promise.reject.bind(Promise)); }); }); }); actions.appendChild(button);
+          button.addEventListener("click", function () { var fields = action[3] === "role" ? [{ label: "New role", name: "role", options: ["Administrator", "Operations", "Billing", "Support"] }] : action[3] === "password" ? [{ label: "New password (at least 16 characters)", name: "new_password", type: "password", minLength: 16, maxLength: 1024 }] : []; var note=action[3] === "logout" ? "This keeps the account active but immediately signs the staff member out from all devices." : action[0] === "Disable and sign out" ? "This immediately disables the account and signs the staff member out from all devices." : action[0] === "Reactivate" ? "This restores the account, but previously issued sessions remain invalid and the staff member must sign in again." : ""; sensitiveDialog(action[0] + " member", fields, action[0], function (values) { return postJSON(action[2], action[1], values).then(function (response) { if (!response.ok) return safeError(response).then(Promise.reject.bind(Promise)); if (action[3] === "logout") return response.json().then(function (payload) { showOperationNotice("Staff member signed out from " + safeText(payload && payload.sessions_invalidated) + " current session(s)."); }); if (action[0] === "Disable and sign out") showOperationNotice("Staff account disabled and signed out from all current sessions."); }); },note); }); actions.appendChild(button);
         }); row.appendChild(actions);
       }
       body.appendChild(row);
@@ -279,8 +379,10 @@ if (typeof window !== "undefined") (function () {
   function requestMembers(force) {
     if (requestInFlight || (loadedMembers && !force)) return;
     requestInFlight = true;
+    var requestVersionAtStart = requestVersion;
+    renderControls();
     if (!loadedMembers) showState("loading");
-    fetch(apiBase + "/api/v1/team/members?limit=25", {
+    fetch(memberRequestURL(), {
       credentials: "include",
       cache: "no-store"
     })
@@ -290,16 +392,22 @@ if (typeof window !== "undefined") (function () {
       })
       .then(function (payload) {
         if (!payload || !Array.isArray(payload.data)) throw new Error("Team response was invalid");
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         loadedMembers = payload.data;
+        loadedMembersMeta = payload.meta || {};
+        window.NetCoreLiveListControls.applyResponseMeta(listState, loadedMembersMeta);
         displayMembers();
       })
       .catch(function () {
+        if (criteriaPending || requestVersionAtStart !== requestVersion) return;
         // Last verified records remain visible when a refresh fails.
         if (loadedMembers) displayMembers();
         showState("error", { message: "Team members could not be loaded. Please try again.", preserve: Boolean(loadedMembers), retry: function () { requestMembers(true); } });
       })
       .finally(function () {
         requestInFlight = false;
+        renderControls();
+        if (!criteriaPending && requestVersionAtStart !== requestVersion) requestMembers(true);
       });
   }
 
@@ -317,6 +425,7 @@ if (typeof window !== "undefined") (function () {
     if (event.detail !== "team") return;
     bindHeaderAction();
     renderBulkActions();
+    renderControls();
     requestInvitations(true);
     if (loadedMembers) requestMembers(true);
     else requestMembers();

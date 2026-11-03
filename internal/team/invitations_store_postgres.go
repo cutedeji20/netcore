@@ -14,6 +14,7 @@ import (
 
 const existingTenantUserByEmailSQL = `SELECT id::text FROM users WHERE tenant_id=$1 AND email=$2 LIMIT 1 FOR UPDATE`
 const lockedTenantStaffTargetSQL = `SELECT u.id::text FROM users u WHERE u.tenant_id=$1 AND u.id=$2 AND u.status='ACTIVE' AND EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.tenant_id=u.tenant_id WHERE ur.user_id=u.id) FOR UPDATE`
+const lockedTenantStaffTargetByStatusSQL = `SELECT u.id::text FROM users u WHERE u.tenant_id=$1 AND u.id=$2 AND u.status=$3 AND EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.tenant_id=u.tenant_id WHERE ur.user_id=u.id) FOR UPDATE`
 const invalidateTargetSessionsSQL = `UPDATE auth_sessions SET invalidated_at=COALESCE(invalidated_at,now()) WHERE tenant_id=$1 AND user_id=$2 AND invalidated_at IS NULL`
 
 // CreateInvitation records a non-redeemable delivery state first.
@@ -191,7 +192,7 @@ func (s *PostgresStore) ReactivateStaff(ctx context.Context, tenantID, actorID, 
 			return err
 		}
 		var target string
-		if err := tx.QueryRow(ctx, lockedTenantStaffTargetSQL, tenantID, targetID).Scan(&target); err != nil {
+		if err := tx.QueryRow(ctx, lockedTenantStaffTargetByStatusSQL, tenantID, targetID, "DISABLED").Scan(&target); err != nil {
 			return ErrInvitationInvalid
 		}
 		command, err := tx.Exec(ctx, `UPDATE users SET status='ACTIVE',updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='DISABLED'`, tenantID, targetID)
@@ -205,6 +206,84 @@ func (s *PostgresStore) ReactivateStaff(ctx context.Context, tenantID, actorID, 
 			return err
 		}
 		return teamAudit(ctx, tx, tenantID, actorID, "STAFF_REACTIVATED", "users", targetID)
+	})
+}
+
+// InvalidateStaffSessions signs an active staff member out of every current
+// session without changing the account status. The target and audit event are
+// locked and persisted in the same tenant transaction as invalidation.
+func (s *PostgresStore) InvalidateStaffSessions(ctx context.Context, tenantID, actorID, targetID string) (count int, err error) {
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var target string
+		if err := tx.QueryRow(ctx, lockedTenantStaffTargetSQL, tenantID, targetID).Scan(&target); err != nil {
+			return ErrInvitationInvalid
+		}
+		command, err := tx.Exec(ctx, invalidateTargetSessionsSQL, tenantID, targetID)
+		if err != nil {
+			return err
+		}
+		count = int(command.RowsAffected())
+		return teamAudit(ctx, tx, tenantID, actorID, "STAFF_SESSIONS_INVALIDATED", "users", targetID)
+	})
+	return count, err
+}
+
+// BulkStaffLifecycle applies a lifecycle change atomically. If any target is
+// missing, has the wrong state, or would remove the final active administrator,
+// PostgreSQL rolls back the entire batch and no sessions are invalidated.
+func (s *PostgresStore) BulkStaffLifecycle(ctx context.Context, tenantID, actorID string, targetIDs []string, active bool) error {
+	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, tenantID); err != nil {
+			return err
+		}
+		expectedStatus, nextStatus, action := "ACTIVE", "DISABLED", "STAFF_DEACTIVATED"
+		if active {
+			expectedStatus, nextStatus, action = "DISABLED", "ACTIVE", "STAFF_REACTIVATED"
+		}
+		rows, err := tx.Query(ctx, `SELECT u.id::text FROM users u WHERE u.tenant_id=$1 AND u.id = ANY($2::uuid[]) AND u.status=$3 AND EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.tenant_id=u.tenant_id WHERE ur.user_id=u.id) FOR UPDATE`, tenantID, targetIDs, expectedStatus)
+		if err != nil {
+			return err
+		}
+		locked := make([]string, 0, len(targetIDs))
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			locked = append(locked, id)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		if len(locked) != len(targetIDs) {
+			return ErrInvitationInvalid
+		}
+		command, err := tx.Exec(ctx, `UPDATE users SET status=$3,updated_at=now() WHERE tenant_id=$1 AND id = ANY($2::uuid[]) AND status=$4`, tenantID, targetIDs, nextStatus, expectedStatus)
+		if err != nil || command.RowsAffected() != int64(len(targetIDs)) {
+			if err != nil {
+				return err
+			}
+			return ErrInvitationInvalid
+		}
+		var administrators int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id AND r.tenant_id=u.tenant_id WHERE u.tenant_id=$1 AND u.status='ACTIVE' AND r.name='Administrator'`, tenantID).Scan(&administrators); err != nil {
+			return err
+		}
+		if administrators < 1 {
+			return ErrLastAdministrator
+		}
+		if _, err := tx.Exec(ctx, `UPDATE auth_sessions SET invalidated_at=COALESCE(invalidated_at,now()) WHERE tenant_id=$1 AND user_id = ANY($2::uuid[]) AND invalidated_at IS NULL`, tenantID, targetIDs); err != nil {
+			return err
+		}
+		for _, id := range locked {
+			if err := teamAudit(ctx, tx, tenantID, actorID, action, "users", id); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

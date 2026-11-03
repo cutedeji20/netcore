@@ -29,6 +29,14 @@ func (s *PostgresStore) List(ctx context.Context, tenantID string, options ListO
 		return Page{}, ErrInvalidPage
 	}
 	options.Search = strings.TrimSpace(options.Search)
+	options.Status = strings.ToUpper(strings.TrimSpace(options.Status))
+	options.Role = strings.TrimSpace(options.Role)
+	if _, ok := teamMemberStatuses[options.Status]; !ok {
+		return Page{}, ErrInvalidPage
+	}
+	if role, ok := teamMemberRoles[strings.ToUpper(options.Role)]; !ok || role != options.Role {
+		return Page{}, ErrInvalidPage
+	}
 
 	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
@@ -86,13 +94,31 @@ SELECT u.id::text,
        $3::timestamptz IS NULL
        OR (u.created_at, u.id) < ($3::timestamptz, $4::uuid)
    )
+	AND ($5 = '' OR u.status = $5)
+	AND (
+		$6 = ''
+		OR ($6 = 'UNASSIGNED' AND NOT EXISTS (
+			SELECT 1 FROM user_roles AS filter_ur WHERE filter_ur.user_id = u.id
+		))
+		OR ($6 <> 'UNASSIGNED' AND EXISTS (
+			SELECT 1
+			  FROM user_roles AS filter_ur
+			  JOIN roles AS filter_role
+			    ON filter_role.id = filter_ur.role_id
+			   AND filter_role.tenant_id = u.tenant_id
+			 WHERE filter_ur.user_id = u.id
+			   AND filter_role.name = $6
+		))
+	)
  GROUP BY u.id, mfa.status, activity.last_seen_at
  ORDER BY u.created_at DESC, u.id DESC
- LIMIT $5`,
+	LIMIT $7`,
 			tenantID,
 			options.Search,
 			nullableCursorTime(options.Cursor),
 			nullableCursorID(options.Cursor),
+			options.Status,
+			options.Role,
 			options.Limit+1,
 		)
 		if err != nil {

@@ -3,6 +3,8 @@ package team
 // BuiltInRole is one of the fixed staff roles available to every tenant.
 type BuiltInRole string
 
+func (r BuiltInRole) String() string { return string(r) }
+
 const (
 	RoleAdministrator BuiltInRole = "Administrator"
 	RoleOperations    BuiltInRole = "Operations"

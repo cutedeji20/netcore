@@ -18,6 +18,21 @@ import (
 
 const maxSearchLength = 120
 
+var teamMemberStatuses = map[string]struct{}{
+	"":         {},
+	"ACTIVE":   {},
+	"DISABLED": {},
+}
+
+var teamMemberRoles = map[string]string{
+	"":              "",
+	"ADMINISTRATOR": RoleAdministrator.String(),
+	"OPERATIONS":    RoleOperations.String(),
+	"BILLING":       RoleBilling.String(),
+	"SUPPORT":       RoleSupport.String(),
+	"UNASSIGNED":    "UNASSIGNED",
+}
+
 // HTTP exposes staff-only team membership read endpoints.
 type HTTP struct {
 	store             Store
@@ -174,6 +189,14 @@ func (h *HTTP) listOptions(r *http.Request) (ListOptions, error) {
 	if len(search) > maxSearchLength {
 		return ListOptions{}, ErrInvalidPage
 	}
+	status := strings.ToUpper(strings.TrimSpace(query.Get("status")))
+	if _, ok := teamMemberStatuses[status]; !ok {
+		return ListOptions{}, ErrInvalidPage
+	}
+	role, ok := teamMemberRoles[strings.ToUpper(strings.TrimSpace(query.Get("role")))]
+	if !ok {
+		return ListOptions{}, ErrInvalidPage
+	}
 
 	limit := h.defaultPageSize
 	if rawLimit := query.Get("limit"); rawLimit != "" {
@@ -187,7 +210,7 @@ func (h *HTTP) listOptions(r *http.Request) (ListOptions, error) {
 	if err != nil {
 		return ListOptions{}, ErrInvalidPage
 	}
-	return ListOptions{Limit: limit, Cursor: cursor, Search: search}, nil
+	return ListOptions{Limit: limit, Cursor: cursor, Search: search, Status: status, Role: role}, nil
 }
 
 type listResponse struct {

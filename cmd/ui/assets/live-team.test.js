@@ -37,3 +37,22 @@ test("only the authenticator field receives an HTML pattern", () => {
   assert.match(source, /if \(field\.pattern\) input\.pattern = field\.pattern/);
   assert.doesNotMatch(source, /input\.pattern = field\.pattern \|\| ""/);
 });
+
+test("team inventory uses server-backed search, access and role filters with cursor pagination", () => {
+  const source = require("node:fs").readFileSync(__dirname + "/live-team.js", "utf8");
+  assert.match(source, /NetCoreLiveListConfig\.get\("team"\)/);
+  assert.match(source, /Search team members/);
+  assert.match(source, /Filter access state/);
+  assert.match(source, /Filter team role/);
+  assert.match(source, /applyResponseMeta\(listState, loadedMembersMeta\)/);
+  assert.match(source, /searchParams\.set\("role", roleFilter\)/);
+});
+
+test("staff offboarding makes session invalidation explicit and supports active-account logout", () => {
+  const source = require("node:fs").readFileSync(__dirname + "/live-team.js", "utf8");
+  assert.match(source, /Disable and sign out/);
+  assert.match(source, /Sign out everywhere/);
+  assert.match(source, /\/sign-out/);
+  assert.match(source, /all devices/);
+  assert.match(source, /sessions_invalidated/);
+});

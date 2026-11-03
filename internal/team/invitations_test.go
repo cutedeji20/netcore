@@ -120,6 +120,23 @@ func TestCannotDeactivateFinalAdministrator(t *testing.T) {
 	}
 }
 
+func TestForceLogoutInvalidatesEveryCurrentStaffSession(t *testing.T) {
+	store := &memoryInvitationStore{}
+	service := newInvitationServiceWithStore(t, store, acceptingStepUp{}, &recordingSender{})
+	count, err := service.ForceLogout(context.Background(), ForceLogoutInput{Principal: administrator(), UserID: "33333333-3333-4333-8333-333333333333", Password: "correct password", MFACode: "123456"})
+	if err != nil || count != 2 || !store.sessionsInvalidated {
+		t.Fatalf("ForceLogout = (%d, %v), sessions invalidated=%t", count, err, store.sessionsInvalidated)
+	}
+}
+
+func TestForceLogoutRejectsTheCurrentAdministrator(t *testing.T) {
+	service := newInvitationServiceWithStore(t, &memoryInvitationStore{}, acceptingStepUp{}, &recordingSender{})
+	_, err := service.ForceLogout(context.Background(), ForceLogoutInput{Principal: administrator(), UserID: administrator().UserID, Password: "correct password", MFACode: "123456"})
+	if !errors.Is(err, ErrInvitationInvalid) {
+		t.Fatalf("ForceLogout self = %v", err)
+	}
+}
+
 func TestInviteDeliveryFailureLeavesNoRedeemableDigest(t *testing.T) {
 	store := &memoryInvitationStore{}
 	service := newInvitationServiceWithStore(t, store, acceptingStepUp{}, &recordingSender{err: errors.New("delivery unavailable")})
@@ -381,6 +398,11 @@ func (s *memoryInvitationStore) DeactivateStaff(context.Context, string, string,
 
 func (s *memoryInvitationStore) ReactivateStaff(context.Context, string, string, string) error {
 	return nil
+}
+
+func (s *memoryInvitationStore) InvalidateStaffSessions(context.Context, string, string, string) (int, error) {
+	s.sessionsInvalidated = true
+	return 2, nil
 }
 
 func (s *memoryInvitationStore) CreateMFARecovery(_ context.Context, tenantID, actorID, targetID string, _ []byte, expiresAt time.Time) (MFARecovery, error) {

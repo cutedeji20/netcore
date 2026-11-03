@@ -65,6 +65,7 @@ func (h *HTTP) invitationRoutes(mux *http.ServeMux, sessions *auth.HTTP) {
 	mux.Handle("PUT /api/v1/team/members/{id}/role", write(h.changeRole))
 	mux.Handle("POST /api/v1/team/members/{id}/deactivate", write(h.deactivate))
 	mux.Handle("POST /api/v1/team/members/{id}/reactivate", write(h.reactivate))
+	mux.Handle("POST /api/v1/team/members/{id}/sign-out", write(h.forceLogout))
 	mux.Handle("POST /api/v1/team/members/{id}/password-reset", write(h.resetPassword))
 	mux.Handle("POST /api/v1/team/members/bulk-lifecycle", write(h.bulkLifecycle))
 	mux.HandleFunc("POST /api/v1/staff-invitations/prepare", h.publicNoStore(h.prepareInvitation(sessions)))
@@ -224,6 +225,30 @@ func (h *HTTP) reactivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+func (h *HTTP) forceLogout(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	var input struct {
+		Password string `json:"password"`
+		MFACode  string `json:"mfa_code"`
+	}
+	userID := r.PathValue("id")
+	if !decodeInvitationJSON(w, r, &input) || !validUUID(userID) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
+		return
+	}
+	count, err := h.invitations.ForceLogout(r.Context(), ForceLogoutInput{Principal: principal, UserID: userID, Password: input.Password, MFACode: input.MFACode})
+	if err != nil {
+		h.writeMutationError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		SessionsInvalidated int `json:"sessions_invalidated"`
+	}{count})
 }
 func (h *HTTP) resetPassword(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFromContext(r.Context())
