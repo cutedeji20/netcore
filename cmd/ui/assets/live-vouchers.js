@@ -34,6 +34,16 @@
     return "Expires " + date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   }
 
+  function generatedParts(value) {
+    var date = new Date(value);
+    if (Number.isNaN(date.getTime())) return { date: "—", time: "—", iso: "" };
+    return {
+      date: date.toLocaleDateString("en-NG", { timeZone: "Africa/Lagos", year: "numeric", month: "short", day: "numeric" }),
+      time: date.toLocaleTimeString("en-NG", { timeZone: "Africa/Lagos", hour: "numeric", minute: "2-digit", hour12: true }),
+      iso: date.toISOString()
+    };
+  }
+
   function statusClass(status) {
     if (status === "ACTIVE") return "green";
     if (status === "MIXED") return "amber";
@@ -67,13 +77,17 @@
     var copy = document.createElement("span");
     var name = document.createElement("strong");
     var detail = document.createElement("small");
+    var generated = document.createElement("small");
+    var generatedAt = generatedParts(batch.created_at);
 
     entity.className = "entity";
     mark.className = "entity-mark";
     mark.textContent = "VC";
     name.textContent = "Batch " + safeText(String(batch.id || "").slice(0, 8));
     detail.textContent = formatDate(batch.expires_at);
-    copy.append(name, detail);
+    generated.className = "voucher-generated-inline";
+    generated.textContent = "Generated " + generatedAt.date + " · " + generatedAt.time + " WAT";
+    copy.append(name, detail, generated);
     entity.append(mark, copy);
     cell.appendChild(entity);
     row.appendChild(cell);
@@ -106,8 +120,23 @@
     entity.className = "entity"; copy.append(name, detail); entity.append(copy); cell.append(entity); row.appendChild(cell);
   }
 
+  function appendGeneratedCell(row, createdAt) {
+    var parts = generatedParts(createdAt);
+    var cell = document.createElement("td");
+    var stamp = document.createElement("time");
+    var date = document.createElement("strong");
+    var clock = document.createElement("small");
+    cell.className = "voucher-generated-cell";
+    if (parts.iso) stamp.dateTime = parts.iso;
+    date.textContent = parts.date;
+    clock.textContent = parts.time + " WAT";
+    stamp.append(date, clock);
+    cell.appendChild(stamp);
+    row.appendChild(cell);
+  }
+
   function setHeadings(table) {
-    var headings = ["Batch", "Access bundle", "Owner", "Issued", "Redeemed", "Status"];
+    var headings = ["Batch", "Access bundle", "Owner", "Generated", "Issued", "Redeemed", "Status"];
     if (canWrite()) headings.push("Actions");
     var headingRow = table.querySelector("thead tr");
     headingRow.replaceChildren();
@@ -135,7 +164,8 @@
       var row = document.createElement("tr");
       appendBatchCell(row, batch);
       appendPlanCell(row, batch);
-	  appendOwnerCell(row, batch);
+      appendOwnerCell(row, batch);
+      appendGeneratedCell(row, batch.created_at);
       appendTextCell(row, batch.issued);
       appendTextCell(row, batch.redeemed);
       appendStatusCell(row, batch.status);

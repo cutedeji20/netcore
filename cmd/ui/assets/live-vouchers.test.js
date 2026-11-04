@@ -30,6 +30,14 @@ test("voucher inventory shows the purchasing customer or issuing staff and suppo
   assert.match(source, /Search batch, plan, or customer/);
 });
 
+test("voucher inventory displays the server generation timestamp in Nigeria time", () => {
+  assert.match(source, /"Generated"/);
+  assert.match(source, /batch\.created_at/);
+  assert.match(source, /timeZone: "Africa\/Lagos"/);
+  assert.match(source, /voucher-generated-cell/);
+  assert.match(css, /voucher-generated-inline/);
+});
+
 test("revealing a batch uses the authenticated session without another challenge", () => {
   const reveal = source.slice(source.indexOf("function openManageDialog"), source.indexOf("livePage.subscribe"));
   assert.match(reveal, /body:"\{\}"/);
