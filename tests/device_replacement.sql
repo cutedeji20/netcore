@@ -1,4 +1,4 @@
--- Run against a disposable database after migrations 0001..0056. Every
+-- Run against a disposable database after migrations 0001..0068. Every
 -- fixture and authorization attempt is rolled back.
 BEGIN;
 INSERT INTO tenants(id,name,slug,currency) VALUES ('a1000000-0000-4000-8000-000000000001','Replacement test','replacement-test','NGN');
@@ -168,7 +168,9 @@ VALUES ('a1000000-0000-4000-8000-000000000001','a1000000-0000-4000-8000-00000000
 SET LOCAL ROLE netcore_radius;
 DO $$ DECLARE n integer; BEGIN
   SELECT count(*) INTO n FROM radius_device_mac_authorize('10.0.0.1','11:22:33:44:55:66');
-  IF n<>0 THEN RAISE EXCEPTION 'concurrent session limit bypassed'; END IF;
+  IF n<>1 THEN RAISE EXCEPTION 'same enrolled device did not reconnect'; END IF;
+  SELECT count(*) INTO n FROM radius_device_mac_authorize('10.0.0.1','11:22:33:44:55:66');
+  IF n<>1 THEN RAISE EXCEPTION 'same-device reconnect retry was rejected'; END IF;
 END $$;
 RESET ROLE;
 ROLLBACK;

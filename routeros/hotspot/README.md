@@ -21,6 +21,20 @@ on UDP 3799. Its router-input firewall rules accept that port only from the
 rendered control-plane address, then drop every other source before broader
 management-LAN rules can allow it.
 
+## Automatic reconnect for enrolled devices
+
+The rendered profile uses `http-pap,mac` and supplies the deployment-managed
+MAC-auth password. A returning device therefore performs a new RADIUS request
+without opening the captive portal. NetCore accepts that request only when the
+same active device MAC belongs to an active, unexpired, non-exhausted
+subscription on the active NAS. Router-only MAC cookies are disabled, so a
+suspension, quota exhaustion, device replacement, or expiry is enforced on
+the next reconnect.
+
+Phone operating systems must retain a stable MAC for the Data Hub SSID. If a
+phone changes its private/randomized MAC, it is intentionally treated as a
+different device and directed to the portal.
+
 ## Local pages and maintenance
 
 Upload the rendered files as `login.html`, `flogin.html`, and `error.html` to

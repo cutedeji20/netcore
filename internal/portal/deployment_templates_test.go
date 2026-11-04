@@ -18,8 +18,8 @@ func TestPortalDeploymentTemplatesPreserveHandoffBoundaries(t *testing.T) {
 	}
 
 	routerOS := read("routeros", "hotspot", "provision-hotspot.rsc.tmpl")
-	if !strings.Contains(routerOS, "login-by=http-pap,mac-cookie") || !strings.Contains(routerOS, "radius-accounting=yes") || !strings.Contains(routerOS, "radius-interim-update=received") || !strings.Contains(routerOS, "html-directory-override=$hotspotHtmlDir") || !strings.Contains(routerOS, "/ip hotspot user profile set") || !strings.Contains(routerOS, "__RADIUS_SHARED_SECRET__") || !strings.Contains(routerOS, "__HOTSPOT_HTML_DIR__") || !strings.Contains(routerOS, "__COA_SOURCE_ADDRESS__") || !strings.Contains(routerOS, "/radius incoming set accept=yes port=3799") || !strings.Contains(routerOS, "netcore-coa-drop") {
-		t.Fatal("RouterOS template lost the PAP handoff, accounting, CoA restriction, local HTML, or secret placeholder")
+	if !strings.Contains(routerOS, "login-by=http-pap,mac") || strings.Contains(routerOS, "login-by=http-pap,mac-cookie") || !strings.Contains(routerOS, "mac-auth-password=$macAuthPassword") || !strings.Contains(routerOS, "add-mac-cookie=no") || !strings.Contains(routerOS, "radius-accounting=yes") || !strings.Contains(routerOS, "radius-interim-update=received") || !strings.Contains(routerOS, "html-directory-override=$hotspotHtmlDir") || !strings.Contains(routerOS, "/ip hotspot user profile set") || !strings.Contains(routerOS, "__RADIUS_SHARED_SECRET__") || !strings.Contains(routerOS, "__HOTSPOT_HTML_DIR__") || !strings.Contains(routerOS, "__COA_SOURCE_ADDRESS__") || !strings.Contains(routerOS, "/radius incoming set accept=yes port=3799") || !strings.Contains(routerOS, "netcore-coa-drop") {
+		t.Fatal("RouterOS template lost RADIUS-backed MAC reconnect, PAP handoff, accounting, CoA restriction, local HTML, or a secret placeholder")
 	}
 
 	login := read("routeros", "hotspot", "login.html.tmpl")
@@ -90,16 +90,28 @@ func TestPortalDeploymentTemplatesPreserveHandoffBoundaries(t *testing.T) {
 
 	deviceBoundLimits := read("db", "migrations", "0051_radius_device_bound_subscriptions.up.sql")
 	for name, want := range map[string]string{
-		"bound matching device":    "subscription.device_id IS NOT NULL",
-		"bound device identity":    "device_row.id = v_subscription_device_id",
-		"bound device MAC":         "device_row.normalized_mac = v_mac",
-		"bound device ownership":   "device_row.customer_id = v_customer_id",
-		"bound device is active":   "device_row.status = 'ACTIVE'",
+		"bound matching device":       "subscription.device_id IS NOT NULL",
+		"bound device identity":       "device_row.id = v_subscription_device_id",
+		"bound device MAC":            "device_row.normalized_mac = v_mac",
+		"bound device ownership":      "device_row.customer_id = v_customer_id",
+		"bound device is active":      "device_row.status = 'ACTIVE'",
 		"legacy unbound subscription": "IF v_subscription_device_id IS NOT NULL THEN",
-		"RouterOS MAC normalization": "regexp_replace(COALESCE(p_client_mac, ''), '[^0-9A-Fa-f]', '', 'g')",
+		"RouterOS MAC normalization":  "regexp_replace(COALESCE(p_client_mac, ''), '[^0-9A-Fa-f]', '', 'g')",
 	} {
 		if !strings.Contains(deviceBoundLimits, want) {
 			t.Fatalf("RADIUS device-bound authorization missing %s: %q", name, want)
+		}
+	}
+
+	autoReconnect := read("db", "migrations", "0068_radius_device_reconnect.up.sql")
+	for name, want := range map[string]string{
+		"same device excluded from session limit": "active_session.device_id IS DISTINCT FROM v_device_id",
+		"other MAC reservations still count":       "reservation.normalized_mac <> v_mac",
+		"retry retains bounded reservation":         "ON CONFLICT (subscription_id, normalized_mac) DO NOTHING",
+		"active device remains required":            "subscription.device_id = device_row.id",
+	} {
+		if !strings.Contains(autoReconnect, want) {
+			t.Fatalf("automatic reconnect migration missing %s: %q", name, want)
 		}
 	}
 }

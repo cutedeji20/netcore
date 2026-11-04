@@ -25,21 +25,18 @@
 # That lets the database choose 60 seconds near a quota boundary and 300
 # seconds otherwise.
 /ip hotspot profile set [find where name=$hotspotProfile] \
-    login-by=http-pap,mac-cookie \
+    login-by=http-pap,mac \
     use-radius=yes \
     radius-accounting=yes \
     radius-interim-update=received \
-    html-directory-override=$hotspotHtmlDir
+    html-directory-override=$hotspotHtmlDir \
+    mac-auth-password=$macAuthPassword
 
-# MAC auto-auth remains disabled by default. After the RADIUS deployment has
-# NETCORE_RADIUS_MAC_AUTH_PASSWORD set and a Safe Mode pilot succeeds, an
-# operator may add `mac` to login-by and set mac-auth-password=$macAuthPassword.
-
-# One short MAC cookie improves reconnects but bounds any stale local login to
-# a minute. This property belongs to the HotSpot *user* profile, not the
-# server profile. Session-Timeout and traffic limits remove the cookie too.
+# MAC reauthentication is always checked by RADIUS against the exact owned
+# device, live entitlement, expiry, quota, and NAS. Do not use a long-lived
+# router-only MAC cookie: it would not re-check a suspension or device move.
 /ip hotspot user profile set [find where name=$hotspotUserProfile] \
-    add-mac-cookie=yes \
+    add-mac-cookie=no \
     mac-cookie-timeout=1m
 
 # Replace any previous HotSpot service entry for this RADIUS server. Verify

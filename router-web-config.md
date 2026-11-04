@@ -482,11 +482,13 @@ copies according to the secret-handling procedure.
 
 The rendered `provision-hotspot.rsc` script:
 
-- uses `http-pap,mac-cookie`, not `http-chap`; the handoff design requires
-  `http-pap`;
+- uses `http-pap,mac`, not `http-chap`; the handoff design requires
+  `http-pap`, and `mac` sends returning, enrolled devices back through RADIUS
+  without a portal login;
 - enables RADIUS and RADIUS accounting;
 - accepts RADIUS-selected interim accounting intervals;
-- limits the local MAC cookie to one minute; session and quota rules still win;
+- disables router-only MAC cookies; every automatic reconnect is checked
+  against the active entitlement, exact device, quota, expiry, and NAS;
 - configures the unique RADIUS server/secret;
 - allows the portal hostname, and no broad Internet destination, through the
   unauthenticated walled garden;
