@@ -96,7 +96,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	log.Info("worker started", slog.Bool("webhooks_enabled", len(webhookProcessors) > 0), slog.Bool("receipts_enabled", receiptProcessor != nil), slog.Bool("expiry_enforcement_enabled", true), slog.Bool("router_telemetry_enabled", telemetry != nil))
+	voucherStore, err := vouchers.NewPostgresStore(postgres)
+	if err != nil {
+		return err
+	}
+	voucherActivationProcessor, err := vouchers.NewActivationProcessor(voucherStore)
+	if err != nil {
+		return err
+	}
+	log.Info("worker started", slog.Bool("webhooks_enabled", len(webhookProcessors) > 0), slog.Bool("receipts_enabled", receiptProcessor != nil), slog.Bool("expiry_enforcement_enabled", true), slog.Bool("voucher_activation_enabled", true), slog.Bool("router_telemetry_enabled", telemetry != nil))
 	ticker := time.NewTicker(cfg.Payments.WebhookPollInterval)
 	defer ticker.Stop()
 	nextExpiry := time.Time{}
@@ -117,6 +125,12 @@ func run() error {
 				log.Error("subscription expiry processing failed", slog.String("error", err.Error()))
 			} else if expired > 0 {
 				log.Info("subscriptions expired", slog.Int("count", expired))
+			}
+			activated, activationErr := voucherActivationProcessor.Process(ctx, tenant.ID)
+			if activationErr != nil {
+				log.Error("queued voucher activation failed", slog.String("error", activationErr.Error()))
+			} else if activated > 0 {
+				log.Info("queued vouchers activated", slog.Int("count", activated))
 			}
 			nextExpiry = time.Now().Add(time.Minute)
 		}

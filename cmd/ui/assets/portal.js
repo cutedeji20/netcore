@@ -81,6 +81,9 @@
   var customerAuthenticated = false;
   var checkoutPending = false;
   var accountRequested = false;
+  // A voucher is a bearer code: retain it only in this page's memory while a
+  // device owner signs in. Never put it in browser storage or the URL.
+  var pendingVoucherCode = "";
 
   function showView(name) {
     Object.keys(views).forEach(function (key) {
@@ -179,6 +182,13 @@
       setFormSubmitting(voucherForm, true);
       voucherStatus.textContent = "Checking your voucher…";
       postJSON("/api/v1/portal/voucher-handoff", payload).then(function (result) {
+		if (result.response.status === 409 && result.body && result.body.error && result.body.error.code === "VOUCHER_ACCOUNT_REQUIRED") {
+		  pendingVoucherCode = code;
+		  accountRequested = false;
+		  showView("login");
+		  loginStatus.textContent = "Sign in to the account that owns this Wi-Fi device to use this voucher.";
+		  return;
+		}
         if (!result.response.ok || !result.body || !result.body.redirect_url) {
           throw new Error(humanError(result.body, "This voucher could not be used right now. Please try again."));
         }
@@ -749,6 +759,9 @@
         throw new Error(humanError(login.body, "We could not sign you in. Please try again."));
       }
       customerAuthenticated = true;
+		if (pendingVoucherCode) {
+		  return claimVoucherAndContinue();
+		}
       var destination = postLoginNavigation ? postLoginNavigation.destinationAfterSignIn({
         hasConnection: !!connection,
         hasReturningPayment: !!returningPaymentReference,
@@ -872,6 +885,29 @@
       // issues a 120-second, single-use token. Do not log or persist it.
       window.location.replace(handoff.body.redirect_url);
     });
+  }
+
+  function claimVoucherAndContinue() {
+	if (!connection || !pendingVoucherCode || !voucherGuest) {
+	  throw new Error("Voucher connection details are no longer available. Enter the voucher again from NetCore Wi-Fi.");
+	}
+	var payload = voucherGuest.guestRequest(pendingVoucherCode, connection);
+	if (!payload) throw new Error("Voucher connection details are no longer available. Enter the voucher again from NetCore Wi-Fi.");
+	loginStatus.textContent = "Applying your voucher…";
+	return postJSON("/api/v1/portal/voucher-claim", payload).then(function (result) {
+	  if (result.response.status === 202 && result.body && result.body.status === "QUEUED") {
+		pendingVoucherCode = "";
+		showView("account");
+		return loadCustomerAccount().then(function () {
+		  accountStatus.textContent = "Voucher saved. It will start when your current plan ends.";
+		});
+	  }
+	  if (!result.response.ok || !result.body || !result.body.redirect_url) {
+		throw new Error(humanError(result.body, "This voucher could not be used right now. Please try again."));
+	  }
+	  pendingVoucherCode = "";
+	  window.location.replace(result.body.redirect_url);
+	});
   }
 
   function paymentIdempotencyKey(planID, deviceID) {
