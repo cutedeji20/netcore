@@ -11,6 +11,11 @@ test("requires a country-code phone number before accepting a registration", () 
   );
 });
 
+test("requires a valid email address before account creation", () => {
+  assert.equal(registration.validate("not an email", "Pass1234", "Pass1234", "+2348012345678"), "Enter a valid email address.");
+  assert.equal(registration.validate("customer@example.com", "Pass1234", "Pass1234", "+2348012345678"), "");
+});
+
 test("requires a 4 to 12 character alpha-numeric customer password", () => {
   assert.equal(registration.validate("customer@example.com", "abc", "abc", "+2348012345678"), "Your password must be 4 to 12 characters.");
   assert.equal(registration.validate("customer@example.com", "Pass1234!", "Pass1234!", "+2348012345678"), "Use letters and numbers only for your password.");

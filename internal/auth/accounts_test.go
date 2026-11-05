@@ -365,6 +365,29 @@ func TestAccountHTTPRejectsBrowserTenantSelector(t *testing.T) {
 	}
 }
 
+func TestAccountHTTPRegistrationIdentifiesInvalidFields(t *testing.T) {
+	tests := []struct {
+		name, body, code, message string
+	}{
+		{"email", `{"email":"not an email","phone":"+2348012345678","password":"Pass1234"}`, "INVALID_EMAIL", "Enter a valid email address."},
+		{"phone", `{"email":"customer@example.com","phone":"08012345678","password":"Pass1234"}`, "INVALID_PHONE", "Enter a valid phone number with country code."},
+		{"password", `{"email":"customer@example.com","phone":"+2348012345678","password":"Pass!"}`, "INVALID_PASSWORD", "Use a 4 to 12 character password containing letters and numbers only."},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			handler, _, _ := newTestAccountHTTP(t)
+			mux := http.NewServeMux()
+			handler.Routes(mux)
+			request := httptest.NewRequest(http.MethodPost, "/portal/auth/register", strings.NewReader(testCase.body))
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), testCase.code) || !strings.Contains(response.Body.String(), testCase.message) {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body)
+			}
+		})
+	}
+}
+
 func TestAccountHTTPRegistrationFailureUsesAccountMessageAndSafeStage(t *testing.T) {
 	handler, store, _ := newTestAccountHTTP(t)
 	store.prepareErr = errors.New("private database error")

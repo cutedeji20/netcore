@@ -109,6 +109,18 @@ func (h *AccountHTTP) register(w http.ResponseWriter, r *http.Request) {
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
 		return
 	}
+	if _, _, err := normalizeAccountIdentity(h.tenantSlug, input.Email); err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_EMAIL", "Enter a valid email address.")
+		return
+	}
+	if !validPhone(input.Phone) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_PHONE", "Enter a valid phone number with country code.")
+		return
+	}
+	if !validCustomerPassword(input.Password) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_PASSWORD", "Use a 4 to 12 character password containing letters and numbers only.")
+		return
+	}
 	if err := h.limit(r.Context(), "registration", input.Email, h.clientIP(r)); err != nil {
 		h.writeRateLimitError(w, r, err)
 		return
