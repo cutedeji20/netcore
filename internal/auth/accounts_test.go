@@ -441,6 +441,21 @@ func TestAccountHTTPRegistrationExplainsExistingVerifiedAccount(t *testing.T) {
 	}
 }
 
+func TestAccountHTTPRegistrationExplainsExistingPhoneNumber(t *testing.T) {
+	handler, store, _ := newTestAccountHTTP(t)
+	store.prepareErr = ErrPhoneAlreadyExists
+	mux := http.NewServeMux()
+	handler.Routes(mux)
+
+	request := httptest.NewRequest(http.MethodPost, "/portal/auth/register", strings.NewReader(`{"email":"customer@example.com","phone":"+2348012345678","password":"Pass1234"}`))
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "PHONE_ALREADY_REGISTERED") || !strings.Contains(response.Body.String(), "phone number already belongs") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+}
+
 func TestAccountHTTPDoesNotExposeCustomerLinkConflict(t *testing.T) {
 	handler, store, notifier := newTestAccountHTTP(t)
 	issued, err := handler.service.BeginRegistration(context.Background(), RegistrationInput{

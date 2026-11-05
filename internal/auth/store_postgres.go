@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/netcore-isp/netcore/internal/database"
@@ -237,6 +238,10 @@ DO UPDATE SET password_hash = EXCLUDED.password_hash, phone = EXCLUDED.phone,
               updated_at = now()
 	      WHERE users.email_verified_at IS NULL`, tenantID, email, phone, passwordHash)
 		if err != nil {
+			var databaseError *pgconn.PgError
+			if errors.As(err, &databaseError) && databaseError.Code == "23505" && databaseError.ConstraintName == "users_tenant_phone_key" {
+				return ErrPhoneAlreadyExists
+			}
 			return fmt.Errorf("prepare e-mail registration: %w", err)
 		}
 		if command.RowsAffected() == 0 {

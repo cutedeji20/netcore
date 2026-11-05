@@ -140,6 +140,10 @@ func registrationFailureStage(err error) string {
 	switch {
 	case errors.Is(err, ErrInvalidAccountInput):
 		return "input_validation"
+	case errors.Is(err, ErrAccountAlreadyExists):
+		return "email_already_registered"
+	case errors.Is(err, ErrPhoneAlreadyExists):
+		return "phone_already_registered"
 	case errors.Is(err, ErrPhoneVerificationUnavailable):
 		return "phone_verification_policy"
 	case strings.Contains(err.Error(), "resolve tenant"):
@@ -282,6 +286,10 @@ func (h *AccountHTTP) writeRateLimitError(w http.ResponseWriter, r *http.Request
 func (h *AccountHTTP) writeAccountError(w http.ResponseWriter, r *http.Request, err error, unavailableMessage string) {
 	if errors.Is(err, ErrAccountAlreadyExists) {
 		security.WriteError(w, r, http.StatusConflict, "ACCOUNT_EXISTS", "An account with this email already exists. Sign in or reset its password.")
+		return
+	}
+	if errors.Is(err, ErrPhoneAlreadyExists) {
+		security.WriteError(w, r, http.StatusConflict, "PHONE_ALREADY_REGISTERED", "This phone number already belongs to an account. Sign in or use a different number.")
 		return
 	}
 	if errors.Is(err, ErrInvalidAccountInput) {
