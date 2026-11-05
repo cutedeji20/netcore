@@ -13,6 +13,10 @@ import (
 var (
 	ErrInvalidAccountInput = errors.New("auth: invalid account input")
 	ErrAccountUnavailable  = errors.New("auth: account service unavailable")
+	// ErrAccountAlreadyExists is safe to return from the explicit registration
+	// flow. It lets a customer choose sign-in or password recovery instead of
+	// being sent through a signup that cannot change a verified account.
+	ErrAccountAlreadyExists = errors.New("auth: account already exists")
 	// Phone verification cannot be enabled until an SMS provider is wired.
 	// The value remains a separate error so HTTP can report a safe, actionable
 	// availability response without pretending that a code was sent.
@@ -106,6 +110,9 @@ func (s *AccountService) BeginRegistration(ctx context.Context, input Registrati
 		return IssuedOTP{}, ErrPhoneVerificationUnavailable
 	}
 	if err := s.store.PrepareEmailRegistration(ctx, tenantID, email, phone, passwordHash); err != nil {
+		if errors.Is(err, ErrAccountAlreadyExists) {
+			return IssuedOTP{}, ErrAccountAlreadyExists
+		}
 		return IssuedOTP{}, fmt.Errorf("%w: prepare registration", ErrAccountUnavailable)
 	}
 	if !policy.RequireEmailVerification {

@@ -280,6 +280,10 @@ func (h *AccountHTTP) writeRateLimitError(w http.ResponseWriter, r *http.Request
 }
 
 func (h *AccountHTTP) writeAccountError(w http.ResponseWriter, r *http.Request, err error, unavailableMessage string) {
+	if errors.Is(err, ErrAccountAlreadyExists) {
+		security.WriteError(w, r, http.StatusConflict, "ACCOUNT_EXISTS", "An account with this email already exists. Sign in or reset its password.")
+		return
+	}
 	if errors.Is(err, ErrInvalidAccountInput) {
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.")
 		return

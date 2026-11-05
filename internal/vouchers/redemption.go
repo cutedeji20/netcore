@@ -11,7 +11,13 @@ import (
 )
 
 var (
-	ErrRedeemDenied = errors.New("vouchers: code cannot be redeemed")
+	ErrRedeemDenied              = errors.New("vouchers: code cannot be redeemed")
+	ErrVoucherNotFound           = errors.New("vouchers: code was not found")
+	ErrVoucherAlreadyRedeemed    = errors.New("vouchers: code has already been redeemed")
+	ErrVoucherExpired            = errors.New("vouchers: code has expired")
+	ErrVoucherRevoked            = errors.New("vouchers: code has been revoked")
+	ErrVoucherPlanUnavailable    = errors.New("vouchers: voucher plan is unavailable")
+	ErrVoucherHotspotUnavailable = errors.New("vouchers: hotspot is unavailable")
 )
 
 // Redemption is the durable outcome of a voucher claim. A queued redemption

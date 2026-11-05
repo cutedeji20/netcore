@@ -105,6 +105,17 @@ func TestGuestVoucherQueuesWithoutAccountOrHandoff(t *testing.T) {
 	}
 }
 
+func TestGuestVoucherExplainsActionableRedemptionFailure(t *testing.T) {
+	h := newTestHTTP(t, &memoryStore{}, &memoryLimiter{allowed: true})
+	h.ConfigureGuestVoucher(&guestRedeemerStub{err: vouchers.ErrVoucherExpired}, portalTestTenantID, true)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/portal/voucher-handoff", strings.NewReader(`{"code":"NC-ABCDEF-GHJKLM-NPQRST","client_mac":"AA:BB:CC:DD:EE:FF","nas_address":"10.10.0.1","hotspot_login_url":"http://10.10.0.1/login"}`))
+	response := httptest.NewRecorder()
+	h.guestIssue(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "VOUCHER_EXPIRED") || !strings.Contains(response.Body.String(), "has expired") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+}
+
 func newTestHTTP(t *testing.T, store HandoffStore, limiter HandoffLimiter) *HTTP {
 	t.Helper()
 	service, err := NewService(store)

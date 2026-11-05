@@ -228,15 +228,19 @@ func (s *PostgresStore) PrepareEmailRegistration(ctx context.Context, tenantID, 
 		return ErrInvalidAccountInput
 	}
 	return s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `
+		command, err := tx.Exec(ctx, `
 INSERT INTO users (tenant_id, email, phone, password_hash, password_params, status)
 VALUES ($1, $2, $3, $4, '{}'::jsonb, 'ACTIVE')
 ON CONFLICT (tenant_id, email) WHERE email IS NOT NULL
 DO UPDATE SET password_hash = EXCLUDED.password_hash, phone = EXCLUDED.phone,
               password_params = '{}'::jsonb,
               updated_at = now()
-      WHERE users.email_verified_at IS NULL`, tenantID, email, phone, passwordHash); err != nil {
+	      WHERE users.email_verified_at IS NULL`, tenantID, email, phone, passwordHash)
+		if err != nil {
 			return fmt.Errorf("prepare e-mail registration: %w", err)
+		}
+		if command.RowsAffected() == 0 {
+			return ErrAccountAlreadyExists
 		}
 		return nil
 	})

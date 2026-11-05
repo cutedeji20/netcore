@@ -270,7 +270,7 @@ func (h *HTTP) guestIssue(w http.ResponseWriter, r *http.Request) {
 	redemption, err := h.voucherRedeemer.RedeemForDevice(r.Context(), h.guestTenantID, input.Code, normalizedMAC, nas.String())
 	switch {
 	case err != nil:
-		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
+		h.writeVoucherRedemptionError(w, r, err)
 	case redemption.SubscriptionID == "":
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
 	case redemption.Queued:
@@ -291,6 +291,28 @@ func (h *HTTP) guestIssue(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeJSON(w, http.StatusCreated, handoffResponse{RedirectURL: handoff.RedirectURL, ExpiresAt: handoff.ExpiresAt})
 		}
+	}
+}
+
+// writeVoucherRedemptionError exposes only the customer-actionable voucher
+// state. It never includes voucher material, database details, or network
+// identifiers in a response or log.
+func (h *HTTP) writeVoucherRedemptionError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, vouchers.ErrVoucherNotFound):
+		security.WriteError(w, r, http.StatusBadRequest, "VOUCHER_NOT_FOUND", "Voucher code was not found. Check the code and try again.")
+	case errors.Is(err, vouchers.ErrVoucherAlreadyRedeemed):
+		security.WriteError(w, r, http.StatusConflict, "VOUCHER_ALREADY_USED", "This voucher has already been used on another device.")
+	case errors.Is(err, vouchers.ErrVoucherExpired):
+		security.WriteError(w, r, http.StatusConflict, "VOUCHER_EXPIRED", "This voucher has expired and can no longer be used.")
+	case errors.Is(err, vouchers.ErrVoucherRevoked):
+		security.WriteError(w, r, http.StatusConflict, "VOUCHER_REVOKED", "This voucher has been revoked. Contact the seller for help.")
+	case errors.Is(err, vouchers.ErrVoucherPlanUnavailable):
+		security.WriteError(w, r, http.StatusConflict, "VOUCHER_PLAN_UNAVAILABLE", "This voucher's plan is no longer available. Contact the seller for help.")
+	case errors.Is(err, vouchers.ErrVoucherHotspotUnavailable):
+		security.WriteError(w, r, http.StatusServiceUnavailable, "HOTSPOT_UNAVAILABLE", "This Wi-Fi access point is temporarily unavailable. Please try again shortly.")
+	default:
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "Voucher code is invalid or cannot be used right now.")
 	}
 }
 

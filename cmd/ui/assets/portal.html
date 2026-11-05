@@ -20,7 +20,7 @@
   </head>
   <body>
     <main class="portal-shell">
-      <section class="portal-card" aria-labelledby="portal-title">
+      <section class="portal-card" aria-label="NetCore guest Wi-Fi portal">
         <header class="portal-header">
           <a class="portal-brand" href="/portal.html" aria-label="NetCore portal home">
             <span class="portal-mark" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -38,19 +38,17 @@
         </div>
 
         <section class="portal-view active" id="access-view" aria-live="polite">
-          <div class="connection-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-          <p class="eyebrow">Welcome to NetCore Wi-Fi</p>
-          <h1 id="portal-title">You’re connected. Let’s get you online.</h1>
-          <p class="lead">This device doesn’t have an active internet plan yet. Choose a plan or sign in to an existing account.</p>
+          <p class="access-message">Connected to NetCore Wi-Fi. Choose how you would like to get online.</p>
           <div class="notice"><b>i</b><span>Joining this network is free. Internet access starts after your plan is confirmed.</span></div>
-          <div class="main-actions">
+          <div class="access-choices" aria-label="Access choices">
             <button class="primary-action" type="button" data-action="plans">Choose a plan <span>→</span></button>
             <button class="secondary-action" type="button" data-action="account">Sign in or manage my plan</button>
             <button class="secondary-action" id="portal-buy-vouchers" type="button" data-action="buy-vouchers" hidden>Buy vouchers</button>
+            <button class="secondary-action" id="portal-use-voucher" type="button" data-action="voucher" aria-expanded="false">Use voucher</button>
           </div>
-          <form id="portal-voucher" class="voucher-panel" novalidate>
-            <label>Voucher code<input name="code" autocomplete="one-time-code" inputmode="text" maxlength="38" placeholder="NC-XXXX-XXXX-XXXX" aria-label="Voucher code" /></label>
-            <button class="secondary-action" type="submit">Use a voucher</button>
+          <form id="portal-voucher" class="voucher-panel" novalidate hidden>
+            <label>Voucher code<input name="code" autocomplete="one-time-code" inputmode="text" maxlength="38" placeholder="NCXXXXXXXXXXXX" aria-label="Voucher code" /></label>
+            <button class="primary-action" type="submit">Connect with voucher <span>→</span></button>
           </form>
           <p class="form-status" id="voucher-status" role="status"></p>
           <p class="privacy-note">Your device is checked securely before access is granted.</p>

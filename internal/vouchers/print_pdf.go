@@ -78,7 +78,9 @@ func printablePageContent(batch PrintableBatch, page int) string {
 		content.WriteString("[] 0 d 0.86 G\n")
 		fmt.Fprintf(&content, "%.2f %.2f m %.2f %.2f l S\n", x+7, y+height-34, x+width-7, y+height-34)
 		writePDFText(&content, "F1", 5.5, x+7, y+height-49, "VOUCHER CODE")
-		writePDFText(&content, "F2", 7.5, x+7, y+height-65, batch.Codes[index].Code)
+		// Tickets use the compact presentation so customers can type the code
+		// easily. Redemption normalizes both this form and legacy dashed codes.
+		writePDFText(&content, "F2", 7.5, x+7, y+height-65, normalizeCode(batch.Codes[index].Code))
 		writePDFText(&content, "F2", 7, x+7, y+height-83, truncatePDFText(batch.PlanName, 20))
 		writePDFText(&content, "F1", 5.75, x+7, y+height-97, "Duration: "+formatVoucherDuration(batch.DurationSeconds))
 		writePDFText(&content, "F1", 5.75, x+7, y+height-109, "Quota: "+formatVoucherQuota(batch.QuotaBytes))

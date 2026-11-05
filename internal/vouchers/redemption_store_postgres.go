@@ -18,7 +18,7 @@ func (s *PostgresStore) RedeemForDevice(ctx context.Context, tenantID string, di
 		var nasID string
 		if err := tx.QueryRow(ctx, `SELECT id::text FROM nas WHERE tenant_id=$1::uuid AND hotspot_address=$2::inet AND status='ACTIVE'`, tenantID, nasAddress).Scan(&nasID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrRedeemDenied
+				return ErrVoucherHotspotUnavailable
 			}
 			return err
 		}
@@ -27,14 +27,20 @@ func (s *PostgresStore) RedeemForDevice(ctx context.Context, tenantID string, di
 		var expiresAt pgtype.Timestamptz
 		if err := tx.QueryRow(ctx, `SELECT id::text,plan_id::text,status,expires_at FROM vouchers WHERE tenant_id=$1::uuid AND code_hash=$2 FOR UPDATE`, tenantID, digest[:]).Scan(&voucherID, &planID, &status, &expiresAt); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrRedeemDenied
+				return ErrVoucherNotFound
 			}
 			return err
 		}
 		if status == "REDEEMED" {
 			return existingVoucherEntitlement(ctx, tx, tenantID, voucherID, mac, &result)
 		}
-		if status != "UNUSED" || (expiresAt.Valid && !expiresAt.Time.After(time.Now())) {
+		if status == "REVOKED" {
+			return ErrVoucherRevoked
+		}
+		if expiresAt.Valid && !expiresAt.Time.After(time.Now()) {
+			return ErrVoucherExpired
+		}
+		if status != "UNUSED" {
 			return ErrRedeemDenied
 		}
 		var customerID, deviceID string
@@ -57,7 +63,7 @@ func (s *PostgresStore) RedeemForDevice(ctx context.Context, tenantID string, di
 func createBearerVoucherEntitlement(ctx context.Context, tx pgx.Tx, tenantID, voucherID, planID, customerID, deviceID string, result *Redemption) error {
 	var duration, quota int64
 	if err := tx.QueryRow(ctx, `SELECT duration_seconds,COALESCE(quota_bytes,0) FROM plans WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='ACTIVE' FOR UPDATE`, tenantID, planID).Scan(&duration, &quota); err != nil {
-		return ErrRedeemDenied
+		return ErrVoucherPlanUnavailable
 	}
 	var status string
 	if err := tx.QueryRow(ctx, `WITH schedule AS (SELECT GREATEST(now(),COALESCE(MAX(expires_at) FILTER (WHERE status IN ('ACTIVE','PENDING') AND expires_at>now()),now())) AS starts_at FROM subscriptions WHERE tenant_id=$1::uuid AND device_id=$4::uuid) INSERT INTO subscriptions(tenant_id,customer_id,plan_id,device_id,voucher_id,status,payment_status,starts_at,expires_at) SELECT $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,CASE WHEN schedule.starts_at>now() THEN 'PENDING' ELSE 'ACTIVE' END,'PAID',schedule.starts_at,schedule.starts_at+$6::bigint*interval '1 second' FROM schedule RETURNING id::text,status,starts_at,expires_at`, tenantID, customerID, planID, deviceID, voucherID, duration).Scan(&result.SubscriptionID, &status, &result.StartsAt, &result.ExpiresAt); err != nil {
@@ -146,14 +152,14 @@ func existingVoucherEntitlement(ctx context.Context, tx pgx.Tx, tenantID, vouche
 	var quota, consumed *int64
 	err := tx.QueryRow(ctx, `SELECT s.id::text,s.status,d.normalized_mac,s.starts_at,s.expires_at,uc.quota_bytes,uc.consumed_bytes FROM subscriptions s JOIN customers c ON c.id=s.customer_id AND c.tenant_id=s.tenant_id AND c.status='ACTIVE' JOIN devices d ON d.id=s.device_id AND d.tenant_id=s.tenant_id AND d.customer_id=c.id AND d.status='ACTIVE' LEFT JOIN LATERAL (SELECT quota_bytes,consumed_bytes FROM usage_counters WHERE tenant_id=s.tenant_id AND subscription_id=s.id AND period_start<=now() AND period_end>now() ORDER BY period_start DESC LIMIT 1) uc ON true WHERE s.tenant_id=$1::uuid AND s.voucher_id=$2::uuid`, tenantID, voucherID).Scan(&result.SubscriptionID, &status, &deviceMAC, &result.StartsAt, &result.ExpiresAt, &quota, &consumed)
 	if err != nil || deviceMAC != mac || (status != "ACTIVE" && status != "PENDING") {
-		return ErrRedeemDenied
+		return ErrVoucherAlreadyRedeemed
 	}
 	result.Queued = status == "PENDING"
 	if result.Queued {
 		return nil
 	}
 	if result.StartsAt.After(time.Now()) || !result.ExpiresAt.After(time.Now()) || quota == nil || consumed == nil || (*quota > 0 && *consumed >= *quota) {
-		return ErrRedeemDenied
+		return ErrVoucherExpired
 	}
 	return nil
 }

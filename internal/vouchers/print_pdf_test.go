@@ -23,7 +23,7 @@ func TestPrintableBatchPDFUsesTwentyTicketsPerA4Page(t *testing.T) {
 		t.Fatalf("expected a two-page PDF, got %d bytes", len(document))
 	}
 	for index := 1; index <= 21; index++ {
-		if !strings.Contains(text, fmt.Sprintf("NC-2345-6789-%04d", index)) {
+		if !strings.Contains(text, fmt.Sprintf("NC23456789%04d", index)) {
 			t.Fatalf("ticket %d was omitted", index)
 		}
 	}

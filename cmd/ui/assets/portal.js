@@ -68,9 +68,14 @@
   var voucherNextCursor = "";
   var voucherOrderKey = "";
   if (voucherSection) voucherSection.hidden = !voucherSalesEnabled;
-  if (voucherForm) voucherForm.hidden = !voucherGuestEnabled;
+  // Keep the bearer-code form out of the way until the customer explicitly
+  // chooses it. This does not change redemption: codes still work for any
+  // device and are normalized before they leave the browser.
+  if (voucherForm) voucherForm.hidden = true;
   var buyVouchersButton = document.querySelector("#portal-buy-vouchers");
   if (buyVouchersButton) buyVouchersButton.hidden = !voucherSalesEnabled;
+  var useVoucherButton = document.querySelector("#portal-use-voucher");
+  if (useVoucherButton) useVoucherButton.hidden = !voucherGuestEnabled;
   var catalogueLoading = false;
   var catalogueLoaded = false;
   var selectedPlanName = "";
@@ -90,6 +95,13 @@
     if (name === "plans") loadCatalogue();
     if (name === "register") registerStatus.textContent = selectedPlanName ? "Continue with " + selectedPlanName + "." : "";
     if (name === "login") loginStatus.textContent = "";
+  }
+
+  function setPortalStatus(target, message, state) {
+    if (!target) return;
+    target.textContent = message || "";
+    target.classList.toggle("is-error", state === "error");
+    target.classList.toggle("is-success", state === "success");
   }
 
   document.addEventListener("click", function (event) {
@@ -126,6 +138,18 @@
           showView("login");
         }
       }
+      if (action.dataset.action === "voucher") {
+        if (!voucherForm || !voucherGuestEnabled) return;
+        var willShowVoucherForm = voucherForm.hidden;
+        voucherForm.hidden = !willShowVoucherForm;
+        action.setAttribute("aria-expanded", String(willShowVoucherForm));
+        if (willShowVoucherForm) {
+          var voucherInput = voucherForm.querySelector("input[name=code]");
+          if (voucherInput) voucherInput.focus();
+        } else if (voucherStatus) {
+          setPortalStatus(voucherStatus, "");
+        }
+      }
       if (action.dataset.action === "checkout") beginCheckout();
     }
 
@@ -153,34 +177,34 @@
     voucherForm.addEventListener("submit", function (event) {
       event.preventDefault();
       if (!liveMode || !voucherGuestEnabled) {
-        voucherStatus.textContent = "Guest voucher access is not enabled yet. Please contact support or sign in to a plan.";
+        setPortalStatus(voucherStatus, "Guest voucher access is not enabled yet. Please contact support or sign in to a plan.", "error");
         return;
       }
       if (!connection) {
-        voucherStatus.textContent = "Open this page from NetCore Wi‑Fi to use a voucher.";
+        setPortalStatus(voucherStatus, "Open this page from NetCore Wi‑Fi to use a voucher.", "error");
         return;
       }
       if (!voucherGuest) {
-        voucherStatus.textContent = "Guest voucher entry is temporarily unavailable. Please try again shortly.";
+        setPortalStatus(voucherStatus, "Guest voucher entry is temporarily unavailable. Please try again shortly.", "error");
         return;
       }
       var fields = new FormData(voucherForm);
       var code = String(fields.get("code") || "");
       var validationMessage = voucherGuest.validateVoucherCode(code);
       if (validationMessage) {
-        voucherStatus.textContent = validationMessage;
+        setPortalStatus(voucherStatus, validationMessage, "error");
         return;
       }
       var payload = voucherGuest.guestRequest(code, connection);
       if (!payload) {
-        voucherStatus.textContent = "This voucher request could not be validated for this connection.";
+        setPortalStatus(voucherStatus, "This voucher request could not be validated for this connection.", "error");
         return;
       }
       setFormSubmitting(voucherForm, true);
-      voucherStatus.textContent = "Checking your voucher…";
+      setPortalStatus(voucherStatus, "Checking your voucher…");
       postJSON("/api/v1/portal/voucher-handoff", payload).then(function (result) {
         if (result.response.status === 202 && result.body && result.body.status === "QUEUED") {
-          voucherStatus.textContent = "Voucher saved. It will start when the current plan ends.";
+          setPortalStatus(voucherStatus, "Voucher saved. It will start when the current plan ends.", "success");
           return;
         }
         if (!result.response.ok || !result.body || !result.body.redirect_url) {
@@ -188,7 +212,7 @@
         }
         window.location.replace(result.body.redirect_url);
       }).catch(function (error) {
-        voucherStatus.textContent = error && error.message ? error.message : "This voucher could not be used right now. Please try again.";
+        setPortalStatus(voucherStatus, error && error.message ? error.message : "This voucher could not be used right now. Please try again.", "error");
       }).finally(function () {
         setFormSubmitting(voucherForm, false);
       });
@@ -198,11 +222,11 @@
   registerForm.addEventListener("submit", function (event) {
     event.preventDefault();
     if (!liveMode) {
-      registerStatus.textContent = "Preview only — account creation is available in the live portal.";
+      setPortalStatus(registerStatus, "Preview only — account creation is available in the live portal.", "error");
       return;
     }
     if (!accountsEnabled) {
-      registerStatus.textContent = "Account setup is not available yet. Please contact support for access.";
+      setPortalStatus(registerStatus, "Account setup is not available yet. Please contact support for access.", "error");
       return;
     }
     var fields = new FormData(registerForm);
@@ -211,11 +235,11 @@
     var password = String(fields.get("password") || "");
     var registrationMessage = registration ? registration.validate(email, password, String(fields.get("confirm_password") || ""), phone) : "Account setup is temporarily unavailable. Please try again shortly.";
     if (registrationMessage) {
-      registerStatus.textContent = registrationMessage;
+      setPortalStatus(registerStatus, registrationMessage, "error");
       return;
     }
     setFormSubmitting(registerForm, true);
-      registerStatus.textContent = "Creating your account…";
+      setPortalStatus(registerStatus, "Creating your account…");
       postJSON("/portal/auth/register", { email: email, phone: phone, password: password }).then(function (result) {
         if (!result.response.ok) {
           throw new Error(humanError(result.body, "We could not create your account. Please try again."));
@@ -236,7 +260,7 @@
       showView("verify");
       verifyStatus.textContent = "We sent a verification code to " + pendingRegistration.email + ".";
     }).catch(function (error) {
-      registerStatus.textContent = error && error.message ? error.message : "We could not continue right now. Please try again shortly.";
+      setPortalStatus(registerStatus, error && error.message ? error.message : "We could not continue right now. Please try again shortly.", "error");
     }).finally(function () {
       setFormSubmitting(registerForm, false);
     });

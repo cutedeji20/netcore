@@ -289,7 +289,7 @@ func TestPreviewServesCaptivePortal(t *testing.T) {
 		t.Fatalf("portal security headers = %+v", response.Header())
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, "doesn’t have an active internet plan") || !strings.Contains(body, "/portal.js") || !strings.Contains(body, "Portal preview") {
+	if !strings.Contains(body, "Connected to NetCore Wi-Fi") || !strings.Contains(body, "Connect with voucher") || !strings.Contains(body, "/portal.js") || !strings.Contains(body, "Portal preview") {
 		t.Fatal("captive portal markup was not served")
 	}
 }
