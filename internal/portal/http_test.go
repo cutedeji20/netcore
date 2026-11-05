@@ -25,24 +25,17 @@ type memoryLimiter struct {
 }
 
 type guestRedeemerStub struct {
-	calls int
-	err   error
+	calls      int
+	err        error
+	redemption vouchers.Redemption
 }
 
-type customerVoucherRedeemerStub struct {
-	claim vouchers.Redemption
-	err   error
-	calls int
-}
-
-func (s *customerVoucherRedeemerStub) RedeemForCustomerDevice(_ context.Context, _, _, _, _, _ string) (vouchers.Redemption, error) {
+func (s *guestRedeemerStub) RedeemForDevice(_ context.Context, _, _, _, _ string) (vouchers.Redemption, error) {
 	s.calls++
-	return s.claim, s.err
-}
-
-func (s *guestRedeemerStub) RedeemForDevice(_ context.Context, _, _, _, _ string) (string, error) {
-	s.calls++
-	return "33333333-3333-4333-8333-333333333333", s.err
+	if s.redemption.SubscriptionID == "" {
+		s.redemption.SubscriptionID = "33333333-3333-4333-8333-333333333333"
+	}
+	return s.redemption, s.err
 }
 
 func TestGuestVoucherHandoffIsGatedAndDoesNotExposeCode(t *testing.T) {
@@ -100,36 +93,13 @@ func TestGuestVoucherLimitsArePerIPCodeAndDevice(t *testing.T) {
 	}
 }
 
-func TestCustomerVoucherClaimRequiresAuthenticatedDeviceOwner(t *testing.T) {
+func TestGuestVoucherQueuesWithoutAccountOrHandoff(t *testing.T) {
 	store := &memoryStore{}
 	h := newTestHTTP(t, store, &memoryLimiter{allowed: true})
-	h.ConfigureGuestVoucher(&guestRedeemerStub{}, portalTestTenantID, true)
-	redeemer := &customerVoucherRedeemerStub{claim: vouchers.Redemption{SubscriptionID: "33333333-3333-4333-8333-333333333333"}}
-	h.ConfigureCustomerVoucher(redeemer)
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/portal/voucher-claim", strings.NewReader(`{"code":"NC-ABCDEF-GHJKLM-NPQRST","client_mac":"AA:BB:CC:DD:EE:FF","nas_address":"10.10.0.1","hotspot_login_url":"http://10.10.0.1/login"}`))
+	h.ConfigureGuestVoucher(&guestRedeemerStub{redemption: vouchers.Redemption{SubscriptionID: "33333333-3333-4333-8333-333333333333", Queued: true, StartsAt: time.Now().Add(time.Hour), ExpiresAt: time.Now().Add(2 * time.Hour)}}, portalTestTenantID, true)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/portal/voucher-handoff", strings.NewReader(`{"code":"NC-ABCDEF-GHJKLM-NPQRST","client_mac":"AA:BB:CC:DD:EE:FF","nas_address":"10.10.0.1","hotspot_login_url":"http://10.10.0.1/login"}`))
 	response := httptest.NewRecorder()
-	h.customerVoucherClaim(response, request)
-	if response.Code != http.StatusUnauthorized || redeemer.calls != 0 {
-		t.Fatalf("unauthenticated status=%d calls=%d", response.Code, redeemer.calls)
-	}
-
-	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: portalTestTenantID, UserID: portalTestUserID}))
-	response = httptest.NewRecorder()
-	h.customerVoucherClaim(response, request)
-	if response.Code != http.StatusCreated || redeemer.calls != 1 || store.record.UserID != portalTestUserID {
-		t.Fatalf("claim status=%d calls=%d record=%+v", response.Code, redeemer.calls, store.record)
-	}
-}
-
-func TestCustomerVoucherClaimReturnsQueuedWithoutHandoff(t *testing.T) {
-	store := &memoryStore{}
-	h := newTestHTTP(t, store, &memoryLimiter{allowed: true})
-	h.ConfigureGuestVoucher(&guestRedeemerStub{}, portalTestTenantID, true)
-	h.ConfigureCustomerVoucher(&customerVoucherRedeemerStub{claim: vouchers.Redemption{SubscriptionID: "33333333-3333-4333-8333-333333333333", Queued: true, StartsAt: time.Now().Add(time.Hour), ExpiresAt: time.Now().Add(2 * time.Hour)}})
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/portal/voucher-claim", strings.NewReader(`{"code":"NC-ABCDEF-GHJKLM-NPQRST","client_mac":"AA:BB:CC:DD:EE:FF","nas_address":"10.10.0.1","hotspot_login_url":"http://10.10.0.1/login"}`))
-	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: portalTestTenantID, UserID: portalTestUserID}))
-	response := httptest.NewRecorder()
-	h.customerVoucherClaim(response, request)
+	h.guestIssue(response, request)
 	if response.Code != http.StatusAccepted || store.record.SubscriptionID != "" {
 		t.Fatalf("queued status=%d record=%+v", response.Code, store.record)
 	}

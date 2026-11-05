@@ -11,8 +11,7 @@ import (
 )
 
 var (
-	ErrRedeemDenied   = errors.New("vouchers: code cannot be redeemed")
-	ErrExistingDevice = errors.New("vouchers: device requires customer sign-in")
+	ErrRedeemDenied = errors.New("vouchers: code cannot be redeemed")
 )
 
 // Redemption is the durable outcome of a voucher claim. A queued redemption
@@ -25,27 +24,8 @@ type Redemption struct {
 }
 
 type RedemptionStore interface {
-	RedeemForDevice(context.Context, string, [32]byte, string, string) (string, error)
-	RedeemForCustomerDevice(context.Context, string, string, [32]byte, string, string) (Redemption, error)
+	RedeemForDevice(context.Context, string, [32]byte, string, string) (Redemption, error)
 	ActivateDue(context.Context, string, time.Time) (int, error)
-}
-
-// RedeemForCustomerDevice claims a code for the signed-in customer's existing
-// enrolled device. It never transfers ownership merely because a caller knows
-// a MAC address.
-func (s *Redeemer) RedeemForCustomerDevice(ctx context.Context, tenantID, userID, code, mac, nas string) (Redemption, error) {
-	if s == nil || s.store == nil || !validUUID(tenantID) || !validUUID(userID) || !validBearerCode(code) {
-		return Redemption{}, ErrRedeemDenied
-	}
-	normalizedMAC, ok := security.NormalizeMAC(mac)
-	if !ok {
-		return Redemption{}, ErrRedeemDenied
-	}
-	address, err := netip.ParseAddr(strings.TrimSpace(nas))
-	if err != nil {
-		return Redemption{}, ErrRedeemDenied
-	}
-	return s.store.RedeemForCustomerDevice(ctx, tenantID, userID, HashCode(code), normalizedMAC, address.String())
 }
 
 // ActivationProcessor advances queued, already-paid voucher subscriptions.
@@ -105,17 +85,17 @@ func validBearerCode(code string) bool {
 	return true
 }
 
-func (s *Redeemer) RedeemForDevice(ctx context.Context, tenantID, code, mac, nas string) (string, error) {
+func (s *Redeemer) RedeemForDevice(ctx context.Context, tenantID, code, mac, nas string) (Redemption, error) {
 	if s == nil || s.store == nil || !validUUID(tenantID) || !validBearerCode(code) {
-		return "", ErrRedeemDenied
+		return Redemption{}, ErrRedeemDenied
 	}
 	normalizedMAC, ok := security.NormalizeMAC(mac)
 	if !ok {
-		return "", ErrRedeemDenied
+		return Redemption{}, ErrRedeemDenied
 	}
 	address, err := netip.ParseAddr(strings.TrimSpace(nas))
 	if err != nil {
-		return "", ErrRedeemDenied
+		return Redemption{}, ErrRedeemDenied
 	}
 	return s.store.RedeemForDevice(ctx, tenantID, HashCode(code), normalizedMAC, address.String())
 }

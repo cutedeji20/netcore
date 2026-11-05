@@ -76,6 +76,10 @@ type memoryStore struct {
 	tenantID string
 	options  ListOptions
 	page     Page
+	summary  Summary
+	period   string
+	startsAt time.Time
+	endsAt   time.Time
 	err      error
 }
 
@@ -85,10 +89,16 @@ func (s *memoryStore) List(_ context.Context, tenantID string, options ListOptio
 	return s.page, s.err
 }
 
+func (s *memoryStore) Summary(_ context.Context, tenantID string, startsAt, endsAt time.Time, period string) (Summary, error) {
+	s.tenantID, s.startsAt, s.endsAt, s.period = tenantID, startsAt, endsAt, period
+	return s.summary, s.err
+}
+
 func newTestHTTP(t *testing.T) (*HTTP, *memoryStore) {
 	t.Helper()
 	expiresAt := time.Date(2026, 8, 31, 23, 59, 59, 0, time.UTC)
 	store := &memoryStore{
+		summary: Summary{Period: "30d", Issued: 1000, Redeemed: 800, RedeemedFromIssued: 720, Available: 139, Currency: "NGN"},
 		page: Page{
 			Batches: []Batch{{
 				ID:           "22222222-2222-4222-8222-222222222222",
@@ -109,6 +119,34 @@ func newTestHTTP(t *testing.T) (*HTTP, *memoryStore) {
 		t.Fatal(err)
 	}
 	return handler, store
+}
+
+func TestSummaryUsesTenantScopedSelectedPeriod(t *testing.T) {
+	handler, store := newTestHTTP(t)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/vouchers/summary?period=7d", nil)
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: voucherTestTenantID}))
+	response := httptest.NewRecorder()
+
+	handler.summary(response, request)
+
+	if response.Code != http.StatusOK || store.tenantID != voucherTestTenantID || store.period != "7d" || !store.endsAt.After(store.startsAt) {
+		t.Fatalf("summary status=%d tenant=%q period=%q range=%s..%s", response.Code, store.tenantID, store.period, store.startsAt, store.endsAt)
+	}
+	var body summaryResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil || body.Summary.Issued != 1000 || body.RedemptionRateBasisPoints != 7200 || body.Summary.RedeemedFromIssued != 0 {
+		t.Fatalf("summary response=%+v err=%v", body, err)
+	}
+}
+
+func TestSummaryRejectsUnknownPeriod(t *testing.T) {
+	handler, _ := newTestHTTP(t)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/vouchers/summary?period=forever", nil)
+	request = request.WithContext(auth.ContextWithPrincipal(request.Context(), auth.Principal{TenantID: voucherTestTenantID}))
+	response := httptest.NewRecorder()
+	handler.summary(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
 }
 
 func TestListUsesTenantScopedCursorOptions(t *testing.T) {

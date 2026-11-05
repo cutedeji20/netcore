@@ -32,13 +32,13 @@ var (
 // returned once to the browser for the RouterOS login redirect and must never
 // be logged or written to a database.
 type HandoffRecord struct {
-	TenantID      string
-	UserID        string
+	TenantID       string
+	UserID         string
 	SubscriptionID string
-	ClientMAC     string
-	NASAddress    string
-	TokenHash     []byte
-	ExpiresAt     time.Time
+	ClientMAC      string
+	NASAddress     string
+	TokenHash      []byte
+	ExpiresAt      time.Time
 }
 
 // HandoffStore atomically verifies entitlement, resolves the registered NAS,
@@ -81,7 +81,10 @@ func (s *Service) Issue(ctx context.Context, tenantID, userID, clientMAC, nasAdd
 	return s.issueHandoff(ctx, tenantID, userID, "", clientMAC, nasAddress, hotspotLoginURL)
 }
 
-func (s *Service) IssueGuest(ctx context.Context, tenantID, subscriptionID, clientMAC, nasAddress, hotspotLoginURL string) (Handoff, error) {
+// IssueVoucher creates a one-time RouterOS handoff for any active voucher
+// entitlement bound to the live device. Voucher redemption is bearer-based;
+// this does not depend on a customer browser session.
+func (s *Service) IssueVoucher(ctx context.Context, tenantID, subscriptionID, clientMAC, nasAddress, hotspotLoginURL string) (Handoff, error) {
 	if s == nil || s.store == nil {
 		return Handoff{}, ErrUnavailable
 	}

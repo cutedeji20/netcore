@@ -12,6 +12,8 @@
   var pendingQuery = "";
   var criteriaPending = false;
   var requestVersion = 0;
+  var summaryPeriod = "30d";
+  var summaryInFlight = false;
   function canWrite() { var p = window.NETCORE_PRINCIPAL || {}; return Array.isArray(p.permissions) && p.permissions.indexOf("voucher.write") !== -1; }
   function apiError(response) { return response.json().catch(function () { return {}; }).then(function (body) { throw new Error(body && body.error && body.error.message || "Voucher action failed."); }); }
 
@@ -25,6 +27,26 @@
 
   function safeText(value) {
     return value == null || value === "" ? "—" : String(value);
+  }
+
+  function periodLabel(period) {
+    return ({ today: "Today", "7d": "Last 7 days", "30d": "Last 30 days", this_month: "This month", last_month: "Last month", all: "All time" })[period] || "Selected period";
+  }
+
+  function formatNumber(value) {
+    var number = Number(value);
+    return Number.isFinite(number) ? new Intl.NumberFormat("en-NG").format(number) : "—";
+  }
+
+  function formatRate(basisPoints) {
+    var number = Number(basisPoints);
+    return Number.isFinite(number) ? (number / 100).toFixed(number % 100 === 0 ? 0 : 1) + "%" : "—";
+  }
+
+  function formatMoney(minor, currency) {
+    var number = Number(minor);
+    if (!Number.isFinite(number) || !currency) return "—";
+    try { return new Intl.NumberFormat("en-NG", { style: "currency", currency: String(currency), maximumFractionDigits: 2 }).format(number / 100); } catch (_) { return formatNumber(number) + " " + currency; }
   }
 
   function formatDate(value) {
@@ -200,6 +222,79 @@
     });
   }
 
+  function renderSummaryControls() {
+    if (currentPage() !== "vouchers") return;
+    var heading = document.querySelector("#page-content .page-heading .heading-actions");
+    if (!heading || heading.querySelector(".voucher-summary-period")) return;
+    var label = document.createElement("label");
+    var select = document.createElement("select");
+    label.className = "voucher-summary-range";
+    label.textContent = "Statistics period";
+    select.className = "voucher-summary-period";
+    ["today", "7d", "30d", "this_month", "last_month", "all"].forEach(function (period) {
+      var option = document.createElement("option");
+      option.value = period; option.textContent = periodLabel(period); option.selected = period === summaryPeriod;
+      select.append(option);
+    });
+    select.addEventListener("change", function () { summaryPeriod = select.value; requestSummary(); });
+    label.append(select); heading.prepend(label);
+  }
+
+  function summaryMetric(card, label, value, detail, state) {
+    if (!card) return;
+    var metricLabel = card.querySelector(".metric-label");
+    var metricValue = card.querySelector(".metric-value");
+    var metricChange = card.querySelector(".metric-change");
+    if (metricLabel) metricLabel.textContent = label;
+    if (metricValue) metricValue.textContent = value;
+    if (metricChange) { metricChange.textContent = detail; metricChange.className = "metric-change" + (state ? " " + state : ""); }
+  }
+
+  function renderSummary(payload) {
+    if (currentPage() !== "vouchers" || !payload || typeof payload !== "object") return;
+    var summary = payload.summary;
+    if (!summary || typeof summary !== "object") return;
+    var cards = document.querySelectorAll("#page-content .metric-grid .metric");
+    var period = periodLabel(summary.period || summaryPeriod);
+    summaryMetric(cards[0], "Vouchers issued", formatNumber(summary.issued), period, "");
+    summaryMetric(cards[1], "Redeemed", formatNumber(summary.redeemed), "Redeemed in " + period.toLowerCase(), "");
+    summaryMetric(cards[2], "Redemption rate", formatRate(payload.redemption_rate_basis_points), "Of vouchers issued in " + period.toLowerCase(), "");
+    summaryMetric(cards[3], "Expired unused", formatNumber(summary.expired_unused), "Expired in " + period.toLowerCase(), summary.expired_unused > 0 ? "warn" : "");
+
+    var detailList = document.querySelector("#page-content .detail-list");
+    if (!detailList) return;
+    var detail = [
+      ["Available now", formatNumber(summary.available)],
+      ["Queued redemptions", formatNumber(summary.queued_redemptions)],
+      ["Customer-purchased batches", formatNumber(summary.customer_batches)],
+      ["Staff-issued batches", formatNumber(summary.staff_batches)],
+      ["Paid voucher orders", formatNumber(summary.paid_orders)],
+      ["Voucher sales collected", formatMoney(summary.collected_minor, summary.currency)],
+      ["Reseller discounts", formatMoney(summary.discount_minor, summary.currency)],
+      ["Revoked vouchers", formatNumber(summary.revoked)]
+    ];
+    detailList.replaceChildren();
+    detail.forEach(function (row) { var item = document.createElement("li"), name = document.createElement("span"), value = document.createElement("strong"); name.textContent = row[0]; value.textContent = row[1]; item.append(name, value); detailList.append(item); });
+    detailList.dataset.voucherSummaryLoaded = "true";
+  }
+
+  function hasSummaryHost() {
+    return Boolean(document.querySelector("#page-content .metric-grid") && document.querySelector("#page-content .detail-list"));
+  }
+
+  function requestSummary() {
+    if (summaryInFlight || currentPage() !== "vouchers" || !hasSummaryHost()) return;
+    summaryInFlight = true;
+    fetch(apiBase + "/api/v1/vouchers/summary?period=" + encodeURIComponent(summaryPeriod), { credentials: "include", cache: "no-store" })
+      .then(function (response) { if (!response.ok) throw new Error("Voucher summary request failed"); return response.json(); })
+      .then(renderSummary)
+      .catch(function () {
+        var detailList = document.querySelector("#page-content .detail-list");
+        if (detailList && !detailList.dataset.voucherSummaryLoaded) detailList.firstElementChild && (detailList.firstElementChild.textContent = "Voucher statistics could not be loaded.");
+      })
+      .finally(function () { summaryInFlight = false; });
+  }
+
   function filterOptions() {
     return listConfig.filters.map(function (filter) { return { value: filter, label: filter ? statusLabel(filter) : "All statuses" }; });
   }
@@ -246,7 +341,9 @@
   function onPageRendered(event) {
     if (event.detail !== "vouchers") return;
     renderStaffControls();
+    renderSummaryControls();
     renderControls();
+    requestSummary();
     if (loadedBatches) requestBatches(true);
     else requestBatches();
   }

@@ -52,7 +52,36 @@ type Page struct {
 	HasMore bool
 }
 
+// Summary contains aggregate voucher operations data. It deliberately omits
+// voucher codes, hashes, customer identities, and device identifiers.
+type Summary struct {
+	Period             string    `json:"period"`
+	StartsAt           time.Time `json:"starts_at"`
+	EndsAt             time.Time `json:"ends_at"`
+	Issued             int64     `json:"issued"`
+	Redeemed           int64     `json:"redeemed"`
+	RedeemedFromIssued int64     `json:"-"`
+	ExpiredUnused      int64     `json:"expired_unused"`
+	Available          int64     `json:"available"`
+	Revoked            int64     `json:"revoked"`
+	QueuedRedemptions  int64     `json:"queued_redemptions"`
+	CustomerBatches    int64     `json:"customer_batches"`
+	StaffBatches       int64     `json:"staff_batches"`
+	PaidOrders         int64     `json:"paid_orders"`
+	CollectedMinor     int64     `json:"collected_minor"`
+	DiscountMinor      int64     `json:"discount_minor"`
+	Currency           string    `json:"currency"`
+}
+
+func (s Summary) RedemptionRateBasisPoints() int64 {
+	if s.Issued <= 0 {
+		return 0
+	}
+	return s.RedeemedFromIssued * 10000 / s.Issued
+}
+
 // Store is the voucher persistence boundary.
 type Store interface {
 	List(ctx context.Context, tenantID string, options ListOptions) (Page, error)
+	Summary(ctx context.Context, tenantID string, startsAt, endsAt time.Time, period string) (Summary, error)
 }

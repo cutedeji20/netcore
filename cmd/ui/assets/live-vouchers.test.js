@@ -38,6 +38,15 @@ test("voucher inventory displays the server generation timestamp in Nigeria time
   assert.match(css, /voucher-generated-inline/);
 });
 
+test("voucher inventory renders verified period-scoped summary statistics", () => {
+  assert.match(source, /\/api\/v1\/vouchers\/summary\?period=/);
+  assert.match(source, /voucher-summary-period/);
+  assert.match(source, /Redemption rate/);
+  assert.match(source, /Queued redemptions/);
+  assert.match(source, /Voucher sales collected/);
+  assert.doesNotMatch(source, /Suspicious attempts/);
+});
+
 test("revealing a batch uses the authenticated session without another challenge", () => {
   const reveal = source.slice(source.indexOf("function openManageDialog"), source.indexOf("livePage.subscribe"));
   assert.match(reveal, /body:"\{\}"/);

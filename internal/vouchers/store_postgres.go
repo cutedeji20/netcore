@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -32,6 +33,48 @@ func (s *PostgresStore) ListBuyerBatches(ctx context.Context, tenantID, userID s
 		return Page{}, ErrInvalidPage
 	}
 	return s.listBatches(ctx, tenantID, userID, options)
+}
+
+func (s *PostgresStore) Summary(ctx context.Context, tenantID string, startsAt, endsAt time.Time, period string) (summary Summary, err error) {
+	if tenantID == "" || startsAt.IsZero() || endsAt.IsZero() || !endsAt.After(startsAt) {
+		return Summary{}, ErrInvalidPage
+	}
+	summary = Summary{Period: period, StartsAt: startsAt.UTC(), EndsAt: endsAt.UTC()}
+	err = s.db.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+SELECT
+  COUNT(*) FILTER (WHERE v.created_at >= $2 AND v.created_at < $3)::bigint,
+  COUNT(*) FILTER (WHERE v.redeemed_at >= $2 AND v.redeemed_at < $3)::bigint,
+  COUNT(*) FILTER (WHERE v.created_at >= $2 AND v.created_at < $3 AND v.status='REDEEMED')::bigint,
+  COUNT(*) FILTER (WHERE v.status='UNUSED' AND v.expires_at >= $2 AND v.expires_at < $3 AND v.expires_at <= now())::bigint,
+  COUNT(*) FILTER (WHERE v.status='UNUSED' AND (v.expires_at IS NULL OR v.expires_at > now()))::bigint,
+  COUNT(*) FILTER (WHERE v.status='REVOKED')::bigint
+FROM vouchers v
+WHERE v.tenant_id=$1::uuid`, tenantID, summary.StartsAt, summary.EndsAt).Scan(
+			&summary.Issued,
+			&summary.Redeemed,
+			&summary.RedeemedFromIssued,
+			&summary.ExpiredUnused,
+			&summary.Available,
+			&summary.Revoked,
+		); err != nil {
+			return fmt.Errorf("query voucher summary: %w", err)
+		}
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*)::bigint FROM subscriptions WHERE tenant_id=$1::uuid AND voucher_id IS NOT NULL AND status='PENDING' AND expires_at>now()`, tenantID).Scan(&summary.QueuedRedemptions); err != nil {
+			return fmt.Errorf("query queued voucher redemptions: %w", err)
+		}
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FILTER (WHERE buyer_user_id IS NOT NULL)::bigint,COUNT(*) FILTER (WHERE issuer_user_id IS NOT NULL)::bigint FROM voucher_batches WHERE tenant_id=$1::uuid AND created_at >= $2 AND created_at < $3`, tenantID, summary.StartsAt, summary.EndsAt).Scan(&summary.CustomerBatches, &summary.StaffBatches); err != nil {
+			return fmt.Errorf("query voucher batch ownership: %w", err)
+		}
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*)::bigint,COALESCE(SUM(amount_minor),0)::bigint,COALESCE(SUM(unit_discount_minor*quantity),0)::bigint,COALESCE(MAX(currency),'') FROM voucher_orders WHERE tenant_id=$1::uuid AND status='PAID' AND paid_at >= $2 AND paid_at < $3`, tenantID, summary.StartsAt, summary.EndsAt).Scan(&summary.PaidOrders, &summary.CollectedMinor, &summary.DiscountMinor, &summary.Currency); err != nil {
+			return fmt.Errorf("query voucher order summary: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return Summary{}, err
+	}
+	return summary, nil
 }
 
 func (s *PostgresStore) listBatches(ctx context.Context, tenantID, buyerUserID string, options ListOptions) (page Page, err error) {

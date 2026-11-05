@@ -230,7 +230,7 @@ SELECT s.id::text
   JOIN vouchers v ON v.id=s.voucher_id AND v.tenant_id=s.tenant_id
   JOIN usage_counters uc ON uc.subscription_id=s.id AND uc.tenant_id=s.tenant_id
  WHERE s.id=$2::uuid AND s.tenant_id=$1::uuid
-   AND c.is_guest AND c.user_id IS NULL AND c.status='ACTIVE'
+   AND c.status='ACTIVE'
    AND d.status='ACTIVE' AND d.normalized_mac=$3
    AND v.status='REDEEMED'
    AND s.status='ACTIVE' AND s.starts_at<=now() AND s.expires_at>now()
@@ -241,7 +241,7 @@ SELECT s.id::text
 				return ErrNoActivePlan
 			}
 			if err != nil {
-				return fmt.Errorf("resolve guest portal entitlement: %w", err)
+				return fmt.Errorf("resolve voucher portal entitlement: %w", err)
 			}
 		}
 

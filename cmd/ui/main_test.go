@@ -360,6 +360,9 @@ func TestPortalServesCustomerRegistrationAndEmailVerificationJourney(t *testing.
 	if html.Code != http.StatusOK || !strings.Contains(html.Body.String(), `id="portal-register"`) || !strings.Contains(html.Body.String(), `id="portal-verify-email"`) {
 		t.Fatalf("portal account forms missing: status=%d body=%s", html.Code, html.Body)
 	}
+	if strings.Contains(html.Body.String(), "Verify your email before payment.") || strings.Contains(html.Body.String(), "Send verification code") {
+		t.Fatalf("registration form must not promise email verification before the tenant policy requires it: %s", html.Body.String())
+	}
 	script := httptest.NewRecorder()
 	handler.ServeHTTP(script, httptest.NewRequest(http.MethodGet, "/portal.js", nil))
 	for _, endpoint := range []string{"/portal/auth/register", "/portal/auth/verify-email"} {

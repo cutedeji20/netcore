@@ -28,28 +28,22 @@ type HandoffLimiter interface {
 	AllowSlidingWindow(ctx context.Context, key string, limit int64, window time.Duration) (bool, error)
 }
 
-// HTTP exposes the authenticated captive-portal handoff step.
+// HTTP exposes authenticated account handoff plus the public bearer-voucher
+// handoff. The latter is bound to the live HotSpot device and NAS context.
 type HTTP struct {
-	service                 *Service
-	replacement             *ReplacementService
-	replacementEnabled      bool
-	limiter                 HandoffLimiter
-	allowedOrigins          []string
-	guestVoucherEnabled     bool
-	voucherRedeemer         GuestVoucherRedeemer
-	customerVoucherRedeemer CustomerVoucherRedeemer
-	guestTenantID           string
-	clientIP                func(*http.Request) string
+	service             *Service
+	replacement         *ReplacementService
+	replacementEnabled  bool
+	limiter             HandoffLimiter
+	allowedOrigins      []string
+	guestVoucherEnabled bool
+	voucherRedeemer     GuestVoucherRedeemer
+	guestTenantID       string
+	clientIP            func(*http.Request) string
 }
 
 type GuestVoucherRedeemer interface {
-	RedeemForDevice(ctx context.Context, tenantID, code, mac, nas string) (string, error)
-}
-
-// CustomerVoucherRedeemer is deliberately authenticated at the HTTP boundary.
-// The store then verifies that this customer owns the requested device.
-type CustomerVoucherRedeemer interface {
-	RedeemForCustomerDevice(context.Context, string, string, string, string, string) (vouchers.Redemption, error)
+	RedeemForDevice(ctx context.Context, tenantID, code, mac, nas string) (vouchers.Redemption, error)
 }
 
 func (h *HTTP) ConfigureReplacement(service *ReplacementService, enabled bool) {
@@ -61,10 +55,6 @@ func (h *HTTP) ConfigureGuestVoucher(redeemer GuestVoucherRedeemer, tenantID str
 	h.voucherRedeemer = redeemer
 	h.guestTenantID = tenantID
 	h.guestVoucherEnabled = enabled
-}
-
-func (h *HTTP) ConfigureCustomerVoucher(redemeer CustomerVoucherRedeemer) {
-	h.customerVoucherRedeemer = redemeer
 }
 
 func NewHTTP(service *Service, limiter HandoffLimiter, allowedOrigins []string) (*HTTP, error) {
@@ -88,9 +78,8 @@ func NewHTTP(service *Service, limiter HandoffLimiter, allowedOrigins []string) 
 	}, nil
 }
 
-// Routes intentionally provides no unauthenticated authorization endpoint.
-// The browser authenticates through /auth/login first; a handoff is issued
-// only for that authenticated customer and an active subscription.
+// Routes keeps ordinary account handoff authenticated. Voucher handoff is
+// intentionally public because a voucher is a transferable bearer code.
 func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	if mux == nil || sessions == nil {
 		return errors.New("portal: mux and session authentication are required")
@@ -102,9 +91,6 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	)
 	if h.guestVoucherEnabled {
 		mux.Handle("POST /api/v1/portal/voucher-handoff", http.HandlerFunc(h.guestIssue))
-		if h.customerVoucherRedeemer != nil {
-			mux.Handle("POST /api/v1/portal/voucher-claim", sessions.RequireAuth(http.HandlerFunc(h.customerVoucherClaim)))
-		}
 	}
 	mux.Handle("POST /api/v1/portal/device-replacement/request", sessions.RequireAuth(http.HandlerFunc(h.requestReplacement)))
 	return nil
@@ -281,16 +267,20 @@ func (h *HTTP) guestIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subscriptionID, err := h.voucherRedeemer.RedeemForDevice(r.Context(), h.guestTenantID, input.Code, normalizedMAC, nas.String())
+	redemption, err := h.voucherRedeemer.RedeemForDevice(r.Context(), h.guestTenantID, input.Code, normalizedMAC, nas.String())
 	switch {
-	case errors.Is(err, vouchers.ErrExistingDevice):
-		security.WriteError(w, r, http.StatusConflict, "VOUCHER_ACCOUNT_REQUIRED", "Sign in to the account that owns this Wi-Fi device to use this voucher.")
 	case err != nil:
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
-	case subscriptionID == "":
+	case redemption.SubscriptionID == "":
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
+	case redemption.Queued:
+		writeJSON(w, http.StatusAccepted, struct {
+			Status    string    `json:"status"`
+			StartsAt  time.Time `json:"starts_at"`
+			ExpiresAt time.Time `json:"expires_at"`
+		}{"QUEUED", redemption.StartsAt, redemption.ExpiresAt})
 	default:
-		handoff, issueErr := h.service.IssueGuest(r.Context(), h.guestTenantID, subscriptionID, normalizedMAC, nas.String(), input.HotspotLoginURL)
+		handoff, issueErr := h.service.IssueVoucher(r.Context(), h.guestTenantID, redemption.SubscriptionID, normalizedMAC, nas.String(), input.HotspotLoginURL)
 		switch {
 		case errors.Is(issueErr, ErrInvalidContext):
 			security.WriteError(w, r, http.StatusBadRequest, "PORTAL_CONTEXT_INVALID", "Unable to continue this connection.")
@@ -302,61 +292,6 @@ func (h *HTTP) guestIssue(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusCreated, handoffResponse{RedirectURL: handoff.RedirectURL, ExpiresAt: handoff.ExpiresAt})
 		}
 	}
-}
-
-func (h *HTTP) customerVoucherClaim(w http.ResponseWriter, r *http.Request) {
-	if !h.guestVoucherEnabled || h.customerVoucherRedeemer == nil || h.guestTenantID == "" {
-		security.WriteError(w, r, http.StatusNotFound, "NOT_FOUND", "Not found.")
-		return
-	}
-	if origin := r.Header.Get("Origin"); origin != "" && !slices.Contains(h.allowedOrigins, origin) {
-		security.WriteError(w, r, http.StatusForbidden, "CSRF_REJECTED", "Request origin is not allowed.")
-		return
-	}
-	principal, ok := auth.PrincipalFromContext(r.Context())
-	if !ok || principal.TenantID != h.guestTenantID || principal.UserID == "" {
-		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
-		return
-	}
-	var input struct {
-		Code            string `json:"code"`
-		ClientMAC       string `json:"client_mac"`
-		NASAddress      string `json:"nas_address"`
-		HotspotLoginURL string `json:"hotspot_login_url"`
-	}
-	if err := decodeJSON(r, &input); err != nil || strings.TrimSpace(input.Code) == "" {
-		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Voucher code is required.")
-		return
-	}
-	mac, validMAC := security.NormalizeMAC(input.ClientMAC)
-	nas, nasErr := netip.ParseAddr(strings.TrimSpace(input.NASAddress))
-	if !validMAC || nasErr != nil {
-		security.WriteError(w, r, http.StatusBadRequest, "PORTAL_CONTEXT_INVALID", "Unable to continue this connection.")
-		return
-	}
-	if err := h.limitIssue(r.Context(), principal.TenantID, principal.UserID, mac, nas.String()); err != nil {
-		security.WriteError(w, r, http.StatusTooManyRequests, "TOO_MANY_REQUESTS", "Please wait a moment and try again.")
-		return
-	}
-	claim, err := h.customerVoucherRedeemer.RedeemForCustomerDevice(r.Context(), principal.TenantID, principal.UserID, input.Code, mac, nas.String())
-	if err != nil || claim.SubscriptionID == "" {
-		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
-		return
-	}
-	if claim.Queued {
-		writeJSON(w, http.StatusAccepted, struct {
-			Status    string    `json:"status"`
-			StartsAt  time.Time `json:"starts_at"`
-			ExpiresAt time.Time `json:"expires_at"`
-		}{"QUEUED", claim.StartsAt, claim.ExpiresAt})
-		return
-	}
-	handoff, issueErr := h.service.Issue(r.Context(), principal.TenantID, principal.UserID, mac, nas.String(), input.HotspotLoginURL)
-	if issueErr != nil {
-		security.WriteError(w, r, http.StatusServiceUnavailable, "PORTAL_UNAVAILABLE", "We cannot continue sign-in right now. Please try again shortly.")
-		return
-	}
-	writeJSON(w, http.StatusCreated, handoffResponse{RedirectURL: handoff.RedirectURL, ExpiresAt: handoff.ExpiresAt})
 }
 
 func (h *HTTP) limitGuestIssue(ctx context.Context, tenantID, ip, normalizedMAC, code string) error {

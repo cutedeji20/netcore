@@ -20,6 +20,10 @@ import (
 
 const maxSearchLength = 120
 
+var voucherSummaryPeriods = map[string]struct{}{
+	"today": {}, "7d": {}, "30d": {}, "this_month": {}, "last_month": {}, "all": {},
+}
+
 var voucherBatchStatuses = map[string]struct{}{
 	"": {}, "ACTIVE": {}, "COMPLETED": {}, "EXPIRED": {}, "REVOKED": {}, "MIXED": {},
 }
@@ -59,6 +63,10 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		"GET /api/v1/vouchers/batches",
 		sessions.RequireAuth(auth.RequirePermission("voucher.read", http.HandlerFunc(h.list))),
 	)
+	mux.Handle(
+		"GET /api/v1/vouchers/summary",
+		sessions.RequireAuth(auth.RequirePermission("voucher.read", http.HandlerFunc(h.summary))),
+	)
 	if h.staff != nil {
 		mux.Handle("GET /api/v1/vouchers/my-batches", sessions.RequireAuth(http.HandlerFunc(h.listBuyer)))
 		mux.Handle("POST /api/v1/vouchers/batches", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("voucher.write", http.HandlerFunc(h.issueBatch)))))
@@ -67,6 +75,61 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 		mux.Handle("POST /api/v1/vouchers/batches/{id}/print", sessions.RequireAuth(sessions.RequireAllowedOrigin(http.HandlerFunc(h.printBatch))))
 	}
 	return nil
+}
+
+func (h *HTTP) summary(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || principal.TenantID == "" {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	period, startsAt, endsAt, err := voucherSummaryPeriod(r.URL.Query().Get("period"), time.Now())
+	if err != nil {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_PERIOD", "Voucher summary period is invalid.")
+		return
+	}
+	summary, err := h.store.Summary(r.Context(), principal.TenantID, startsAt, endsAt, period)
+	if err != nil {
+		if errors.Is(err, ErrInvalidPage) {
+			security.WriteError(w, r, http.StatusBadRequest, "INVALID_PERIOD", "Voucher summary period is invalid.")
+			return
+		}
+		security.WriteError(w, r, http.StatusServiceUnavailable, "VOUCHERS_UNAVAILABLE", "Voucher summary is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusOK, summaryResponse{Summary: summary, RedemptionRateBasisPoints: summary.RedemptionRateBasisPoints()})
+}
+
+func voucherSummaryPeriod(raw string, now time.Time) (string, time.Time, time.Time, error) {
+	period := strings.ToLower(strings.TrimSpace(raw))
+	if period == "" {
+		period = "30d"
+	}
+	if _, ok := voucherSummaryPeriods[period]; !ok {
+		return "", time.Time{}, time.Time{}, ErrInvalidPage
+	}
+	location, err := time.LoadLocation("Africa/Lagos")
+	if err != nil {
+		return "", time.Time{}, time.Time{}, err
+	}
+	localNow := now.In(location)
+	end := localNow.UTC()
+	dayStart := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, location)
+	switch period {
+	case "today":
+		return period, dayStart.UTC(), end, nil
+	case "7d":
+		return period, localNow.AddDate(0, 0, -7).UTC(), end, nil
+	case "30d":
+		return period, localNow.AddDate(0, 0, -30).UTC(), end, nil
+	case "this_month":
+		return period, time.Date(localNow.Year(), localNow.Month(), 1, 0, 0, 0, 0, location).UTC(), end, nil
+	case "last_month":
+		thisMonth := time.Date(localNow.Year(), localNow.Month(), 1, 0, 0, 0, 0, location)
+		return period, thisMonth.AddDate(0, -1, 0).UTC(), thisMonth.UTC(), nil
+	default:
+		return period, time.Unix(0, 0).UTC(), end, nil
+	}
 }
 
 func (h *HTTP) listBuyer(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +253,11 @@ type listResponse struct {
 type pageMeta struct {
 	NextCursor string `json:"next_cursor,omitempty"`
 	HasMore    bool   `json:"has_more"`
+}
+
+type summaryResponse struct {
+	Summary                   Summary `json:"summary"`
+	RedemptionRateBasisPoints int64   `json:"redemption_rate_basis_points"`
 }
 
 // batchResponse exposes aggregate operational data only: not one character of

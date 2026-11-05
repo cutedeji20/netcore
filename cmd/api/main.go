@@ -372,7 +372,6 @@ func run() error {
 			return guestErr
 		}
 		portalHTTP.ConfigureGuestVoucher(guestRedeemer, guestTenantID, true)
-		portalHTTP.ConfigureCustomerVoucher(guestRedeemer)
 	}
 	if cfg.Portal.DeviceReplacementEnabled {
 		replacement, replacementErr := portal.NewReplacementService(portalStore, authService)
