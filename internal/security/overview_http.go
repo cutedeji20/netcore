@@ -1,8 +1,11 @@
 package security
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/netcore-isp/netcore/internal/logger"
 )
 
 type OverviewHTTP struct {
@@ -31,6 +34,7 @@ func (h *OverviewHTTP) get(w http.ResponseWriter, r *http.Request) {
 	}
 	o, err := h.store.Overview(r.Context(), tenant)
 	if err != nil {
+		logger.FromContext(r.Context(), slog.Default()).Error("operations overview unavailable", slog.String("failure_stage", "overview_query"), slog.String("error", err.Error()))
 		WriteError(w, r, http.StatusServiceUnavailable, "OVERVIEW_UNAVAILABLE", "Overview data is temporarily unavailable.")
 		return
 	}

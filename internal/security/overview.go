@@ -108,8 +108,8 @@ func (s *OverviewPostgresStore) Overview(ctx context.Context, tenantID string) (
 		if err := tx.QueryRow(ctx, `SELECT
 		 (SELECT count(*) FROM plans WHERE tenant_id=$1 AND status='ACTIVE'),
 		 (SELECT count(*) FROM plans WHERE tenant_id=$1 AND status='RETIRED'),
-		 COALESCE((SELECT p.name FROM plans p LEFT JOIN subscriptions s ON s.plan_id=p.id AND s.tenant_id=p.tenant_id AND s.status='ACTIVE' AND s.starts_at<=now() AND s.expires_at>now() WHERE p.tenant_id=$1 GROUP BY p.id ORDER BY count(s.id) DESC, p.name LIMIT 1), '—'),
-		 COALESCE((SELECT p.name FROM plans p LEFT JOIN subscriptions s ON s.plan_id=p.id AND s.tenant_id=p.tenant_id AND s.created_at>=now()-interval '30 days' WHERE p.tenant_id=$1 GROUP BY p.id ORDER BY count(s.id) DESC, p.name LIMIT 1), '—')`, tenantID).Scan(&out.PlanMetrics.Published, &out.PlanMetrics.Retired, &out.PlanMetrics.MostSelected, &out.PlanMetrics.HighestGrowth); err != nil {
+		 COALESCE((SELECT p.name FROM plans p LEFT JOIN subscriptions s ON s.plan_id=p.id AND s.tenant_id=p.tenant_id AND s.status='ACTIVE' AND s.starts_at<=now() AND s.expires_at>now() WHERE p.tenant_id=$1 GROUP BY p.id, p.name ORDER BY count(s.id) DESC, p.name LIMIT 1), '—'),
+		 COALESCE((SELECT p.name FROM plans p LEFT JOIN subscriptions s ON s.plan_id=p.id AND s.tenant_id=p.tenant_id AND s.created_at>=now()-interval '30 days' WHERE p.tenant_id=$1 GROUP BY p.id, p.name ORDER BY count(s.id) DESC, p.name LIMIT 1), '—')`, tenantID).Scan(&out.PlanMetrics.Published, &out.PlanMetrics.Retired, &out.PlanMetrics.MostSelected, &out.PlanMetrics.HighestGrowth); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(ctx, `SELECT

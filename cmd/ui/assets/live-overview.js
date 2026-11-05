@@ -98,6 +98,20 @@
       body.append(title, detail, when); item.appendChild(body); list.appendChild(item);
     });
   }
+  function setOverviewStatus(message, isError, retry) {
+    var status = document.querySelector("[data-overview-status]");
+    if (!status) return;
+    var detail = status.querySelector("span:not(.updated)");
+    if (detail) detail.textContent = message;
+    status.classList.toggle("status-error", Boolean(isError));
+    var previous = status.querySelector("[data-overview-retry]");
+    if (previous) previous.remove();
+    if (retry) {
+      var button = document.createElement("button");
+      button.type = "button"; button.className = "button"; button.dataset.overviewRetry = "true"; button.textContent = "Retry";
+      button.addEventListener("click", retry); status.appendChild(button);
+    }
+  }
   function load(page) {
     if (["overview", "customers", "plans", "subscriptions"].indexOf(page) === -1) return;
     fetch(apiBase + "/api/v1/operations/overview", { credentials: "same-origin", cache: "no-store" }).then(function (response) { if (!response.ok) throw new Error(); return response.json(); }).then(function (data) {
@@ -117,12 +131,13 @@
         showWANHistory(data.traffic);
       }
       setPageMetrics(page, data);
-      var status = document.querySelector("#page-content .status span");
-      if (status) status.textContent = "Live tenant data refreshed just now.";
+      setOverviewStatus("Live tenant data refreshed just now.", false);
       if (page === "overview") {
         return fetch(apiBase + "/api/v1/security/events?limit=4", { credentials: "same-origin", cache: "no-store" }).then(function (response) { if (!response.ok) throw new Error(); return response.json(); }).then(function (payload) { showActivity(payload.data); });
       }
-    }).catch(function () { /* retain safe empty state */ });
+    }).catch(function () {
+      setOverviewStatus("Dashboard data is temporarily unavailable. Your existing account and network data are unchanged.", true, function () { load(page); });
+    });
   }
   window.addEventListener("netcore:page-rendered", function (event) {
     if (typeof clearInterval === "function") clearInterval(timer);

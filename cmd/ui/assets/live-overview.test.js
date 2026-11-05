@@ -15,3 +15,10 @@ test("overview renders verified WAN periods and daily history without representa
   assert.match(source, /data-wan-traffic-history/);
   assert.doesNotMatch(source, /30GB|20GB/);
 });
+
+test("overview exposes a retryable, safe failure state instead of silently retaining empty data", () => {
+  assert.match(source, /function setOverviewStatus\(message, isError, retry\)/);
+  assert.match(source, /Dashboard data is temporarily unavailable/);
+  assert.match(source, /data-overview-retry/);
+  assert.doesNotMatch(source, /retain safe empty state/);
+});

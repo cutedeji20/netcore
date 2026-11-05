@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -361,6 +362,25 @@ func TestAccountHTTPRejectsBrowserTenantSelector(t *testing.T) {
 
 	if response.Code != http.StatusBadRequest || store.preparedEmail != "" {
 		t.Fatalf("status=%d prepared=%q body=%s", response.Code, store.preparedEmail, response.Body)
+	}
+}
+
+func TestAccountHTTPRegistrationFailureUsesAccountMessageAndSafeStage(t *testing.T) {
+	handler, store, _ := newTestAccountHTTP(t)
+	store.prepareErr = errors.New("private database error")
+	mux := http.NewServeMux()
+	handler.Routes(mux)
+
+	request := httptest.NewRequest(http.MethodPost, "/portal/auth/register", strings.NewReader(`{"email":"customer@example.com","phone":"+2348012345678","password":"Pass1234"}`))
+	request.RemoteAddr = "203.0.113.9:4040"
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "We could not create your account.") || strings.Contains(response.Body.String(), "verification code") || strings.Contains(response.Body.String(), "private database error") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+	if got := registrationFailureStage(fmt.Errorf("%w: prepare registration", ErrAccountUnavailable)); got != "identity_prepare" {
+		t.Fatalf("failure stage = %q", got)
 	}
 }
 

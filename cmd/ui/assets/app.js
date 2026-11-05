@@ -80,7 +80,7 @@ function accessHeading(title, description) {
 
 function dashboard() {
   return `${accessHeading("Operations overview", "Only verified, authorised data is displayed in this workspace.")}
-    <div class="status"><i></i><strong>Authorised session established</strong><span>Dashboard summaries are awaiting their live data source.</span><span class="updated">Secure session</span></div>
+    <div class="status" data-overview-status><i></i><strong>Authorised session established</strong><span>Dashboard summaries are awaiting their live data source.</span><span class="updated">Secure session</span></div>
     ${metrics([["Active customers", "—"], ["Online sessions", "—"], ["Collected today", "—"], ["Needs attention", "—"]])}
     ${metrics([["HotSpot usage", "—"], ["HotSpot today", "—"], ["WAN observed", "—"], ["WAN today", "—"]], false)}
     ${metrics([["Active devices", "—"], ["Observed HotSpot hosts", "—"]], false)}

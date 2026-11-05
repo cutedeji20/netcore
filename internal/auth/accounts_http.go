@@ -3,12 +3,14 @@ package auth
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/netcore-isp/netcore/internal/logger"
 	"github.com/netcore-isp/netcore/internal/security"
 )
 
@@ -113,10 +115,34 @@ func (h *AccountHTTP) register(w http.ResponseWriter, r *http.Request) {
 	}
 	issued, err := h.service.BeginRegistration(r.Context(), RegistrationInput{TenantSlug: h.tenantSlug, Email: input.Email, Phone: input.Phone, Password: input.Password})
 	if err != nil {
-		h.writeAccountError(w, r, err, "We could not send a verification code. Please try again shortly.")
+		logger.FromContext(r.Context(), slog.Default()).Error("customer registration failed", slog.String("failure_stage", registrationFailureStage(err)))
+		h.writeAccountError(w, r, err, "We could not create your account. Please try again shortly.")
 		return
 	}
 	writeJSON(w, http.StatusAccepted, accountCodeResponse{ChallengeID: issued.ChallengeID, ExpiresAt: issued.ExpiresAt, VerificationRequired: issued.VerificationRequired})
+}
+
+// registrationFailureStage is deliberately an allowlist: logs identify the
+// failing boundary without recording the e-mail, password, or driver message.
+func registrationFailureStage(err error) string {
+	switch {
+	case errors.Is(err, ErrInvalidAccountInput):
+		return "input_validation"
+	case errors.Is(err, ErrPhoneVerificationUnavailable):
+		return "phone_verification_policy"
+	case strings.Contains(err.Error(), "resolve tenant"):
+		return "tenant_resolution"
+	case strings.Contains(err.Error(), "hash password"):
+		return "password_hash"
+	case strings.Contains(err.Error(), "read registration policy"):
+		return "policy_read"
+	case strings.Contains(err.Error(), "prepare registration"):
+		return "identity_prepare"
+	case strings.Contains(err.Error(), "activate registration"):
+		return "customer_activation"
+	default:
+		return "unexpected"
+	}
 }
 
 func (h *AccountHTTP) verifyEmail(w http.ResponseWriter, r *http.Request) {

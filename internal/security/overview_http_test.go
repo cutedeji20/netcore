@@ -1,12 +1,18 @@
 package security
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/netcore-isp/netcore/internal/logger"
 )
 
 type overviewMemoryStore struct {
@@ -79,6 +85,28 @@ func TestOverviewRejectsMissingTenant(t *testing.T) {
 	h.get(w, httptest.NewRequest(http.MethodGet, "/api/v1/operations/overview", nil))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body)
+	}
+}
+
+func TestOverviewUnavailableIsLoggedWithRequestID(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	h, err := NewOverviewHTTP(&overviewMemoryStore{err: errors.New("query failed")}, func(context.Context) (string, bool) { return activityTestTenantID, true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/operations/overview", nil)
+	r = r.WithContext(logger.WithRequestID(r.Context(), "overview-test-1"))
+	w := httptest.NewRecorder()
+	h.get(w, r)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body)
+	}
+	if !strings.Contains(logs.String(), `"msg":"operations overview unavailable"`) || !strings.Contains(logs.String(), `"request_id":"overview-test-1"`) {
+		t.Fatalf("logs = %s", logs.String())
 	}
 }
 
