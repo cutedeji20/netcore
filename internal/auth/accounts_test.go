@@ -22,6 +22,7 @@ type memoryAccountStore struct {
 	tenantFound   bool
 	resolvedSlug  string
 	preparedEmail string
+	preparedPhone string
 	preparedHash  string
 	verifiedEmail string
 	resetEmail    string
@@ -61,11 +62,11 @@ func newTestAccountHTTP(t *testing.T) (*AccountHTTP, *memoryAccountStore, *recor
 	return handler, store, notifier
 }
 
-func (s *memoryAccountStore) PrepareEmailRegistration(_ context.Context, tenantID, email, _ string, passwordHash string) error {
+func (s *memoryAccountStore) PrepareEmailRegistration(_ context.Context, tenantID, email, phone, passwordHash string) error {
 	if tenantID != s.tenantID {
 		return errors.New("unexpected tenant")
 	}
-	s.preparedEmail, s.preparedHash = email, passwordHash
+	s.preparedEmail, s.preparedPhone, s.preparedHash = email, phone, passwordHash
 	return s.prepareErr
 }
 
@@ -302,6 +303,24 @@ func TestAccountServiceActivatesRegistrationWithoutEmailOTPWhenPolicyAllowsIt(t 
 	}
 }
 
+func TestAccountServiceNormalizesNigerianLocalPhoneNumbers(t *testing.T) {
+	service, store, _ := newTestAccountService(t)
+	issued, err := service.BeginRegistration(context.Background(), RegistrationInput{
+		TenantSlug: "example", Email: "customer@example.com", Phone: "0801 234 5678", Password: "Pass1234",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.ChallengeID == "" || store.preparedPhone != "+2348012345678" {
+		t.Fatalf("issued=%+v phone=%q", issued, store.preparedPhone)
+	}
+	for _, input := range []string{"08012345678", "2348012345678", "+2348012345678", "8012345678"} {
+		if got := NormalizeLoginIdentifier(input); got != "+2348012345678" {
+			t.Fatalf("NormalizeLoginIdentifier(%q) = %q", input, got)
+		}
+	}
+}
+
 func TestAccountServiceRejectsPhoneVerificationUntilSMSIsConfigured(t *testing.T) {
 	service, store, _ := newTestAccountService(t)
 	store.policy.RequirePhoneVerification = true
@@ -370,7 +389,7 @@ func TestAccountHTTPRegistrationIdentifiesInvalidFields(t *testing.T) {
 		name, body, code, message string
 	}{
 		{"email", `{"email":"not an email","phone":"+2348012345678","password":"Pass1234"}`, "INVALID_EMAIL", "Enter a valid email address."},
-		{"phone", `{"email":"customer@example.com","phone":"08012345678","password":"Pass1234"}`, "INVALID_PHONE", "Enter a valid phone number with country code."},
+		{"phone", `{"email":"customer@example.com","phone":"12345","password":"Pass1234"}`, "INVALID_PHONE", "Enter a valid Nigerian mobile phone number."},
 		{"password", `{"email":"customer@example.com","phone":"+2348012345678","password":"Pass!"}`, "INVALID_PASSWORD", "Use a 4 to 12 character password containing letters and numbers only."},
 	}
 	for _, testCase := range tests {

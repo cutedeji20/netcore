@@ -86,7 +86,8 @@ func (s *AccountService) BeginRegistration(ctx context.Context, input Registrati
 	if err != nil {
 		return IssuedOTP{}, err
 	}
-	if !validCustomerPassword(input.Password) || !validPhone(input.Phone) {
+	phone, ok := normalizeCustomerPhone(input.Phone)
+	if !validCustomerPassword(input.Password) || !ok {
 		return IssuedOTP{}, ErrInvalidAccountInput
 	}
 	tenantID, err := s.resolveTenant(ctx, tenantSlug)
@@ -104,7 +105,7 @@ func (s *AccountService) BeginRegistration(ctx context.Context, input Registrati
 	if policy.RequirePhoneVerification {
 		return IssuedOTP{}, ErrPhoneVerificationUnavailable
 	}
-	if err := s.store.PrepareEmailRegistration(ctx, tenantID, email, strings.TrimSpace(input.Phone), passwordHash); err != nil {
+	if err := s.store.PrepareEmailRegistration(ctx, tenantID, email, phone, passwordHash); err != nil {
 		return IssuedOTP{}, fmt.Errorf("%w: prepare registration", ErrAccountUnavailable)
 	}
 	if !policy.RequireEmailVerification {
@@ -222,15 +223,41 @@ func validCustomerPassword(value string) bool {
 	return true
 }
 
-func validPhone(value string) bool {
+// normalizeCustomerPhone accepts Nigerian mobile numbers entered locally or
+// internationally and stores one E.164 representation. It keeps phone login
+// and uniqueness checks from treating the same number as separate identities.
+func normalizeCustomerPhone(value string) (string, bool) {
 	value = strings.TrimSpace(value)
-	if len(value) < 8 || len(value) > 16 || !strings.HasPrefix(value, "+") {
-		return false
+	if value == "" {
+		return "", false
 	}
-	for _, c := range value[1:] {
-		if c < '0' || c > '9' {
-			return false
+	var digits strings.Builder
+	sawPlus := false
+	for _, character := range value {
+		switch {
+		case character >= '0' && character <= '9':
+			digits.WriteRune(character)
+		case character == '+' && !sawPlus && digits.Len() == 0:
+			// International form; the leading plus is added after normalization.
+			sawPlus = true
+		case character == ' ' || character == '-' || character == '(' || character == ')' || character == '.':
+			// Common formatting characters are presentation only.
+		default:
+			return "", false
 		}
 	}
-	return true
+	number := digits.String()
+	if strings.HasPrefix(value, "00") {
+		number = strings.TrimPrefix(number, "00")
+	}
+	switch {
+	case len(number) == 11 && strings.HasPrefix(number, "0"):
+		number = "234" + number[1:]
+	case len(number) == 10 && number[0] >= '7' && number[0] <= '9':
+		number = "234" + number
+	}
+	if len(number) != 13 || !strings.HasPrefix(number, "234") {
+		return "", false
+	}
+	return "+" + number, true
 }

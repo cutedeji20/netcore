@@ -113,8 +113,8 @@ func (h *AccountHTTP) register(w http.ResponseWriter, r *http.Request) {
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_EMAIL", "Enter a valid email address.")
 		return
 	}
-	if !validPhone(input.Phone) {
-		security.WriteError(w, r, http.StatusBadRequest, "INVALID_PHONE", "Enter a valid phone number with country code.")
+	if _, ok := normalizeCustomerPhone(input.Phone); !ok {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_PHONE", "Enter a valid Nigerian mobile phone number.")
 		return
 	}
 	if !validCustomerPassword(input.Password) {

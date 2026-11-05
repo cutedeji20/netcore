@@ -450,12 +450,15 @@ VALUES ($1, 'USER', $2, 'MFA_TOTP_VERIFIED', 'user_mfa_totp', $3)`,
 }
 
 // NormalizeLoginIdentifier uses the same normalization that the database's
-// CITEXT comparison provides for e-mail, while keeping phone numbers untouched
-// except for surrounding whitespace. E.164 canonicalization is added with OTP.
+// CITEXT comparison provides for e-mail and the portal's Nigerian phone
+// normalization for a phone identifier.
 func NormalizeLoginIdentifier(identifier string) string {
 	identifier = strings.TrimSpace(identifier)
 	if strings.Contains(identifier, "@") {
 		return strings.ToLower(identifier)
+	}
+	if phone, ok := normalizeCustomerPhone(identifier); ok {
+		return phone
 	}
 	return identifier
 }
