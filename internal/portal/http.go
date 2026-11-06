@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/netcore-isp/netcore/internal/auth"
+	"github.com/netcore-isp/netcore/internal/logger"
 	"github.com/netcore-isp/netcore/internal/security"
 	"github.com/netcore-isp/netcore/internal/vouchers"
 )
@@ -260,9 +262,11 @@ func (h *HTTP) guestIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.limitGuestIssue(r.Context(), h.guestTenantID, ip, normalizedMAC, input.Code); err != nil {
 		if errors.Is(err, errRateLimited) {
+			logger.FromContext(r.Context(), slog.Default()).Warn("guest voucher request limited", slog.String("failure_stage", "rate_limited"))
 			security.WriteError(w, r, http.StatusTooManyRequests, "TOO_MANY_REQUESTS", "Please wait a moment and try again.")
 			return
 		}
+		logger.FromContext(r.Context(), slog.Default()).Error("guest voucher request failed", slog.String("failure_stage", "rate_limiter_unavailable"))
 		security.WriteError(w, r, http.StatusServiceUnavailable, "PORTAL_UNAVAILABLE", "We cannot continue sign-in right now. Please try again shortly.")
 		return
 	}
@@ -270,8 +274,10 @@ func (h *HTTP) guestIssue(w http.ResponseWriter, r *http.Request) {
 	redemption, err := h.voucherRedeemer.RedeemForDevice(r.Context(), h.guestTenantID, input.Code, normalizedMAC, nas.String())
 	switch {
 	case err != nil:
+		h.logGuestVoucherFailure(r, "redemption", voucherRedemptionFailureStage(err))
 		h.writeVoucherRedemptionError(w, r, err)
 	case redemption.SubscriptionID == "":
+		h.logGuestVoucherFailure(r, "redemption", "empty_subscription")
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
 	case redemption.Queued:
 		writeJSON(w, http.StatusAccepted, struct {
@@ -283,14 +289,59 @@ func (h *HTTP) guestIssue(w http.ResponseWriter, r *http.Request) {
 		handoff, issueErr := h.service.IssueVoucher(r.Context(), h.guestTenantID, redemption.SubscriptionID, normalizedMAC, nas.String(), input.HotspotLoginURL)
 		switch {
 		case errors.Is(issueErr, ErrInvalidContext):
+			h.logGuestVoucherFailure(r, "handoff", "invalid_connection_context")
 			security.WriteError(w, r, http.StatusBadRequest, "PORTAL_CONTEXT_INVALID", "Unable to continue this connection.")
 		case errors.Is(issueErr, ErrNoActivePlan), errors.Is(issueErr, ErrDeviceMismatch):
+			h.logGuestVoucherFailure(r, "handoff", voucherHandoffFailureStage(issueErr))
 			security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
 		case issueErr != nil:
+			h.logGuestVoucherFailure(r, "handoff", "unavailable")
 			security.WriteError(w, r, http.StatusServiceUnavailable, "PORTAL_UNAVAILABLE", "We cannot continue sign-in right now. Please try again shortly.")
 		default:
 			writeJSON(w, http.StatusCreated, handoffResponse{RedirectURL: handoff.RedirectURL, ExpiresAt: handoff.ExpiresAt})
 		}
+	}
+}
+
+// logGuestVoucherFailure records a small, non-sensitive diagnostic breadcrumb.
+// Voucher codes, MAC addresses, IP addresses, and database-driver messages are
+// intentionally excluded. The request-scoped logger links the event to the
+// request ID returned to the portal.
+func (h *HTTP) logGuestVoucherFailure(r *http.Request, boundary, stage string) {
+	logger.FromContext(r.Context(), slog.Default()).Warn(
+		"guest voucher handoff failed",
+		slog.String("failure_boundary", boundary),
+		slog.String("failure_stage", stage),
+	)
+}
+
+func voucherRedemptionFailureStage(err error) string {
+	switch {
+	case errors.Is(err, vouchers.ErrVoucherNotFound):
+		return "voucher_not_found"
+	case errors.Is(err, vouchers.ErrVoucherAlreadyRedeemed):
+		return "voucher_already_redeemed"
+	case errors.Is(err, vouchers.ErrVoucherExpired):
+		return "voucher_expired"
+	case errors.Is(err, vouchers.ErrVoucherRevoked):
+		return "voucher_revoked"
+	case errors.Is(err, vouchers.ErrVoucherPlanUnavailable):
+		return "plan_unavailable"
+	case errors.Is(err, vouchers.ErrVoucherHotspotUnavailable):
+		return "hotspot_unavailable"
+	default:
+		return "store_or_redemption_failure"
+	}
+}
+
+func voucherHandoffFailureStage(err error) string {
+	switch {
+	case errors.Is(err, ErrNoActivePlan):
+		return "subscription_not_active"
+	case errors.Is(err, ErrDeviceMismatch):
+		return "device_mismatch"
+	default:
+		return "unavailable"
 	}
 }
 
