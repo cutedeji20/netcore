@@ -85,6 +85,40 @@ func (h *HTTP) revokeVoucher(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *HTTP) deleteUnusedBatches(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	p, ok := auth.PrincipalFromContext(r.Context())
+	if !ok || h.staff == nil {
+		security.WriteError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.")
+		return
+	}
+	var in struct {
+		BatchIDs []string `json:"batch_ids"`
+		Password string   `json:"password"`
+		MFACode  string   `json:"mfa_code"`
+	}
+	if !decodeVoucherMutation(w, r, &in) {
+		security.WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Batch deletion request is invalid.")
+		return
+	}
+	count, err := h.staff.VoidUnusedBatches(r.Context(), p, in.BatchIDs, in.Password, in.MFACode)
+	if errors.Is(err, ErrBatchVoidNotAllowed) {
+		security.WriteError(w, r, http.StatusConflict, "BATCH_NOT_UNUSED", "Only fully unused staff-issued batches can be deleted. Customer purchases and redeemed batches are retained.")
+		return
+	}
+	if errors.Is(err, ErrStaffVoucherDenied) {
+		security.WriteError(w, r, http.StatusForbidden, "FORBIDDEN", "Unused batch deletion is not allowed.")
+		return
+	}
+	if err != nil {
+		security.WriteError(w, r, http.StatusServiceUnavailable, "VOUCHERS_UNAVAILABLE", "Unused batch deletion is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		VoidedBatches int `json:"voided_batches"`
+	}{VoidedBatches: count})
+}
+
 func (h *HTTP) revealBatch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	p, ok := auth.PrincipalFromContext(r.Context())

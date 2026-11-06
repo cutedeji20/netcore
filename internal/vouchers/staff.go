@@ -11,6 +11,7 @@ import (
 
 var ErrStaffVoucherDenied = errors.New("vouchers: staff mutation denied")
 var ErrVoucherHasOpenSession = errors.New("vouchers: active network session must be disconnected before revocation")
+var ErrBatchVoidNotAllowed = errors.New("vouchers: batch cannot be voided")
 
 type StepUpVerifier interface {
 	VerifyStepUp(context.Context, auth.StepUpInput) error
@@ -18,10 +19,14 @@ type StepUpVerifier interface {
 type Revoker interface {
 	RevokeVoucher(context.Context, string, string, string) error
 }
+type BatchVoider interface {
+	VoidUnusedBatches(context.Context, string, string, []string) (int, error)
+}
 
 type StaffService struct {
 	issuer  *Issuer
 	revoker Revoker
+	voider  BatchVoider
 	stepUp  StepUpVerifier
 }
 
@@ -29,7 +34,32 @@ func NewStaffService(issuer *Issuer, revoker Revoker, stepUp StepUpVerifier) (*S
 	if issuer == nil || revoker == nil || stepUp == nil {
 		return nil, ErrStaffVoucherDenied
 	}
-	return &StaffService{issuer: issuer, revoker: revoker, stepUp: stepUp}, nil
+	voider, _ := revoker.(BatchVoider)
+	return &StaffService{issuer: issuer, revoker: revoker, voider: voider, stepUp: stepUp}, nil
+}
+
+// VoidUnusedBatches removes accidental staff-issued inventory from normal
+// operations without erasing evidence. It only revokes batches whose every
+// code remains UNUSED; paid customer orders and any redeemed/mixed batch are
+// rejected by the store atomically.
+func (s *StaffService) VoidUnusedBatches(ctx context.Context, principal auth.Principal, batchIDs []string, password, mfaCode string) (int, error) {
+	if s == nil || s.voider == nil || !validUUID(principal.TenantID) || !validUUID(principal.UserID) || !principal.HasPermission("team.write") || !principal.HasPermission("voucher.write") || len(batchIDs) < 1 || len(batchIDs) > 50 {
+		return 0, ErrStaffVoucherDenied
+	}
+	seen := make(map[string]struct{}, len(batchIDs))
+	for _, batchID := range batchIDs {
+		if !validUUID(batchID) {
+			return 0, ErrStaffVoucherDenied
+		}
+		if _, exists := seen[batchID]; exists {
+			return 0, ErrStaffVoucherDenied
+		}
+		seen[batchID] = struct{}{}
+	}
+	if err := s.stepUp.VerifyStepUp(ctx, auth.StepUpInput{Principal: principal, Password: password, MFACode: mfaCode}); err != nil {
+		return 0, ErrStaffVoucherDenied
+	}
+	return s.voider.VoidUnusedBatches(ctx, principal.TenantID, principal.UserID, batchIDs)
 }
 
 func (s *StaffService) Issue(ctx context.Context, principal auth.Principal, planID string, quantity int, expiresAt *time.Time, reason, password, mfaCode string) (Batch, error) {

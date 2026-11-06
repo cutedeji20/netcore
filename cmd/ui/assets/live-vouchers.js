@@ -14,6 +14,7 @@
   var requestVersion = 0;
   var summaryPeriod = "30d";
   var summaryInFlight = false;
+  var selectedBatchIDs = new Set();
   function canWrite() { var p = window.NETCORE_PRINCIPAL || {}; return Array.isArray(p.permissions) && p.permissions.indexOf("voucher.write") !== -1; }
   function apiError(response) { return response.json().catch(function () { return {}; }).then(function (body) { throw new Error(body && body.error && body.error.message || "Voucher action failed."); }); }
 
@@ -159,7 +160,7 @@
 
   function setHeadings(table) {
     var headings = ["Batch", "Access bundle", "Owner", "Generated", "Issued", "Redeemed", "Status"];
-    if (canWrite()) headings.push("Actions");
+    if (canWrite()) headings.push("Select", "Actions");
     var headingRow = table.querySelector("thead tr");
     headingRow.replaceChildren();
     headings.forEach(function (value) {
@@ -192,10 +193,23 @@
       appendTextCell(row, batch.redeemed);
       appendStatusCell(row, batch.status);
       if (canWrite()) {
+        var selectCell = document.createElement("td"), select = document.createElement("input");
+        select.type = "checkbox"; select.checked = selectedBatchIDs.has(String(batch.id || ""));
+        select.disabled = !canDeleteUnused(batch);
+        select.setAttribute("aria-label", "Select unused batch " + String(batch.id || "").slice(0, 8));
+        select.addEventListener("change", function () { if (select.checked) selectedBatchIDs.add(String(batch.id)); else selectedBatchIDs.delete(String(batch.id)); renderDeleteSelectionControl(); });
+        selectCell.append(select); row.append(selectCell);
         var actionCell = document.createElement("td"), reveal = document.createElement("button");
         reveal.type = "button"; reveal.className = "button"; reveal.textContent = "Manage codes";
         reveal.addEventListener("click", function () { openManageDialog(batch); });
-        actionCell.append(reveal); row.append(actionCell);
+        actionCell.append(reveal);
+        if (canDeleteUnused(batch)) {
+          var remove = document.createElement("button");
+          remove.type = "button"; remove.className = "button"; remove.textContent = "Delete unused";
+          remove.addEventListener("click", function () { openDeleteBatchesDialog([batch]); });
+          actionCell.append(remove);
+        }
+        row.append(actionCell);
       }
       body.appendChild(row);
     });
@@ -320,6 +334,7 @@
       .then(function (payload) {
         if (!payload || !Array.isArray(payload.data)) throw new Error("Vouchers response was invalid");
         if (criteriaPending || requestVersionAtStart !== requestVersion) return;
+        selectedBatchIDs.clear();
         loadedBatches = payload.data;
         loadedBatchesMeta = payload.meta || {};
         window.NetCoreLiveListControls.applyResponseMeta(listState, loadedBatchesMeta);
@@ -382,6 +397,29 @@
     if (!actions) { actions = document.createElement("div"); actions.className = "heading-actions"; heading.append(actions); }
     var issue = document.createElement("button"); issue.type = "button"; issue.className = "button primary voucher-issue-control"; issue.textContent = "Issue vouchers";
     issue.addEventListener("click", openIssueDialog); actions.append(issue);
+    renderDeleteSelectionControl();
+  }
+
+  function canDeleteUnused(batch) {
+    return batch && String(batch.owner_type || "") === "STAFF" && Number(batch.redeemed) === 0 && String(batch.status || "") === "ACTIVE" && Number(batch.available) > 0;
+  }
+
+  function renderDeleteSelectionControl() {
+    if (!canWrite()) return;
+    var heading = document.querySelector("#page-content .page-heading .heading-actions");
+    if (!heading) return;
+    var existing = heading.querySelector(".voucher-delete-selected");
+    if (!existing) {
+      existing = document.createElement("button"); existing.type = "button"; existing.className = "button voucher-delete-selected";
+      existing.addEventListener("click", function () {
+        var selected = (loadedBatches || []).filter(function (batch) { return selectedBatchIDs.has(String(batch.id || "")) && canDeleteUnused(batch); });
+        if (selected.length) openDeleteBatchesDialog(selected);
+      });
+      heading.append(existing);
+    }
+    var count = selectedBatchIDs.size;
+    existing.textContent = count ? "Delete selected unused (" + count + ")" : "Delete selected unused";
+    existing.disabled = count === 0;
   }
 
   function openIssueDialog() {
@@ -408,6 +446,31 @@
         .then(function (r) { if (!r.ok) return apiError(r); return r.json(); })
         .then(function () { feedback.textContent="Vouchers issued. Use Manage codes to retrieve them."; password.value=""; mfa.value=""; requestBatches(true); })
         .catch(function (error) { feedback.textContent=error.message || "Voucher issuance failed."; }).finally(function () { submit.disabled=false; });
+    });
+  }
+
+  function openDeleteBatchesDialog(batches) {
+    var eligible = batches.filter(canDeleteUnused);
+    if (!eligible.length) return;
+    var dialog = openVoucherDialog(eligible.length === 1 ? "Delete unused voucher batch" : "Delete selected unused batches");
+    var form = document.createElement("form"), notice = document.createElement("p"), confirm = document.createElement("input"), password = document.createElement("input"), mfa = document.createElement("input"), feedback = document.createElement("p"), footer = document.createElement("footer"), submit = document.createElement("button");
+    form.className = "voucher-form"; notice.textContent = "This revokes " + eligible.reduce(function (total, batch) { return total + Number(batch.available || 0); }, 0) + " unused voucher(s). Redeemed and customer-purchased batches cannot be deleted.";
+    confirm.type = "text"; confirm.placeholder = "Type DELETE to confirm"; confirm.autocomplete = "off"; confirm.required = true;
+    password.type = "password"; password.autocomplete = "current-password"; password.required = true;
+    mfa.type = "text"; mfa.inputMode = "numeric"; mfa.maxLength = 6; mfa.required = true;
+    feedback.className = "voucher-feedback"; feedback.setAttribute("role", "status");
+    submit.type = "submit"; submit.className = "button primary"; submit.textContent = eligible.length === 1 ? "Delete unused batch" : "Delete selected batches";
+    [notice, voucherField("Confirmation", confirm), voucherField("Current password", password), voucherField("Authenticator code", mfa)].forEach(function (node) { form.append(node); });
+    footer.append(submit); form.append(feedback, footer); dialog.append(form); confirm.focus();
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      if (confirm.value.trim() !== "DELETE") { feedback.textContent = "Type DELETE exactly to confirm."; return; }
+      submit.disabled = true; feedback.textContent = "Deleting unused vouchers…";
+      fetch(apiBase + "/api/v1/vouchers/batches/delete-unused", { method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ batch_ids:eligible.map(function (batch) { return batch.id; }), password:password.value, mfa_code:mfa.value }) })
+        .then(function (response) { if (!response.ok) return apiError(response); return response.json(); })
+        .then(function (body) { eligible.forEach(function (batch) { selectedBatchIDs.delete(String(batch.id)); }); feedback.textContent = String(body.voided_batches || eligible.length) + " batch(es) deleted and revoked."; requestBatches(true); renderDeleteSelectionControl(); })
+        .catch(function (error) { feedback.textContent = error.message || "Unused batch deletion failed."; })
+        .finally(function () { submit.disabled = false; });
     });
   }
 

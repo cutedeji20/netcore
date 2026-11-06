@@ -70,6 +70,7 @@ func (h *HTTP) Routes(mux *http.ServeMux, sessions *auth.HTTP) error {
 	if h.staff != nil {
 		mux.Handle("GET /api/v1/vouchers/my-batches", sessions.RequireAuth(http.HandlerFunc(h.listBuyer)))
 		mux.Handle("POST /api/v1/vouchers/batches", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("voucher.write", http.HandlerFunc(h.issueBatch)))))
+		mux.Handle("POST /api/v1/vouchers/batches/delete-unused", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("voucher.write", http.HandlerFunc(h.deleteUnusedBatches)))))
 		mux.Handle("POST /api/v1/vouchers/{id}/revoke", sessions.RequireAuth(sessions.RequireAllowedOrigin(auth.RequirePermission("voucher.write", http.HandlerFunc(h.revokeVoucher)))))
 		mux.Handle("POST /api/v1/vouchers/batches/{id}/reveal", sessions.RequireAuth(sessions.RequireAllowedOrigin(http.HandlerFunc(h.revealBatch))))
 		mux.Handle("POST /api/v1/vouchers/batches/{id}/print", sessions.RequireAuth(sessions.RequireAllowedOrigin(http.HandlerFunc(h.printBatch))))
