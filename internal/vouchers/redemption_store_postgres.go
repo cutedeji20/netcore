@@ -87,7 +87,7 @@ func createBearerVoucherEntitlement(ctx context.Context, tx pgx.Tx, tenantID, vo
 		if _, err := tx.Exec(ctx, `INSERT INTO usage_counters(tenant_id,subscription_id,customer_id,period_start,period_end,quota_bytes) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6)`, tenantID, result.SubscriptionID, customerID, result.StartsAt, result.ExpiresAt, quota); err != nil {
 			return fmt.Errorf("voucher entitlement: create usage counter: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO outbox_events(event_id,tenant_id,aggregate_type,aggregate_id,event_type,payload) VALUES($1::uuid,$2::uuid,'subscription',$3::uuid,'subscription.activated',jsonb_build_object('subscription_id',$3::text,'customer_id',$4::text,'plan_id',$5::text,'activation_reason','VOUCHER','period_start',$6,'period_end',$7,'quota_bytes',$8))`, uuid.NewString(), tenantID, result.SubscriptionID, customerID, planID, result.StartsAt, result.ExpiresAt, quota); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO outbox_events(event_id,tenant_id,aggregate_type,aggregate_id,event_type,payload) VALUES($1::uuid,$2::uuid,'subscription',$3::uuid,'subscription.activated',jsonb_build_object('subscription_id',$3::text,'customer_id',$4::text,'plan_id',$5::text,'activation_reason','VOUCHER','period_start',$6::timestamptz,'period_end',$7::timestamptz,'quota_bytes',$8::bigint))`, uuid.NewString(), tenantID, result.SubscriptionID, customerID, planID, result.StartsAt, result.ExpiresAt, quota); err != nil {
 			return fmt.Errorf("voucher entitlement: enqueue activation event: %w", err)
 		}
 	}
@@ -147,7 +147,7 @@ RETURNING id::text,customer_id::text,plan_id::text,starts_at,expires_at`, tenant
 			if _, err := tx.Exec(ctx, `INSERT INTO subscription_events(tenant_id,subscription_id,from_status,to_status,reason,actor_type,metadata) VALUES($1::uuid,$2::uuid,'PENDING','ACTIVE','VOUCHER_START','SYSTEM','{}'::jsonb)`, tenantID, entry.id); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO outbox_events(event_id,tenant_id,aggregate_type,aggregate_id,event_type,payload) VALUES($1::uuid,$2::uuid,'subscription',$3::uuid,'subscription.activated',jsonb_build_object('subscription_id',$3::text,'customer_id',$4::text,'plan_id',$5::text,'activation_reason','VOUCHER','period_start',$6,'period_end',$7,'quota_bytes',$8))`, uuid.NewString(), tenantID, entry.id, entry.customerID, entry.planID, entry.startsAt, entry.expiresAt, quota); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO outbox_events(event_id,tenant_id,aggregate_type,aggregate_id,event_type,payload) VALUES($1::uuid,$2::uuid,'subscription',$3::uuid,'subscription.activated',jsonb_build_object('subscription_id',$3::text,'customer_id',$4::text,'plan_id',$5::text,'activation_reason','VOUCHER','period_start',$6::timestamptz,'period_end',$7::timestamptz,'quota_bytes',$8::bigint))`, uuid.NewString(), tenantID, entry.id, entry.customerID, entry.planID, entry.startsAt, entry.expiresAt, quota); err != nil {
 				return err
 			}
 			count++
