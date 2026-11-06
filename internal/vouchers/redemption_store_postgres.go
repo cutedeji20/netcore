@@ -67,32 +67,38 @@ func (s *PostgresStore) RedeemForDevice(ctx context.Context, tenantID string, di
 func createBearerVoucherEntitlement(ctx context.Context, tx pgx.Tx, tenantID, voucherID, planID, customerID, deviceID string, result *Redemption) error {
 	var duration, quota int64
 	if err := tx.QueryRow(ctx, `SELECT duration_seconds,COALESCE(quota_bytes,0) FROM plans WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='ACTIVE' FOR UPDATE`, tenantID, planID).Scan(&duration, &quota); err != nil {
-		return ErrVoucherPlanUnavailable
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrVoucherPlanUnavailable
+		}
+		return fmt.Errorf("voucher entitlement: load active plan: %w", err)
 	}
 	var status string
 	if err := tx.QueryRow(ctx, `WITH schedule AS (SELECT GREATEST(now(),COALESCE(MAX(expires_at) FILTER (WHERE status IN ('ACTIVE','PENDING') AND expires_at>now()),now())) AS starts_at FROM subscriptions WHERE tenant_id=$1::uuid AND device_id=$4::uuid) INSERT INTO subscriptions(tenant_id,customer_id,plan_id,device_id,voucher_id,status,payment_status,starts_at,expires_at) SELECT $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,CASE WHEN schedule.starts_at>now() THEN 'PENDING' ELSE 'ACTIVE' END,'PAID',schedule.starts_at,schedule.starts_at+$6::bigint*interval '1 second' FROM schedule RETURNING id::text,status,starts_at,expires_at`, tenantID, customerID, planID, deviceID, voucherID, duration).Scan(&result.SubscriptionID, &status, &result.StartsAt, &result.ExpiresAt); err != nil {
-		return err
+		return fmt.Errorf("voucher entitlement: create subscription: %w", err)
 	}
 	result.Queued = status == "PENDING"
 	if _, err := tx.Exec(ctx, `UPDATE vouchers SET status='REDEEMED',redeemed_at=now(),redeemed_by=$3::uuid WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='UNUSED'`, tenantID, voucherID, customerID); err != nil {
-		return err
+		return fmt.Errorf("voucher entitlement: mark voucher redeemed: %w", err)
 	}
 	reason := "VOUCHER_REDEEMED"
 	if result.Queued {
 		reason = "VOUCHER_QUEUED"
 	} else {
 		if _, err := tx.Exec(ctx, `INSERT INTO usage_counters(tenant_id,subscription_id,customer_id,period_start,period_end,quota_bytes) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6)`, tenantID, result.SubscriptionID, customerID, result.StartsAt, result.ExpiresAt, quota); err != nil {
-			return err
+			return fmt.Errorf("voucher entitlement: create usage counter: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO outbox_events(event_id,tenant_id,aggregate_type,aggregate_id,event_type,payload) VALUES($1::uuid,$2::uuid,'subscription',$3::uuid,'subscription.activated',jsonb_build_object('subscription_id',$3::text,'customer_id',$4::text,'plan_id',$5::text,'activation_reason','VOUCHER','period_start',$6,'period_end',$7,'quota_bytes',$8))`, uuid.NewString(), tenantID, result.SubscriptionID, customerID, planID, result.StartsAt, result.ExpiresAt, quota); err != nil {
-			return err
+			return fmt.Errorf("voucher entitlement: enqueue activation event: %w", err)
 		}
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO subscription_events(tenant_id,subscription_id,from_status,to_status,reason,actor_type,metadata) VALUES($1::uuid,$2::uuid,NULL,$3,$4,'SYSTEM',jsonb_build_object('voucher_id',$5::text,'redemption_mode','BEARER'))`, tenantID, result.SubscriptionID, status, reason, voucherID); err != nil {
-		return err
+		return fmt.Errorf("voucher entitlement: record subscription event: %w", err)
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO audit_logs(tenant_id,actor_type,action,resource_type,resource_id,metadata) VALUES($1::uuid,'SYSTEM',$2,'vouchers',$3::uuid,jsonb_build_object('subscription_id',$4::text,'device_id',$5::text,'redemption_mode','BEARER'))`, tenantID, reason, voucherID, result.SubscriptionID, deviceID)
-	return err
+	if err != nil {
+		return fmt.Errorf("voucher entitlement: record audit event: %w", err)
+	}
+	return nil
 }
 
 // ActivateDue turns queued voucher subscriptions into normal active

@@ -340,9 +340,31 @@ func voucherRedemptionFailureStage(err error) string {
 	case strings.Contains(err.Error(), "create device"):
 		return "device_create"
 	case strings.Contains(err.Error(), "create entitlement"):
-		return "entitlement_create"
+		return voucherEntitlementFailureStage(err)
 	default:
 		return "store_or_redemption_failure"
+	}
+}
+
+func voucherEntitlementFailureStage(err error) string {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "load active plan"):
+		return "entitlement_plan_lookup"
+	case strings.Contains(message, "create subscription"):
+		return "subscription_create"
+	case strings.Contains(message, "mark voucher redeemed"):
+		return "voucher_mark_redeemed"
+	case strings.Contains(message, "create usage counter"):
+		return "usage_counter_create"
+	case strings.Contains(message, "enqueue activation event"):
+		return "activation_event_enqueue"
+	case strings.Contains(message, "record subscription event"):
+		return "subscription_event_record"
+	case strings.Contains(message, "record audit event"):
+		return "audit_event_record"
+	default:
+		return "entitlement_create"
 	}
 }
 
