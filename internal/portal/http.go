@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/netcore-isp/netcore/internal/auth"
 	"github.com/netcore-isp/netcore/internal/logger"
 	"github.com/netcore-isp/netcore/internal/security"
@@ -274,10 +275,10 @@ func (h *HTTP) guestIssue(w http.ResponseWriter, r *http.Request) {
 	redemption, err := h.voucherRedeemer.RedeemForDevice(r.Context(), h.guestTenantID, input.Code, normalizedMAC, nas.String())
 	switch {
 	case err != nil:
-		h.logGuestVoucherFailure(r, "redemption", voucherRedemptionFailureStage(err))
+		h.logGuestVoucherFailure(r, "redemption", voucherRedemptionFailureStage(err), err)
 		h.writeVoucherRedemptionError(w, r, err)
 	case redemption.SubscriptionID == "":
-		h.logGuestVoucherFailure(r, "redemption", "empty_subscription")
+		h.logGuestVoucherFailure(r, "redemption", "empty_subscription", nil)
 		security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
 	case redemption.Queued:
 		writeJSON(w, http.StatusAccepted, struct {
@@ -289,13 +290,13 @@ func (h *HTTP) guestIssue(w http.ResponseWriter, r *http.Request) {
 		handoff, issueErr := h.service.IssueVoucher(r.Context(), h.guestTenantID, redemption.SubscriptionID, normalizedMAC, nas.String(), input.HotspotLoginURL)
 		switch {
 		case errors.Is(issueErr, ErrInvalidContext):
-			h.logGuestVoucherFailure(r, "handoff", "invalid_connection_context")
+			h.logGuestVoucherFailure(r, "handoff", "invalid_connection_context", issueErr)
 			security.WriteError(w, r, http.StatusBadRequest, "PORTAL_CONTEXT_INVALID", "Unable to continue this connection.")
 		case errors.Is(issueErr, ErrNoActivePlan), errors.Is(issueErr, ErrDeviceMismatch):
-			h.logGuestVoucherFailure(r, "handoff", voucherHandoffFailureStage(issueErr))
+			h.logGuestVoucherFailure(r, "handoff", voucherHandoffFailureStage(issueErr), issueErr)
 			security.WriteError(w, r, http.StatusBadRequest, "INVALID_VOUCHER", "This voucher cannot be used right now.")
 		case issueErr != nil:
-			h.logGuestVoucherFailure(r, "handoff", "unavailable")
+			h.logGuestVoucherFailure(r, "handoff", "unavailable", issueErr)
 			security.WriteError(w, r, http.StatusServiceUnavailable, "PORTAL_UNAVAILABLE", "We cannot continue sign-in right now. Please try again shortly.")
 		default:
 			writeJSON(w, http.StatusCreated, handoffResponse{RedirectURL: handoff.RedirectURL, ExpiresAt: handoff.ExpiresAt})
@@ -307,12 +308,19 @@ func (h *HTTP) guestIssue(w http.ResponseWriter, r *http.Request) {
 // Voucher codes, MAC addresses, IP addresses, and database-driver messages are
 // intentionally excluded. The request-scoped logger links the event to the
 // request ID returned to the portal.
-func (h *HTTP) logGuestVoucherFailure(r *http.Request, boundary, stage string) {
-	logger.FromContext(r.Context(), slog.Default()).Warn(
-		"guest voucher handoff failed",
+func (h *HTTP) logGuestVoucherFailure(r *http.Request, boundary, stage string, err error) {
+	attributes := []any{
 		slog.String("failure_boundary", boundary),
 		slog.String("failure_stage", stage),
-	)
+	}
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) {
+		attributes = append(attributes, slog.String("postgres_code", postgresError.Code))
+		if postgresError.ConstraintName != "" {
+			attributes = append(attributes, slog.String("postgres_constraint", postgresError.ConstraintName))
+		}
+	}
+	logger.FromContext(r.Context(), slog.Default()).Warn("guest voucher handoff failed", attributes...)
 }
 
 func voucherRedemptionFailureStage(err error) string {
