@@ -3,6 +3,7 @@ package vouchers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,7 +21,7 @@ func (s *PostgresStore) RedeemForDevice(ctx context.Context, tenantID string, di
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrVoucherHotspotUnavailable
 			}
-			return err
+			return fmt.Errorf("voucher redemption: resolve active hotspot: %w", err)
 		}
 		_ = nasID
 		var voucherID, planID, status string
@@ -29,7 +30,7 @@ func (s *PostgresStore) RedeemForDevice(ctx context.Context, tenantID string, di
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrVoucherNotFound
 			}
-			return err
+			return fmt.Errorf("voucher redemption: lock voucher: %w", err)
 		}
 		if status == "REDEEMED" {
 			return existingVoucherEntitlement(ctx, tx, tenantID, voucherID, mac, &result)
@@ -46,16 +47,19 @@ func (s *PostgresStore) RedeemForDevice(ctx context.Context, tenantID string, di
 		var customerID, deviceID string
 		if err := tx.QueryRow(ctx, `SELECT c.id::text,d.id::text FROM devices d JOIN customers c ON c.id=d.customer_id AND c.tenant_id=d.tenant_id WHERE d.tenant_id=$1::uuid AND d.normalized_mac=$2 AND d.status='ACTIVE' AND c.status='ACTIVE' FOR UPDATE OF d,c`, tenantID, mac).Scan(&customerID, &deviceID); err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
-				return err
+				return fmt.Errorf("voucher redemption: resolve device: %w", err)
 			}
 			if err := tx.QueryRow(ctx, `INSERT INTO customers(tenant_id,customer_number,status,is_guest) VALUES($1::uuid,'GST-'||replace(gen_random_uuid()::text,'-',''),'ACTIVE',true) RETURNING id::text`, tenantID).Scan(&customerID); err != nil {
-				return err
+				return fmt.Errorf("voucher redemption: create guest customer: %w", err)
 			}
 			if err := tx.QueryRow(ctx, `INSERT INTO devices(tenant_id,customer_id,mac_address,normalized_mac,status) VALUES($1::uuid,$2::uuid,$3,$3,'ACTIVE') RETURNING id::text`, tenantID, customerID, mac).Scan(&deviceID); err != nil {
-				return err
+				return fmt.Errorf("voucher redemption: create device: %w", err)
 			}
 		}
-		return createBearerVoucherEntitlement(ctx, tx, tenantID, voucherID, planID, customerID, deviceID, &result)
+		if err := createBearerVoucherEntitlement(ctx, tx, tenantID, voucherID, planID, customerID, deviceID, &result); err != nil {
+			return fmt.Errorf("voucher redemption: create entitlement: %w", err)
+		}
+		return nil
 	})
 	return result, err
 }

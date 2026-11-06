@@ -329,6 +329,18 @@ func voucherRedemptionFailureStage(err error) string {
 		return "plan_unavailable"
 	case errors.Is(err, vouchers.ErrVoucherHotspotUnavailable):
 		return "hotspot_unavailable"
+	case strings.Contains(err.Error(), "resolve active hotspot"):
+		return "hotspot_lookup"
+	case strings.Contains(err.Error(), "lock voucher"):
+		return "voucher_lock"
+	case strings.Contains(err.Error(), "resolve device"):
+		return "device_lookup"
+	case strings.Contains(err.Error(), "create guest customer"):
+		return "guest_customer_create"
+	case strings.Contains(err.Error(), "create device"):
+		return "device_create"
+	case strings.Contains(err.Error(), "create entitlement"):
+		return "entitlement_create"
 	default:
 		return "store_or_redemption_failure"
 	}
